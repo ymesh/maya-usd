@@ -157,7 +157,7 @@ you can pass ```--redirect-outstream-file``` and set it to false.
 
 Run the script with the ```--help``` parameter to see all the possible flags and short descriptions.
 
-#### 6. How To Run Unit Tests
+It is important that the version between ```Pixar USD``` and ```Maya USD plugin``` match. See [`doc/DEVELOPER.md`](DEVELOPER.md#source-versions) for the compatible source versions.
 
 Unit tests can be run by setting ```--stages=test``` or by simply calling `ctest` directly from the build directory.
 
