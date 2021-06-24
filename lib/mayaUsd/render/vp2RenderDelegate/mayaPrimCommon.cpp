@@ -27,7 +27,7 @@ MayaUsdCustomData sMayaUsdCustomData;
 /* static */
 InstanceIdMap& MayaUsdCustomData::Get(const MHWRender::MRenderItem& renderItem)
 {
-    return sMayaUsdCustomData._itemData[renderItem.InternalObjectID()];
+    return sMayaUsdCustomData._itemData[renderItem.InternalObjectId()];
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

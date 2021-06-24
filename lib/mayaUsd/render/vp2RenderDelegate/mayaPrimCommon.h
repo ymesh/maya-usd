@@ -22,8 +22,6 @@
 #include <maya/MHWGeometry.h>
 
 #include <vector>
-#include <string>
-#include <functional>
 
 #include <tbb/concurrent_unordered_map.h>
 
@@ -39,7 +37,6 @@ class MayaUsdCustomData
 {
 public:
     tbb::concurrent_unordered_map<int, InstanceIdMap> _itemData;
-    //std::unordered_map<int, InstanceIdMap> _itemData;
 
     static InstanceIdMap& Get(const MHWRender::MRenderItem& item);
 };
