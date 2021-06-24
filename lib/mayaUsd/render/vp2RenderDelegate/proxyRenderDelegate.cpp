@@ -727,6 +727,11 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
         if (inPointSnapping && !reprSelector.Contains(HdReprTokens->points)) {
             reprSelector = reprSelector.CompositeOver(kPointsReprSelector);
         }
+#else
+        if (_selectionModeChanged) {
+            _UpdateSelectionStates();
+            _selectionModeChanged = false;
+        }
 #endif
     } else {
         if (_selectionChanged || _selectionModeChanged) {
@@ -792,6 +797,19 @@ void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameCont
     // Without a proxy shape we can't do anything
     if (_proxyShapeData->ProxyShape() == nullptr)
         return;
+
+    const MSelectionInfo* selectionInfo = frameContext.getSelectionInfo();
+    if (selectionInfo) {
+        bool oldSnapToPoints = _snapToPoints;
+#if MAYA_API_VERSION >= 20220000
+        _snapToPoints = selectionInfo->pointSnapping();
+#else
+        _snapToPoints = pointSnappingActive();
+#endif
+        if (_snapToPoints != oldSnapToPoints) {
+            _selectionModeChanged = true;
+        }
+    }
 
     _ClearInvalidData(container);
 
@@ -872,6 +890,13 @@ bool ProxyRenderDelegate::getInstancedSelectionPath(
     // improve draw performance in Maya 2020 and before.
     const int drawInstID = intersection.instanceID();
     int       instanceIndex = (drawInstID > 0) ? drawInstID - 1 : UsdImagingDelegate::ALL_INSTANCES;
+
+    // Get the blind data from the MRenderItem and map the instance index to the USD instance index
+    auto mayaToUsd = MayaUsdCustomData::Get(renderItem);
+    if (instanceIndex != UsdImagingDelegate::ALL_INSTANCES && mayaToUsd.size() > instanceIndex)
+    {
+        instanceIndex = mayaToUsd[instanceIndex];
+    }
 
     SdfPath topLevelPath;
     int     topLevelInstanceIndex = UsdImagingDelegate::ALL_INSTANCES;
@@ -1313,6 +1338,11 @@ bool ProxyRenderDelegate::SnapToSelectedObjects() const
     return _snapToSelectedObjects;
 }
 #endif
+
+bool ProxyRenderDelegate::SnapToPoints() const
+{
+    return _snapToPoints;
+}
 
 // ProxyShapeData
 ProxyRenderDelegate::ProxyShapeData::ProxyShapeData(

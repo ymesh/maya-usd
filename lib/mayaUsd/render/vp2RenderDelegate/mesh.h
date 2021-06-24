@@ -85,9 +85,6 @@ struct HdVP2MeshSharedData
 #ifdef HDVP2_ENABLE_GPU_COMPUTE
     MSharedPtr<MeshViewportCompute> _viewportCompute;
 #endif
-
-    //! Fallback color changed
-    bool _fallbackColorDirty { true };
 };
 
 /*! \brief  VP2 representation of poly-mesh object.

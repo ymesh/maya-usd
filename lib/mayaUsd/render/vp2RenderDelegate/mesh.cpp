@@ -87,6 +87,9 @@ struct CommitState
     //! transforms
     MMatrixArray _instanceTransforms;
 
+    //! Color parameter that _instanceColors should be bound to
+    MString _instanceColorParam;
+
     //! Color array to support per-instance color and selection highlight.
     MFloatArray _instanceColors;
 
@@ -556,6 +559,7 @@ void HdVP2Mesh::_PrepareSharedVertexBuffers(
             colorAndOpacityInfo->_extraInstanceData.setLength(
                 numInstances * kNumColorChannels); // the data is a vec4
             void* bufferData = &colorAndOpacityInfo->_extraInstanceData[0];
+            colorAndOpacityInfo->_source.interpolation = HdInterpolationInstance;
 
             size_t alphaChannelOffset = 3;
             for (size_t instance = 0; instance < numInstances; instance++) {
@@ -824,10 +828,15 @@ void HdVP2Mesh::Sync(
     HdDirtyBits*     dirtyBits,
     const TfToken&   reprToken)
 {
-    // We don't create a repr for the selection token because this token serves
-    // for selection state update only. Return early to reserve dirty bits so
-    // they can be used to sync regular reprs later.
+    // We don't create render items for the selection repr. The selection repr
+    // is used when the Sync call is made during a selection pass.
+    // When the selection mode changes, we DO want the chance to update our
+    // shaded render items (to support things like point snapping to similar instances), so make
+    // another call to Sync but with the smoothHull repr.
     if (reprToken == HdVP2ReprTokens->selection) {
+        if (*dirtyBits & DirtySelectionMode) {
+            Sync(delegate, renderParam, dirtyBits, HdReprTokens->smoothHull);
+        }
         return;
     }
 
@@ -1335,6 +1344,27 @@ void HdVP2Mesh::_InitRepr(const TfToken& reprToken, HdDirtyBits* dirtyBits)
                 renderItem->setDefaultMaterialHandling(
                     MRenderItem::DrawOnlyWhenDefaultMaterialActive);
                 renderItem->setShader(_delegate->Get3dDefaultMaterialShader());
+
+                if (!GetInstancerId().IsEmpty()) {
+                    MString shadedSelectedInstancesRenderItemName = renderItemName;
+                    shadedSelectedInstancesRenderItemName
+                        += std::string(1, VP2_RENDER_DELEGATE_SEPARATOR).c_str();
+                    shadedSelectedInstancesRenderItemName += "shadedSelectedInstances";
+                    MHWRender::MRenderItem* shadedSelectedInstancesRenderItem
+                        = _CreateSmoothHullRenderItem(shadedSelectedInstancesRenderItemName);
+                    shadedSelectedInstancesRenderItem->setDefaultMaterialHandling(
+                        MRenderItem::DrawOnlyWhenDefaultMaterialActive);
+                    shadedSelectedInstancesRenderItem->setShader(
+                        _delegate->Get3dDefaultMaterialShader());
+                    HdVP2DrawItem::RenderItemData& renderItemData
+                        = drawItem->AddRenderItem(shadedSelectedInstancesRenderItem);
+                    renderItemData._shadedSelectedInstances = true;
+
+                    _delegate->GetVP2ResourceRegistry().EnqueueCommit(
+                        [subSceneContainer, shadedSelectedInstancesRenderItem]() {
+                            subSceneContainer->add(shadedSelectedInstancesRenderItem);
+                        });
+                }
             }
 #endif
             break;
@@ -1473,6 +1503,14 @@ void HdVP2Mesh::_CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem)
         MHWRender::MRenderItem* renderItem = _CreateSmoothHullRenderItem(renderItemName);
         drawItem.AddRenderItem(renderItem, &geomSubset);
 
+        if (!GetInstancerId().IsEmpty()) {
+            renderItemName += std::string(1, VP2_RENDER_DELEGATE_SEPARATOR).c_str();
+            renderItemName += "shadedSelectedInstances";
+            renderItem = _CreateSmoothHullRenderItem(renderItemName);
+            HdVP2DrawItem::RenderItemData& renderItemData = drawItem.AddRenderItem(renderItem);
+            renderItemData._shadedSelectedInstances = true;
+        }
+
         // now fill in _faceIdToRenderItem at geomSubset.indices with the subset item pointer
         for (auto faceId : geomSubset.indices) {
             // we expect that material binding geom subsets will not overlap
@@ -1489,6 +1527,15 @@ void HdVP2Mesh::_CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem)
         MHWRender::MRenderItem* renderItem
             = _CreateSmoothHullRenderItem(drawItem.GetDrawItemName());
         drawItem.AddRenderItem(renderItem);
+
+        if (!GetInstancerId().IsEmpty()) {
+            MString renderItemName = drawItem.GetDrawItemName();
+            renderItemName += std::string(1, VP2_RENDER_DELEGATE_SEPARATOR).c_str();
+            renderItemName += "shadedSelectedInstances";
+            renderItem = _CreateSmoothHullRenderItem(renderItemName);
+            HdVP2DrawItem::RenderItemData& renderItemData = drawItem.AddRenderItem(renderItem);
+            renderItemData._shadedSelectedInstances = true;
+        }
 
         if (numFacesWithoutRenderItem == topology.GetNumFaces()) {
             // If there are no geom subsets that are material bind geom subsets, then we don't need
@@ -1583,7 +1630,8 @@ void HdVP2Mesh::_UpdateRepr(HdSceneDelegate* sceneDelegate, const TfToken& reprT
                 for (const auto& renderItemData : drawItem->GetRenderItems()) {
                     _delegate->GetVP2ResourceRegistry().EnqueueCommit(
                         [subSceneContainer, &renderItemData]() {
-                            subSceneContainer->add(renderItemData._renderItem);
+                            bool result = subSceneContainer->add(renderItemData._renderItem);
+                            TF_VERIFY(result);
                         });
                 }
             }
@@ -1608,6 +1656,20 @@ void HdVP2Mesh::_UpdateDrawItem(
 {
     HdDirtyBits itemDirtyBits = renderItemData.GetDirtyBits();
 
+    auto* const          param = static_cast<HdVP2RenderParam*>(_delegate->GetRenderParam());
+    ProxyRenderDelegate& drawScene = param->GetDrawScene();
+
+    // We don't need to update the shaded selected instance item when the selection mode is not
+    // dirty.
+    const bool isShadedSelectedInstanceItem = renderItemData._shadedSelectedInstances;
+    const bool usingShadedSelectedInstanceItem
+        = !GetInstancerId().IsEmpty() && drawScene.SnapToPoints();
+    const bool updateShadedSelectedInstanceItem = (itemDirtyBits & DirtySelectionMode) != 0;
+    if (isShadedSelectedInstanceItem && !usingShadedSelectedInstanceItem
+        && !updateShadedSelectedInstanceItem) {
+        return;
+    }
+
     // We don't need to update the dedicated selection highlight item when there
     // is no selection highlight change and the mesh is not selected. Draw item
     // has its own dirty bits, so update will be done when it shows in viewport.
@@ -1626,9 +1688,6 @@ void HdVP2Mesh::_UpdateDrawItem(
     }
 
     const SdfPath& id = GetId();
-
-    auto* const          param = static_cast<HdVP2RenderParam*>(_delegate->GetRenderParam());
-    ProxyRenderDelegate& drawScene = param->GetDrawScene();
 
     const HdRenderIndex& renderIndex = sceneDelegate->GetRenderIndex();
 
@@ -1761,7 +1820,7 @@ void HdVP2Mesh::_UpdateDrawItem(
 
         bool useFallbackMaterial
             = drawItemData._shaderIsFallback && _PrimvarIsRequired(HdTokens->displayColor);
-        bool updateFallbackMaterial = useFallbackMaterial && _meshSharedData->_fallbackColorDirty;
+        bool updateFallbackMaterial = useFallbackMaterial && drawItemData._fallbackColorDirty;
 
         // Use fallback shader if there is no material binding or we failed to create a shader
         // instance for the material.
@@ -1792,7 +1851,7 @@ void HdVP2Mesh::_UpdateDrawItem(
                 drawItemData._shader = shader;
                 stateToCommit._shader = shader;
                 stateToCommit._isTransparent = renderItemData._transparent;
-                _meshSharedData->_fallbackColorDirty = false;
+                drawItemData._fallbackColorDirty = false;
             }
         }
     }
@@ -1892,44 +1951,74 @@ void HdVP2Mesh::_UpdateDrawItem(
 
         if (0 == instanceCount) {
             instancerWithNoInstances = true;
-        } else if (!drawItem->ContainsUsage(HdVP2DrawItem::kSelectionHighlight)) {
-            stateToCommit._instanceTransforms.setLength(instanceCount);
-            for (unsigned int i = 0; i < instanceCount; ++i) {
-                transforms[i].Get(instanceMatrix.matrix);
-                stateToCommit._instanceTransforms[i] = worldMatrix * instanceMatrix;
-            }
-        } else if (_selectionStatus == kFullyLead || _selectionStatus == kFullyActive) {
-            const bool    lead = (_selectionStatus == kFullyLead);
-            const MColor& color = drawScene.GetSelectionHighlightColor(lead);
-            unsigned int  offset = 0;
-
-            stateToCommit._instanceTransforms.setLength(instanceCount);
-            stateToCommit._instanceColors.setLength(instanceCount * kNumColorChannels);
-
-            for (unsigned int i = 0; i < instanceCount; ++i) {
-                transforms[i].Get(instanceMatrix.matrix);
-                stateToCommit._instanceTransforms[i] = worldMatrix * instanceMatrix;
-
-                for (unsigned int j = 0; j < kNumColorChannels; j++) {
-                    stateToCommit._instanceColors[offset++] = color[j];
-                }
-            }
         } else {
-            const MColor colors[] = { drawScene.GetWireframeColor(),
-                                      drawScene.GetSelectionHighlightColor(false),
-                                      drawScene.GetSelectionHighlightColor(true) };
+            // The shaded instances are split into two render items: one for the
+            // selected instance and one for the unselected instances. We do this so
+            // that when point snapping we can snap selected instances to unselected
+            // instances, without snapping to selected instances.
 
-            // Store the indices to colors.
-            std::vector<unsigned char> colorIndices;
+            // This code figures out which instances should be included in the current
+            // render item, and which colors should be used to draw those instances.
 
-            // Assign with the index to the dormant wireframe color by default.
-            colorIndices.resize(instanceCount, 0);
+            // Store info per instance
+            const unsigned char dormant = 0;
+            const unsigned char active = 1;
+            const unsigned char lead = 2;
+            const unsigned char invalid = 255;
+
+            std::vector<unsigned char> instanceInfo;
+
+            // depending on the type of render item we want to set different values
+            // into instanceInfo;
+            unsigned char modeDormant = invalid;
+            unsigned char modeActive = invalid;
+            unsigned char modeLead = invalid;
+
+            if (!drawItem->ContainsUsage(HdVP2DrawItem::kSelectionHighlight)) {
+                stateToCommit._instanceColorParam = kDiffuseColorStr;
+                if (!usingShadedSelectedInstanceItem) {
+                    if (isShadedSelectedInstanceItem) {
+                        modeDormant = invalid;
+                        modeActive = invalid;
+                        modeLead = invalid;
+                    } else {
+                        modeDormant = active;
+                        modeActive = active;
+                        modeLead = active;
+                    }
+                } else {
+                    if (isShadedSelectedInstanceItem) {
+                        modeDormant = invalid;
+                        modeActive = active;
+                        modeLead = active;
+                    } else {
+                        modeDormant = active;
+                        modeActive = invalid;
+                        modeLead = invalid;
+                    }
+                }
+            } else if (_selectionStatus == kFullyLead || _selectionStatus == kFullyActive) {
+                const bool lead = (_selectionStatus == kFullyLead);
+                modeDormant = lead ? lead : active;
+                stateToCommit._instanceColorParam = kSolidColorStr;
+            } else {
+                modeDormant = isDedicatedSelectionHighlightItem ? invalid : dormant;
+                modeActive = active;
+                modeLead = lead;
+                stateToCommit._instanceColorParam = kSolidColorStr;
+            }
+
+            // Assign with the dormant info by default. For non-selection
+            // items the default value won't be draw, for wireframe items
+            // this will correspond to drawing with the dormant wireframe color
+            // or not drawing if the item is a selection highlight item.
+            instanceInfo.resize(instanceCount, modeDormant);
 
             // Assign with the index to the active selection highlight color.
             if (const auto state = drawScene.GetActiveSelectionState(id)) {
                 for (const auto& indexArray : state->instanceIndices) {
                     for (const auto index : indexArray) {
-                        colorIndices[index] = 1;
+                        instanceInfo[index] = modeActive;
                     }
                 }
             }
@@ -1938,26 +2027,68 @@ void HdVP2Mesh::_UpdateDrawItem(
             if (const auto state = drawScene.GetLeadSelectionState(id)) {
                 for (const auto& indexArray : state->instanceIndices) {
                     for (const auto index : indexArray) {
-                        colorIndices[index] = 2;
+                        instanceInfo[index] = modeLead;
                     }
                 }
             }
 
-            // Fill per-instance colors. Skip unselected instances for the dedicated selection
-            // highlight item.
+            // Now instanceInfo is set up correctly to tell us which instances are a part of this
+            // render item.
+
+            // Set up the source color buffers.
+            const MColor wireframeColors[] = { drawScene.GetWireframeColor(),
+                                               drawScene.GetSelectionHighlightColor(false),
+                                               drawScene.GetSelectionHighlightColor(true) };
+            bool         useWireframeColors = stateToCommit._instanceColorParam == kSolidColorStr;
+
+            MFloatArray*    shadedColors = nullptr;
+            HdInterpolation colorInterpolation = HdInterpolationConstant;
+            for (auto& entry : _meshSharedData->_primvarInfo) {
+                const TfToken& primvarName = entry.first;
+                if (primvarName == HdVP2Tokens->displayColorAndOpacity) {
+
+                    colorInterpolation = entry.second->_source.interpolation;
+
+                    const MFloatArray& extraInstanceData = entry.second->_extraInstanceData;
+                    if (colorInterpolation == HdInterpolationInstance) {
+                        shadedColors = &entry.second->_extraInstanceData;
+                        TF_VERIFY(shadedColors->length() == instanceCount * kNumColorChannels);
+                    }
+                }
+            }
+
+            // Create & fill the per-instance data buffers: the transform buffer, the color buffer
+            // and the Maya instance id to usd instance id mapping buffer.
+            auto& mayaToUsd = MayaUsdCustomData::Get(*renderItem);
+            mayaToUsd.clear();
+
             for (unsigned int i = 0; i < instanceCount; i++) {
-                unsigned char colorIndex = colorIndices[i];
-                if (isDedicatedSelectionHighlightItem && colorIndex == 0)
+                unsigned char info = instanceInfo[i];
+                if (info == invalid)
                     continue;
 
                 transforms[i].Get(instanceMatrix.matrix);
                 stateToCommit._instanceTransforms.append(worldMatrix * instanceMatrix);
+                mayaToUsd.push_back(i);
 
-                const MColor& color = colors[colorIndex];
-                for (unsigned int j = 0; j < kNumColorChannels; j++) {
-                    stateToCommit._instanceColors.append(color[j]);
+                if (useWireframeColors) {
+                    const MColor& color = wireframeColors[info];
+                    for (unsigned int j = 0; j < kNumColorChannels; j++) {
+                        stateToCommit._instanceColors.append(color[j]);
+                    }
+                } else if (shadedColors) {
+                    unsigned int offset = i * kNumColorChannels;
+                    for (unsigned int j = 0; j < kNumColorChannels; j++) {
+                        if (shadedColors->length() <= offset + j) {
+                            fprintf(stderr, "I can break here\n");
+                        }
+                        stateToCommit._instanceColors.append((*shadedColors)[offset + j]);
+                    }
                 }
             }
+
+            if (stateToCommit._instanceTransforms.length() == 0)
+                instancerWithNoInstances = true;
         }
     } else {
         // Non-instanced Rprims.
@@ -2012,13 +2143,16 @@ void HdVP2Mesh::_UpdateDrawItem(
         && (itemDirtyBits & (DirtySelectionHighlight | DirtySelectionMode))) {
         MSelectionMask selectionMask(MSelectionMask::kSelectMeshes);
 
+        bool shadedUnselectedInstances = !isShadedSelectedInstanceItem
+            && !isDedicatedSelectionHighlightItem && !GetInstancerId().IsEmpty();
 #ifdef MAYA_SNAP_TO_SELECTED_OBJECTS_SUPPORT
-        if (_selectionStatus == kUnselected || drawScene.SnapToSelectedObjects()) {
+        if (_selectionStatus == kUnselected || drawScene.SnapToSelectedObjects()
+            || shadedUnselectedInstances) {
             selectionMask.addMask(MSelectionMask::kSelectPointsForGravity);
         }
 #else
         // Only unselected Rprims can be used for point snapping.
-        if (_selectionStatus == kUnselected) {
+        if (_selectionStatus == kUnselected && !shadedUnselectedInstances) {
             selectionMask.addMask(MSelectionMask::kSelectPointsForGravity);
         }
 #endif
@@ -2036,144 +2170,134 @@ void HdVP2Mesh::_UpdateDrawItem(
         indexBuffer = const_cast<MHWRender::MIndexBuffer*>(sharedBBoxGeom.GetIndexBuffer());
     }
 
-    _delegate->GetVP2ResourceRegistry().EnqueueCommit(
-        [stateToCommit, param, primvarInfo, indexBuffer, isBBoxItem, &sharedBBoxGeom]() {
-            const HdVP2DrawItem::RenderItemData& drawItemData = stateToCommit._renderItemData;
-            MHWRender::MRenderItem*              renderItem = drawItemData._renderItem;
-            if (ARCH_UNLIKELY(!renderItem))
-                return;
+    _delegate->GetVP2ResourceRegistry().EnqueueCommit([stateToCommit,
+                                                       param,
+                                                       primvarInfo,
+                                                       indexBuffer,
+                                                       isBBoxItem,
+                                                       &sharedBBoxGeom]() {
+        const HdVP2DrawItem::RenderItemData& drawItemData = stateToCommit._renderItemData;
+        MHWRender::MRenderItem*              renderItem = drawItemData._renderItem;
+        if (ARCH_UNLIKELY(!renderItem))
+            return;
 
-            MProfilingScope profilingScope(
-                HdVP2RenderDelegate::sProfilerCategory,
-                MProfiler::kColorC_L2,
-                renderItem->name().asChar(),
-                "Commit");
+        MStatus result;
 
-            // If available, something changed
-            if (stateToCommit._indexBufferData)
-                indexBuffer->commit(stateToCommit._indexBufferData);
+        MProfilingScope profilingScope(
+            HdVP2RenderDelegate::sProfilerCategory,
+            MProfiler::kColorC_L2,
+            renderItem->name().asChar(),
+            "Commit");
 
-            // If available, something changed
-            if (stateToCommit._shader != nullptr) {
-                renderItem->setShader(stateToCommit._shader);
-                renderItem->setTreatAsTransparent(stateToCommit._isTransparent);
-            }
+        // If available, something changed
+        if (stateToCommit._indexBufferData)
+            indexBuffer->commit(stateToCommit._indexBufferData);
 
-            // If the enable state is changed, then update it.
-            if (stateToCommit._enabled != nullptr) {
-                renderItem->enable(*stateToCommit._enabled);
-            }
+        // If available, something changed
+        if (stateToCommit._shader != nullptr) {
+            bool success = renderItem->setShader(stateToCommit._shader);
+            TF_VERIFY(success);
+            renderItem->setTreatAsTransparent(stateToCommit._isTransparent);
+        }
 
-            ProxyRenderDelegate& drawScene = param->GetDrawScene();
+        // If the enable state is changed, then update it.
+        if (stateToCommit._enabled != nullptr) {
+            renderItem->enable(*stateToCommit._enabled);
+        }
 
-            // TODO: this is now including all buffers for the requirements of all
-            // the render items on this rprim. We could filter it down based on the
-            // requirements of the shader.
-            if (stateToCommit._geometryDirty || stateToCommit._boundingBox) {
-                MHWRender::MVertexBufferArray vertexBuffers;
+        ProxyRenderDelegate& drawScene = param->GetDrawScene();
 
-                for (auto& entry : *primvarInfo) {
-                    const TfToken&            primvarName = entry.first;
-                    MHWRender::MVertexBuffer* primvarBuffer = nullptr;
-                    if (isBBoxItem && primvarName == HdTokens->points) {
-                        primvarBuffer = const_cast<MHWRender::MVertexBuffer*>(
-                            sharedBBoxGeom.GetPositionBuffer());
-                    } else {
-                        primvarBuffer = entry.second->_buffer.get();
-                    }
-                    if (primvarBuffer) { // this filters out the separate color & alpha entries
-                        vertexBuffers.addBuffer(primvarName.GetText(), primvarBuffer);
-                    }
-                }
+        // TODO: this is now including all buffers for the requirements of all
+        // the render items on this rprim. We could filter it down based on the
+        // requirements of the shader.
+        if (stateToCommit._geometryDirty || stateToCommit._boundingBox) {
+            MHWRender::MVertexBufferArray vertexBuffers;
 
-                // The API call does three things:
-                // - Associate geometric buffers with the render item.
-                // - Update bounding box.
-                // - Trigger consolidation/instancing update.
-                drawScene.setGeometryForRenderItem(
-                    *renderItem, vertexBuffers, *indexBuffer, stateToCommit._boundingBox);
-            }
-
-            // Important, update instance transforms after setting geometry on render items!
-            auto& oldInstanceCount = stateToCommit._renderItemData._instanceCount;
-            auto  newInstanceCount = stateToCommit._instanceTransforms.length();
-
-            // GPU instancing has been enabled. We cannot switch to consolidation
-            // without recreating render item, so we keep using GPU instancing.
-            if (stateToCommit._renderItemData._usingInstancedDraw) {
-                if (oldInstanceCount == newInstanceCount) {
-                    for (unsigned int i = 0; i < newInstanceCount; i++) {
-                        // VP2 defines instance ID of the first instance to be 1.
-                        drawScene.updateInstanceTransform(
-                            *renderItem, i + 1, stateToCommit._instanceTransforms[i]);
-                    }
+            for (auto& entry : *primvarInfo) {
+                const TfToken&            primvarName = entry.first;
+                MHWRender::MVertexBuffer* primvarBuffer = nullptr;
+                if (isBBoxItem && primvarName == HdTokens->points) {
+                    primvarBuffer
+                        = const_cast<MHWRender::MVertexBuffer*>(sharedBBoxGeom.GetPositionBuffer());
                 } else {
-                    drawScene.setInstanceTransformArray(
-                        *renderItem, stateToCommit._instanceTransforms);
+                    primvarBuffer = entry.second->_buffer.get();
                 }
-
-                // upload any extra instance data
-                for (auto& entry : *primvarInfo) {
-                    const MFloatArray& extraInstanceData = entry.second->_extraInstanceData;
-                    if (extraInstanceData.length() == 0)
-                        continue;
-
-                    const TfToken& primvarName = entry.first;
-                    if (primvarName == HdVP2Tokens->displayColorAndOpacity) {
-                        drawScene.setExtraInstanceData(
-                            *renderItem, kDiffuseColorStr, extraInstanceData);
-                    }
-                }
-
-                if (stateToCommit._instanceColors.length()
-                    == newInstanceCount * kNumColorChannels) {
-                    drawScene.setExtraInstanceData(
-                        *renderItem, kSolidColorStr, stateToCommit._instanceColors);
+                if (primvarBuffer) { // this filters out the separate color & alpha entries
+                    result = vertexBuffers.addBuffer(primvarName.GetText(), primvarBuffer);
+                    TF_VERIFY(result == MStatus::kSuccess);
                 }
             }
+
+            // The API call does three things:
+            // - Associate geometric buffers with the render item.
+            // - Update bounding box.
+            // - Trigger consolidation/instancing update.
+            result = drawScene.setGeometryForRenderItem(
+                *renderItem, vertexBuffers, *indexBuffer, stateToCommit._boundingBox);
+            TF_VERIFY(result == MStatus::kSuccess);
+        }
+
+        // Important, update instance transforms after setting geometry on render items!
+        auto& oldInstanceCount = stateToCommit._renderItemData._instanceCount;
+        auto  newInstanceCount = stateToCommit._instanceTransforms.length();
+
+        // GPU instancing has been enabled. We cannot switch to consolidation
+        // without recreating render item, so we keep using GPU instancing.
+        if (stateToCommit._renderItemData._usingInstancedDraw) {
+            if (oldInstanceCount == newInstanceCount) {
+                for (unsigned int i = 0; i < newInstanceCount; i++) {
+                    // VP2 defines instance ID of the first instance to be 1.
+                    result = drawScene.updateInstanceTransform(
+                        *renderItem, i + 1, stateToCommit._instanceTransforms[i]);
+                    TF_VERIFY(result == MStatus::kSuccess);
+                }
+            } else {
+                result = drawScene.setInstanceTransformArray(
+                    *renderItem, stateToCommit._instanceTransforms);
+                TF_VERIFY(result == MStatus::kSuccess);
+            }
+
+            if (newInstanceCount > 0
+                && stateToCommit._instanceColors.length() == newInstanceCount * kNumColorChannels) {
+                result = drawScene.setExtraInstanceData(
+                    *renderItem, stateToCommit._instanceColorParam, stateToCommit._instanceColors);
+                TF_VERIFY(result == MStatus::kSuccess);
+            }
+        }
 #if MAYA_API_VERSION >= 20210000
-            else if (newInstanceCount >= 1) {
+        else if (newInstanceCount >= 1) {
 #else
-            // In Maya 2020 and before, GPU instancing and consolidation are two separate systems
-            // that cannot be used by a render item at the same time. In case of single instance, we
-            // keep the original render item to allow consolidation with other prims. In case of
-            // multiple instances, we need to disable consolidation to allow GPU instancing to be
-            // used.
-            else if (newInstanceCount == 1) {
-                renderItem->setMatrix(&stateToCommit._instanceTransforms[0]);
-            } else if (newInstanceCount > 1) {
-                setWantConsolidation(*renderItem, false);
+        // In Maya 2020 and before, GPU instancing and consolidation are two separate systems
+        // that cannot be used by a render item at the same time. In case of single instance, we
+        // keep the original render item to allow consolidation with other prims. In case of
+        // multiple instances, we need to disable consolidation to allow GPU instancing to be
+        // used.
+        else if (newInstanceCount == 1) {
+            bool success = renderItem->setMatrix(&stateToCommit._instanceTransforms[0]);
+            TF_VERIFY(success);
+        } else if (newInstanceCount > 1) {
+            setWantConsolidation(*renderItem, false);
 #endif
-                drawScene.setInstanceTransformArray(*renderItem, stateToCommit._instanceTransforms);
+            result = drawScene.setInstanceTransformArray(
+                *renderItem, stateToCommit._instanceTransforms);
+            TF_VERIFY(result == MStatus::kSuccess);
 
-                if (stateToCommit._instanceColors.length()
-                    == newInstanceCount * kNumColorChannels) {
-                    drawScene.setExtraInstanceData(
-                        *renderItem, kSolidColorStr, stateToCommit._instanceColors);
-                }
-
-                // upload any extra instance data
-                for (auto& entry : *primvarInfo) {
-                    const MFloatArray& extraInstanceData = entry.second->_extraInstanceData;
-                    if (extraInstanceData.length() == 0)
-                        continue;
-
-                    const TfToken& primvarName = entry.first;
-                    if (primvarName == HdVP2Tokens->displayColorAndOpacity) {
-                        drawScene.setExtraInstanceData(
-                            *renderItem, kDiffuseColorStr, extraInstanceData);
-                    }
-                }
-
-                stateToCommit._renderItemData._usingInstancedDraw = true;
-            } else if (stateToCommit._worldMatrix != nullptr) {
-                // Regular non-instanced prims. Consolidation has been turned on by
-                // default and will be kept enabled on this case.
-                renderItem->setMatrix(stateToCommit._worldMatrix);
+            if (stateToCommit._instanceColors.length() == newInstanceCount * kNumColorChannels) {
+                result = drawScene.setExtraInstanceData(
+                    *renderItem, stateToCommit._instanceColorParam, stateToCommit._instanceColors);
+                TF_VERIFY(result == MStatus::kSuccess);
             }
 
-            oldInstanceCount = newInstanceCount;
-        });
+            stateToCommit._renderItemData._usingInstancedDraw = true;
+        } else if (stateToCommit._worldMatrix != nullptr) {
+            // Regular non-instanced prims. Consolidation has been turned on by
+            // default and will be kept enabled on this case.
+            bool success = renderItem->setMatrix(stateToCommit._worldMatrix);
+            TF_VERIFY(success);
+        }
+
+        oldInstanceCount = newInstanceCount;
+    });
 
     // Reset dirty bits because we've prepared commit state for this render item.
     renderItemData.ResetDirtyBits();
@@ -2408,7 +2532,37 @@ void HdVP2Mesh::_UpdatePrimvarSources(
                     // if the primvar color changes then we might need to use a different fallback
                     // material
                     if (interp == HdInterpolationConstant && pv.name == HdTokens->displayColor) {
-                        _meshSharedData->_fallbackColorDirty = true;
+                        // find all the smooth hull render items and mark their _fallbackColorDirty
+                        // true
+                        for (const std::pair<TfToken, HdReprSharedPtr>& pair : _reprs) {
+
+                            _MeshReprConfig::DescArray reprDescs = _GetReprDesc(pair.first);
+                            // Iterate through all reprdescs for the current repr to figure out if
+                            // any of them requires the fallback material
+                            for (size_t descIdx = 0; descIdx < reprDescs.size(); ++descIdx) {
+                                const HdMeshReprDesc& desc = reprDescs[descIdx];
+                                if (desc.geomStyle == HdMeshGeomStyleHull) {
+                                    const HdReprSharedPtr& repr = pair.second;
+                                    const auto&            items = repr->GetDrawItems();
+
+#if HD_API_VERSION < 35
+                                    for (HdDrawItem* item : items) {
+                                        if (HdVP2DrawItem* drawItem
+                                            = static_cast<HdVP2DrawItem*>(item)) {
+#else
+                                    for (const HdRepr::DrawItemUniquePtr& item : items) {
+                                        if (HdVP2DrawItem* const drawItem
+                                            = static_cast<HdVP2DrawItem*>(item.get())) {
+#endif
+                                            for (auto& renderItemData :
+                                                 drawItem->GetRenderItems()) {
+                                                renderItemData._fallbackColorDirty = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -16,12 +16,36 @@
 #ifndef HD_VP2_MAYA_PRIM_COMMON
 #define HD_VP2_MAYA_PRIM_COMMON
 
-#include "pxr/imaging/hd/types.h"
 #include "pxr/imaging/hd/changeTracker.h"
+#include "pxr/imaging/hd/types.h"
+
+#include <maya/MHWGeometry.h>
+
+#include <vector>
+#include <string>
+#include <functional>
+
+#include <tbb/concurrent_unordered_map.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-struct MayaPrimCommon {
+// Each instanced render item needs to map from a Maya instance id
+// back to a usd instance id.
+using InstanceIdMap = std::vector<unsigned int>;
+
+// global singleton rather than MUserData, because consolidated world will
+// not consolidate render items with different MUserData objects.
+class MayaUsdCustomData
+{
+public:
+    tbb::concurrent_unordered_map<int, InstanceIdMap> _itemData;
+    //std::unordered_map<int, InstanceIdMap> _itemData;
+
+    static InstanceIdMap& Get(const MHWRender::MRenderItem& item);
+};
+
+struct MayaPrimCommon
+{
     enum DirtyBits : HdDirtyBits
     {
         DirtySelection = HdChangeTracker::CustomBitsBegin,
