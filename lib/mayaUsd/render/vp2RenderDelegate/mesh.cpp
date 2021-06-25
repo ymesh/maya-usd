@@ -1479,8 +1479,8 @@ void HdVP2Mesh::_CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem)
     int numFacesWithoutRenderItem = topology.GetNumFaces();
 
     // Initialize the face to subset item mapping with an invalid item.
-    _meshSharedData->_faceIdToRenderItem.clear();
-    _meshSharedData->_faceIdToRenderItem.resize(topology.GetNumFaces(), nullptr);
+    _meshSharedData->_faceIdToGeomSubsetId.clear();
+    _meshSharedData->_faceIdToGeomSubsetId.resize(topology.GetNumFaces(), SdfPath::EmptyPath());
 
     // Create the geom subset render items, and fill in the face to subset item mapping for later
     // use.
@@ -1511,11 +1511,11 @@ void HdVP2Mesh::_CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem)
             renderItemData._shadedSelectedInstances = true;
         }
 
-        // now fill in _faceIdToRenderItem at geomSubset.indices with the subset item pointer
+        // now fill in _faceIdToGeomSubsetId at geomSubset.indices with the subset item pointer
         for (auto faceId : geomSubset.indices) {
             // we expect that material binding geom subsets will not overlap
-            TF_VERIFY(nullptr == _meshSharedData->_faceIdToRenderItem[faceId]);
-            _meshSharedData->_faceIdToRenderItem[faceId] = renderItem;
+            TF_VERIFY(SdfPath::EmptyPath() == _meshSharedData->_faceIdToGeomSubsetId[faceId]);
+            _meshSharedData->_faceIdToGeomSubsetId[faceId] = geomSubset.id;
         }
         numFacesWithoutRenderItem -= geomSubset.indices.size();
     }
@@ -1526,31 +1526,22 @@ void HdVP2Mesh::_CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem)
         // create an item for the remaining faces
         MHWRender::MRenderItem* renderItem
             = _CreateSmoothHullRenderItem(drawItem.GetDrawItemName());
-        drawItem.AddRenderItem(renderItem);
 
         if (!GetInstancerId().IsEmpty()) {
             MString renderItemName = drawItem.GetDrawItemName();
             renderItemName += std::string(1, VP2_RENDER_DELEGATE_SEPARATOR).c_str();
             renderItemName += "shadedSelectedInstances";
-            renderItem = _CreateSmoothHullRenderItem(renderItemName);
-            HdVP2DrawItem::RenderItemData& renderItemData = drawItem.AddRenderItem(renderItem);
-            renderItemData._shadedSelectedInstances = true;
+            MHWRender::MRenderItem* shadedSelectedInstancesRenderItem = _CreateSmoothHullRenderItem(renderItemName);
+            HdVP2DrawItem::RenderItemData& shadedSelectedInstancesRenderItemData = drawItem.AddRenderItem(shadedSelectedInstancesRenderItem);
+            shadedSelectedInstancesRenderItemData._shadedSelectedInstances = true;
         }
 
         if (numFacesWithoutRenderItem == topology.GetNumFaces()) {
             // If there are no geom subsets that are material bind geom subsets, then we don't need
-            // the _faceIdToRenderItem mapping, we'll just create one item and use the full topology
+            // the _faceIdToGeomSubsetId mapping, we'll just create one item and use the full topology
             // for it.
-            _meshSharedData->_faceIdToRenderItem.clear();
+            _meshSharedData->_faceIdToGeomSubsetId.clear();
             numFacesWithoutRenderItem = 0;
-        } else {
-            // now fill in _faceIdToRenderItem at geomSubset.indices with the MRenderItem
-            for (auto& renderItemId : _meshSharedData->_faceIdToRenderItem) {
-                if (nullptr == renderItemId) {
-                    renderItemId = renderItem;
-                    numFacesWithoutRenderItem--;
-                }
-            }
         }
     }
 
@@ -1720,7 +1711,7 @@ void HdVP2Mesh::_UpdateDrawItem(
             // geom subset and add those triangles to the index buffer for renderItem.
 
             VtVec3iArray trianglesFaceVertexIndices; // for this item only!
-            if (_meshSharedData->_faceIdToRenderItem.size() == 0) {
+            if (_meshSharedData->_faceIdToGeomSubsetId.size() == 0) {
                 // If there is no mapping from face to render item, then all the faces are on this
                 // render item.
                 // VtArray has copy-on-write semantics so this is fast
@@ -1730,7 +1721,7 @@ void HdVP2Mesh::_UpdateDrawItem(
                      triangleId++) {
                     size_t faceId = HdMeshUtil::DecodeFaceIndexFromCoarseFaceParam(
                         _meshSharedData->_primitiveParam[triangleId]);
-                    if (_meshSharedData->_faceIdToRenderItem[faceId] == renderItem) {
+                    if (_meshSharedData->_faceIdToGeomSubsetId[faceId] == renderItemData._geomSubset.id) {
                         trianglesFaceVertexIndices.push_back(
                             _meshSharedData->_trianglesFaceVertexIndices[triangleId]);
                     }

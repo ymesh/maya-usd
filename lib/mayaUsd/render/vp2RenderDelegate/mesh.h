@@ -69,7 +69,7 @@ struct HdVP2MeshSharedData
 
     //! Map from the original topology faceId to the void* pointer to
     //! the MRenderItem that face is a part of
-    std::vector<void*> _faceIdToRenderItem;
+    std::vector<SdfPath> _faceIdToGeomSubsetId;
 
     //! The number of vertices in each vertex buffer.
     size_t _numVertices;
