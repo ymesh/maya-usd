@@ -2,6 +2,8 @@ set(TARGET_NAME DiffCore)
 
 add_executable(${TARGET_NAME})
 
+target_include_directories(${TARGET_NAME} PUBLIC ${GTEST_INCLUDE_DIR})
+
 # -----------------------------------------------------------------------------
 # sources
 # -----------------------------------------------------------------------------
@@ -21,9 +23,14 @@ mayaUsd_compile_config(${TARGET_NAME})
 # -----------------------------------------------------------------------------
 target_link_libraries(${TARGET_NAME}
     PRIVATE 
-        GTest::GTest
+        #GTest::GTest
         mayaUsdUtils
+    PUBLIC
+        ${GTEST_LIBRARY}
+        #pthread
+
 )
+message("*** GTest = ${GTEST_LIBRARY}")
 
 # -----------------------------------------------------------------------------
 # unit tests
