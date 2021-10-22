@@ -63,8 +63,14 @@ namespace {
 
 inline SdfPath _GetRootOverridePath(const UsdMayaJobExportArgs& args, const SdfPath& path)
 {
-    if (!args.usdModelRootOverridePath.IsEmpty() && !path.IsEmpty()) {
-        return path.ReplacePrefix(path.GetPrefixes()[0], args.usdModelRootOverridePath);
+    if (!path.IsEmpty()) {
+        if (!args.usdModelRootOverridePath.IsEmpty()) {
+            return path.ReplacePrefix(path.GetPrefixes()[0], args.usdModelRootOverridePath);
+        }
+
+        if (!args.rootMapFunction.IsNull()) {
+            return args.rootMapFunction.MapSourceToTarget(path);
+        }
     }
 
     return path;
@@ -325,10 +331,9 @@ bool UsdMayaWriteJobContext::_NeedToTraverse(const MDagPath& curDag) const
         }
     }
 
-    if (!mArgs.GetFilteredTypeIds().empty()) {
+    if (!mArgs.filteredTypeIds.empty()) {
         MFnDependencyNode mfnNode(ob);
-        if (mArgs.GetFilteredTypeIds().find(mfnNode.typeId().id())
-            != mArgs.GetFilteredTypeIds().end()) {
+        if (mArgs.filteredTypeIds.find(mfnNode.typeId().id()) != mArgs.filteredTypeIds.end()) {
             return false;
         }
     }
@@ -465,6 +470,15 @@ UsdMayaPrimWriterSharedPtr UsdMayaWriteJobContext::CreatePrimWriter(
 
         if (writePath.IsEmpty()) {
             writePath = ConvertDagToUsdPath(dagPath);
+
+            if (writePath.IsEmpty()) {
+                if (mArgs.rootMapFunction.IsNull()) {
+                    TF_CODING_ERROR(
+                        "When root mapping is not set we should always have a valid write path");
+                }
+
+                return nullptr;
+            }
         }
 
         const MFnDagNode dagNodeFn(dagPath);

@@ -49,7 +49,7 @@ class MtlxUsd_PreviewSurfaceReader : public UsdMayaShaderReader
 public:
     MtlxUsd_PreviewSurfaceReader(const UsdMayaPrimReaderArgs&);
 
-    bool Read(UsdMayaPrimReaderContext* context) override;
+    bool Read(UsdMayaPrimReaderContext& context) override;
 
     TfToken GetMayaNameForUsdAttrName(const TfToken& usdAttrName) const override;
 };
@@ -62,7 +62,7 @@ MtlxUsd_PreviewSurfaceReader::MtlxUsd_PreviewSurfaceReader(const UsdMayaPrimRead
 }
 
 /* virtual */
-bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext* context)
+bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext& context)
 {
     const UsdPrim& prim = _GetArgs().GetUsdPrim();
     UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -87,7 +87,7 @@ bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
 
     for (const UsdShadeInput& input : shaderSchema.GetInputs()) {
         TfToken baseName = GetMayaNameForUsdAttrName(input.GetFullName());
@@ -124,7 +124,7 @@ TfToken MtlxUsd_PreviewSurfaceReader::GetMayaNameForUsdAttrName(const TfToken& u
 
     if (attrType == UsdShadeAttributeType::Input) {
         return baseName;
-    } else if (attrType == UsdShadeAttributeType::Output && baseName == TrMtlxTokens->out) {
+    } else if (attrType == UsdShadeAttributeType::Output && baseName == UsdShadeTokens->surface) {
         return TrMayaTokens->outColor;
     }
     return TfToken();

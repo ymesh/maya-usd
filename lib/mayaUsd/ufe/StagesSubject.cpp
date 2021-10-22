@@ -62,20 +62,27 @@ namespace {
 // Prevent re-entrant stage set.
 std::atomic_bool stageSetGuardCount { false };
 
+bool isTransformChange(const TfToken& nameToken)
+{
+    return nameToken == UsdGeomTokens->xformOpOrder || UsdGeomXformOp::IsXformOp(nameToken);
+}
+
 #ifdef UFE_V2_FEATURES_AVAILABLE
 // The attribute change notification guard is not meant to be nested, but
 // use a counter nonetheless to provide consistent behavior in such cases.
 std::atomic_int attributeChangedNotificationGuardCount { 0 };
 
+// Keep an array of the pending attribute change notifications. Using a vector
+// for two main reasons:
+// 1) Order of notifs must be maintained.
+// 2) Allow notif with same path, but different token. At worst the check is linear
+//    in the size of the vector (which is the same as an unordered_multimap).
+std::vector<std::pair<Ufe::Path, TfToken>> pendingAttributeChangedNotifications;
+
 bool inAttributeChangedNotificationGuard()
 {
     return attributeChangedNotificationGuardCount.load() > 0;
 }
-
-// TODO: This should be an unordered_multimap to prevent notifications from
-// overwriting earlier recorded notifications for the same attribute. See
-// MAYA-110878 for more information on why this change isn't already made.
-std::unordered_map<Ufe::Path, TfToken> pendingAttributeChangedNotifications;
 
 void sendValueChanged(const Ufe::Path& ufePath, const TfToken& changedToken)
 {
@@ -90,7 +97,15 @@ void sendValueChanged(const Ufe::Path& ufePath, const TfToken& changedToken)
 void valueChanged(const Ufe::Path& ufePath, const TfToken& changedToken)
 {
     if (inAttributeChangedNotificationGuard()) {
-        pendingAttributeChangedNotifications[ufePath] = changedToken;
+        // Don't add pending notif if one already exists with same path/token.
+        auto p = std::make_pair(ufePath, changedToken);
+        if (std::find(
+                pendingAttributeChangedNotifications.begin(),
+                pendingAttributeChangedNotifications.end(),
+                p)
+            == pendingAttributeChangedNotifications.end()) {
+            pendingAttributeChangedNotifications.emplace_back(p);
+        }
     } else {
         sendValueChanged(ufePath, changedToken);
     }
@@ -237,16 +252,12 @@ void StagesSubject::stageChanged(
             const TfToken nameToken = changedPath.GetNameToken();
             auto          usdPrimPathStr = changedPath.GetPrimPath().GetString();
             auto ufePath = stagePath(sender) + Ufe::PathSegment(usdPrimPathStr, g_USDRtid, '/');
-            if (nameToken == UsdGeomTokens->xformOpOrder) {
+            if (isTransformChange(nameToken)) {
                 if (!InTransform3dChange::inTransform3dChange()) {
                     Ufe::Transform3d::notify(ufePath);
                 }
             }
-#ifdef UFE_V2_FEATURES_AVAILABLE
-            if (!inAttributeChangedNotificationGuard()) {
-                sendValueChanged(ufePath, changedPath.GetNameToken());
-            }
-#endif
+            UFE_V2(valueChanged(ufePath, changedPath.GetNameToken());)
 
             // No further processing for this prim property path is required.
             continue;
@@ -353,7 +364,7 @@ void StagesSubject::stageChanged(
             // Is the change a Transform3d change?
             const UsdPrim prim = stage->GetPrimAtPath(changedPath.GetPrimPath());
             const TfToken nameToken = changedPath.GetNameToken();
-            if (nameToken == UsdGeomTokens->xformOpOrder || UsdGeomXformOp::IsXformOp(nameToken)) {
+            if (isTransformChange(nameToken)) {
                 Ufe::Transform3d::notify(ufePath);
                 UFE_V2(sendValueChangedFallback = false;)
             } else if (prim && prim.IsA<UsdGeomPointInstancer>()) {
@@ -411,7 +422,7 @@ void StagesSubject::stageChanged(
         if (sendValueChangedFallback) {
 
             // check to see if there is an entry which Ufe should notify about.
-            std::vector<const SdfChangeList::Entry*> entries = it.base()->second;
+            const std::vector<const SdfChangeList::Entry*>& entries = it.base()->second;
             for (const auto& entry : entries) {
                 // Adding an inert prim means we created a primSpec for an ancestor of
                 // a prim which has a real change to it.
@@ -457,6 +468,10 @@ void StagesSubject::onStageSet(const MayaUsdProxyStageSetNotice& notice)
         UsdUndoManager::instance().trackLayerStates(noticeStage->GetEditTarget().GetLayer());
     }
 #endif
+
+    // Handle re-entrant MayaUsdProxyShapeBase::compute; allow update only on first compute call.
+    if (MayaUsdProxyShapeBase::in_compute > 1)
+        return;
 
     // Handle re-entrant onStageSet
     bool expectedState = false;

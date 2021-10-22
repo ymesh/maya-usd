@@ -47,6 +47,18 @@ if (MAYA_APP_VERSION VERSION_GREATER_EQUAL 2022)
     endif()
 endif()
 
+if (CMAKE_WANT_MATERIALX_BUILD)
+    list(APPEND TEST_SCRIPT_FILES
+        testVP2RenderDelegateMaterialX.py
+    )
+endif()
+
+if(MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testVP2RenderDelegateIsolateSelect.py
+    )
+endif()
+
 add_custom_target(${TARGET_NAME} ALL)
 
 # Copy all the resources and Python scripts to build directory
@@ -66,6 +78,7 @@ foreach(script ${TEST_SCRIPT_FILES})
             "MAYA_PLUG_IN_PATH=${CMAKE_INSTALL_PREFIX}/lib/maya"
             "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
             "MAYA_LIGHTAPI_VERSION=${MAYA_LIGHTAPI_VERSION}"
+            "MAYAUSD_VP2_ENABLE_V2_LIGHTING_SHADER=1"
 
             # Maya uses a very old version of GLEW, so we need support for
             # pre-loading a newer version from elsewhere.

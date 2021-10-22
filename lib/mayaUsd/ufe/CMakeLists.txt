@@ -46,6 +46,7 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
             UsdContextOpsHandler.cpp
             UsdObject3d.cpp
             UsdObject3dHandler.cpp
+            UsdSetXformOpUndoableCommandBase.cpp
             UsdTransform3dBase.cpp
             UsdTransform3dCommonAPI.cpp
             UsdTransform3dFallbackMayaXformStack.cpp
@@ -55,13 +56,22 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
             UsdTransform3dSetObjectMatrix.cpp
             UsdTransform3dUndoableCommands.cpp
             UsdUIInfoHandler.cpp
+            UsdUIUfeObserver.cpp
             UsdUndoAddNewPrimCommand.cpp
             UsdUndoCreateGroupCommand.cpp
             UsdUndoInsertChildCommand.cpp
             UsdUndoReorderCommand.cpp
             UsdUndoSetKindCommand.cpp
             UsdUndoVisibleCommand.cpp
+            UsdUndoUngroupCommand.cpp
             XformOpUtils.cpp
+    )
+endif()
+
+if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
+    target_sources(${PROJECT_NAME}
+        PRIVATE
+            UsdUndoUngroupCommand.cpp
     )
 endif()
 
@@ -110,6 +120,7 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
         UsdObject3d.h
         UsdObject3dHandler.h
         UsdPointInstanceUndoableCommands.h
+        UsdSetXformOpUndoableCommandBase.h
         UsdTransform3dBase.h
         UsdTransform3dCommonAPI.h
         UsdTransform3dFallbackMayaXformStack.h
@@ -119,6 +130,7 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
         UsdTransform3dSetObjectMatrix.h
         UsdTransform3dUndoableCommands.h
         UsdUIInfoHandler.h
+        UsdUIUfeObserver.h
         UsdUndoableCommand.h
         UsdUndoAddNewPrimCommand.h
         UsdUndoCreateGroupCommand.h
@@ -127,6 +139,12 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
         UsdUndoSetKindCommand.h
         UsdUndoVisibleCommand.h
         XformOpUtils.h
+    )
+endif()
+
+if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
+    list(APPEND HEADERS
+        UsdUndoUngroupCommand.h
     )
 endif()
 

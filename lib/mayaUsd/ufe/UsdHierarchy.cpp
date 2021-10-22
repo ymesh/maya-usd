@@ -44,6 +44,10 @@
 #include <mayaUsd/ufe/UsdUndoReorderCommand.h>
 #endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/ufe/UsdUndoUngroupCommand.h>
+#endif
+
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
@@ -216,6 +220,20 @@ UsdHierarchy::insertChild(const Ufe::SceneItem::Ptr& child, const Ufe::SceneItem
 }
 
 // Create a transform.
+#if (UFE_PREVIEW_VERSION_NUM >= 3005)
+Ufe::SceneItem::Ptr UsdHierarchy::createGroup(const Ufe::PathComponent& name) const
+{
+    Ufe::SceneItem::Ptr createdItem = nullptr;
+
+    UsdUndoCreateGroupCommand::Ptr cmd = UsdUndoCreateGroupCommand::create(fItem, name.string());
+    if (cmd) {
+        cmd->execute();
+        createdItem = cmd->insertedChild();
+    }
+
+    return createdItem;
+}
+#else
 Ufe::SceneItem::Ptr
 UsdHierarchy::createGroup(const Ufe::Selection& selection, const Ufe::PathComponent& name) const
 {
@@ -225,17 +243,30 @@ UsdHierarchy::createGroup(const Ufe::Selection& selection, const Ufe::PathCompon
         = UsdUndoCreateGroupCommand::create(fItem, selection, name.string());
     if (cmd) {
         cmd->execute();
-        createdItem = cmd->group();
+        createdItem = cmd->insertedChild();
     }
 
     return createdItem;
 }
+#endif
 
+#if (UFE_PREVIEW_VERSION_NUM >= 3001)
+Ufe::InsertChildCommand::Ptr
+#else
 Ufe::UndoableCommand::Ptr
+#endif
+
+#if (UFE_PREVIEW_VERSION_NUM >= 3005)
+UsdHierarchy::createGroupCmd(const Ufe::PathComponent& name) const
+{
+    return UsdUndoCreateGroupCommand::create(fItem, name.string());
+}
+#else
 UsdHierarchy::createGroupCmd(const Ufe::Selection& selection, const Ufe::PathComponent& name) const
 {
     return UsdUndoCreateGroupCommand::create(fItem, selection, name.string());
 }
+#endif
 
 Ufe::SceneItem::Ptr UsdHierarchy::defaultParent() const
 {
@@ -260,8 +291,14 @@ Ufe::UndoableCommand::Ptr UsdHierarchy::reorderCmd(const Ufe::SceneItemList& ord
     // create a reorder command and pass in the parent and its reordered children list
     return UsdUndoReorderCommand::create(downcast(sceneItem())->prim(), orderedTokens);
 }
-
 #endif // UFE_V2_FEATURES_AVAILABLE
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+Ufe::UndoableCommand::Ptr UsdHierarchy::ungroupCmd() const
+{
+    return UsdUndoUngroupCommand::create(fItem);
+}
+#endif // UFE_V3_FEATURES_AVAILABLE
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

@@ -18,8 +18,6 @@
                 "UsdLuxGeometryLight",
                 "UsdLuxRectLight",
                 "UsdLuxSphereLight",
-                "UsdRiPxrAovLight",
-                "UsdRiPxrEnvDayLight",
                 "UsdShadeMaterial",
                 "UsdSkelRoot",
                 "UsdSkelSkeleton",
@@ -35,7 +33,9 @@
             },
             "PrimWriter": {
               "providesTranslator": [
+                "areaLight",
                 "camera",
+                "directionalLight",
                 "file",
                 "instancer",
                 "joint",
@@ -45,6 +45,7 @@
                 "nurbsCurve",
                 "nurbsSurface",
                 "particle",
+                "pointLight",
                 "PxrAovLight",
                 "PxrCylinderLight",
                 "PxrDiskLight",
@@ -54,6 +55,7 @@
                 "PxrMeshLight",
                 "PxrRectLight",
                 "PxrSphereLight",
+                "spotLight",
                 "stroke"
               ]
             }

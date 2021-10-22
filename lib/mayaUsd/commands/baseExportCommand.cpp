@@ -116,6 +116,9 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportReferenceObjects.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kExportRootsFlag, UsdMayaJobExportArgsTokens->exportRoots.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kExportRootsFlag);
+    syntax.addFlag(
         kExportSkelsFlag, UsdMayaJobExportArgsTokens->exportSkels.GetText(), MSyntax::kString);
     syntax.addFlag(
         kExportSkinFlag, UsdMayaJobExportArgsTokens->exportSkin.GetText(), MSyntax::kString);
@@ -307,17 +310,30 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
         }
         UsdMayaUtil::GetFilteredSelectionToExport(exportSelected, objSelList, dagPaths);
 
+        // Validation of paths. The real read in of argument is happening as part of
+        // GetDictionaryFromArgDatabase.
+        unsigned int numRoots = argData.numberOfFlagUses(kExportRootsFlag);
+        for (unsigned int i = 0; i < numRoots; i++) {
+            MArgList tmpArgList;
+            argData.getFlagArgumentList(kExportRootsFlag, i, tmpArgList);
+            std::string rootPath = tmpArgList.asString(0).asChar();
+
+            if (!rootPath.empty()) {
+                MDagPath rootDagPath;
+                UsdMayaUtil::GetDagPathByName(rootPath, rootDagPath);
+                if (!rootDagPath.isValid()) {
+                    MGlobal::displayError(
+                        MString("Invalid dag path provided for exportRoot: ")
+                        + tmpArgList.asString(0));
+                    return MS::kFailure;
+                }
+            }
+        }
+
         const std::vector<double> timeSamples
             = UsdMayaWriteUtil::GetTimeSamples(timeInterval, frameSamples, frameStride);
         UsdMayaJobExportArgs jobArgs
             = UsdMayaJobExportArgs::CreateFromDictionary(userArgs, dagPaths, timeSamples);
-
-        unsigned int numFilteredTypes = argData.numberOfFlagUses(kFilterTypesFlag);
-        for (unsigned int i = 0; i < numFilteredTypes; i++) {
-            MArgList tmpArgList;
-            argData.getFlagArgumentList(kFilterTypesFlag, i, tmpArgList);
-            jobArgs.AddFilteredTypeName(tmpArgList.asString(0));
-        }
 
         std::unique_ptr<UsdMaya_WriteJob> writeJob = initializeWriteJob(jobArgs);
         if (!writeJob || !writeJob->Write(fileName, append)) {
