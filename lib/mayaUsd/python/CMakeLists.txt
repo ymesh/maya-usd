@@ -40,6 +40,14 @@ target_sources(${PYTHON_TARGET_NAME}
         wrapUserTaggedAttribute.cpp
         wrapWriteUtil.cpp
         wrapXformStack.cpp
+
+        wrapOpenMaya.cpp
+        wrapPrimReader.cpp
+        wrapPrimWriter.cpp
+        wrapExportChaser.cpp
+        wrapImportChaser.cpp
+        wrapShadingUtil.cpp
+        wrapShadingMode.cpp
 )
 
 # -----------------------------------------------------------------------------

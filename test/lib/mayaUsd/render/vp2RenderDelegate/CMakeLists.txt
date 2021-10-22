@@ -1,5 +1,3 @@
-set(TARGET_NAME VP2_RENDER_DELEGATE_TEST)
-
 # Unit test scripts.
 set(TEST_SCRIPT_FILES "")
 
@@ -53,14 +51,11 @@ if (CMAKE_WANT_MATERIALX_BUILD)
     )
 endif()
 
-add_custom_target(${TARGET_NAME} ALL)
-
-# Copy all the resources and Python scripts to build directory
-mayaUsd_copyDirectory(${TARGET_NAME}
-    SOURCE ${CMAKE_CURRENT_SOURCE_DIR}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    EXCLUDE "*.txt"
-)
+if(MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testVP2RenderDelegateIsolateSelect.py
+    )
+endif()
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})

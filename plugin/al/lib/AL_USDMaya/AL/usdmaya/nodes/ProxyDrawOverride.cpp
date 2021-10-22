@@ -37,6 +37,7 @@
 #include <maya/M3dView.h>
 #include <maya/MDrawContext.h>
 #include <maya/MFnDagNode.h>
+#include <maya/MProfiler.h>
 #include <maya/MTime.h>
 
 #if MAYA_API_VERSION >= 20180600
@@ -58,10 +59,52 @@
 #include <pxr/base/arch/env.h>
 #endif
 
+#include <pxr/usd/usd/modelAPI.h>
+
 namespace AL {
 namespace usdmaya {
 namespace nodes {
 namespace {
+
+const int _proxyDrawOverrideProfilerCategory = MProfiler::addCategory(
+#if MAYA_API_VERSION >= 20190000
+    "ProxyDrawOverride",
+    "ProxyDrawOverride"
+#else
+    "ProxyDrawOverride"
+#endif
+);
+
+//----------------------------------------------------------------------------------------------------------------------
+/// \brief Retarget a prim based on the AL_USDMaya's pick mode settings. This will either return new
+/// prim to select,
+///        or the original prim if no re-targetting occurred.
+/// \param prim Attempt to retarget this prim.
+/// \return The retargetted prim, or the original.
+UsdPrim retargetSelectPrim(const UsdPrim& prim)
+{
+    switch (ProxyShape::PickMode(MGlobal::optionVarIntValue("AL_usdmaya_pickMode"))) {
+
+    // Read up prim hierarchy and return first Model kind ancestor as the target prim
+    case ProxyShape::PickMode::kModels: {
+        UsdPrim tmpPrim = prim;
+        while (tmpPrim.IsValid()) {
+            if (UsdModelAPI(tmpPrim).IsModel()) {
+                return tmpPrim;
+            }
+            tmpPrim = tmpPrim.GetParent();
+        }
+    }
+
+    case ProxyShape::PickMode::kPrims:
+    case ProxyShape::PickMode::kInstances:
+    default: {
+        break;
+    }
+    }
+    return prim;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 /// \brief  user data struct - holds the info needed to render the scene
 //----------------------------------------------------------------------------------------------------------------------
@@ -123,6 +166,9 @@ bool ProxyDrawOverride::isBounded(const MDagPath& objPath, const MDagPath& camer
 MBoundingBox
 ProxyDrawOverride::boundingBox(const MDagPath& objPath, const MDagPath& cameraPath) const
 {
+    MProfilingScope profilerScope(
+        _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Compute bounding box");
+
     TF_DEBUG(ALUSDMAYA_DRAW).Msg("ProxyDrawOverride::boundingBox\n");
     ProxyShape* pShape = getShape(objPath);
     if (!pShape) {
@@ -138,6 +184,9 @@ MUserData* ProxyDrawOverride::prepareForDraw(
     const MHWRender::MFrameContext& frameContext,
     MUserData*                      userData)
 {
+    MProfilingScope profilerScope(
+        _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Prepare for draw");
+
     TF_DEBUG(ALUSDMAYA_DRAW).Msg("ProxyDrawOverride::prepareForDraw\n");
     MFnDagNode fn(objPath);
 
@@ -171,6 +220,9 @@ MUserData* ProxyDrawOverride::prepareForDraw(
 //----------------------------------------------------------------------------------------------------------------------
 void ProxyDrawOverride::draw(const MHWRender::MDrawContext& context, const MUserData* data)
 {
+    MProfilingScope profilerScope(
+        _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Draw");
+
     TF_DEBUG(ALUSDMAYA_DRAW).Msg("ProxyDrawOverride::draw\n");
 
     float clearCol[4];
@@ -178,6 +230,10 @@ void ProxyDrawOverride::draw(const MHWRender::MDrawContext& context, const MUser
 
     RenderUserData* ptr = (RenderUserData*)data;
     if (ptr && ptr->m_rootPrim) {
+
+        MProfilingScope profilerScope(
+            _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Setup lighting");
+
         ptr->m_shape->onRedraw();
         auto* engine = ptr->m_shape->engine();
         if (!engine) {
@@ -386,8 +442,13 @@ void ProxyDrawOverride::draw(const MHWRender::MDrawContext& context, const MUser
         combined.insert(combined.end(), paths1.begin(), paths1.end());
         combined.insert(combined.end(), paths2.begin(), paths2.end());
 
-        ptr->m_params.frame = ptr->m_shape->outTimePlug().asMTime().as(MTime::uiUnit());
-        engine->Render(ptr->m_rootPrim, ptr->m_params);
+        {
+            MProfilingScope profilerScope(
+                _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Render geometry");
+
+            ptr->m_params.frame = ptr->m_shape->outTimePlug().asMTime().as(MTime::uiUnit());
+            engine->Render(ptr->m_rootPrim, ptr->m_params);
+        }
 
         if (combined.size()) {
             UsdImagingGLRenderParams params = ptr->m_params;
@@ -399,7 +460,11 @@ void ProxyDrawOverride::draw(const MHWRender::MDrawContext& context, const MUser
             // lines in front with negative offset.
             glEnable(GL_POLYGON_OFFSET_LINE);
             glPolygonOffset(-1.0, -1.0);
-            engine->RenderBatch(combined, params);
+            {
+                MProfilingScope profilerScope(
+                    _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Render selection");
+                engine->RenderBatch(combined, params);
+            }
             glDisable(GL_POLYGON_OFFSET_LINE);
         }
 
@@ -480,7 +545,18 @@ bool ProxyDrawOverride::userSelect(
     MSelectionList&                  selectionList,
     MPointArray&                     worldSpaceHitPts)
 {
+    MProfilingScope profilerScope(
+        _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "User select");
+
     TF_DEBUG(ALUSDMAYA_SELECTION).Msg("ProxyDrawOverride::userSelect\n");
+
+    // There is some unknown behaviour where this userSelect method is called
+    // multiple times while snapping is active.
+    // Calling AL_usdmaya_ProxyShapeSelect with the -cl flag will cause
+    // a crash while we are snapping. Since we do not want to change
+    // the selection while snapping, we can bail early.
+    if (pointSnappingActive())
+        return false;
 
     MString fullSelPath = objPath.fullPathName();
 
@@ -559,38 +635,57 @@ bool ProxyDrawOverride::userSelect(
     TfToken resolveMode = selectInfo.singleSelection() ? HdxPickTokens->resolveNearestToCamera
                                                        : HdxPickTokens->resolveUnique;
 
-    bool hitSelected = engine->TestIntersectionBatch(
-        GfMatrix4d(worldViewMatrix.matrix),
-        GfMatrix4d(projectionMatrix.matrix),
-        worldToLocalSpace,
-        rootPath,
-        params,
-        resolveMode,
-        resolution,
-        &hitBatch);
+    bool hitSelected;
+    {
+        MProfilingScope profilerScope(
+            _proxyDrawOverrideProfilerCategory, MProfiler::kColorE_L3, "Hit test");
+
+        hitSelected = engine->TestIntersectionBatch(
+            GfMatrix4d(worldViewMatrix.matrix),
+            GfMatrix4d(projectionMatrix.matrix),
+            worldToLocalSpace,
+            rootPath,
+            params,
+            resolveMode,
+            resolution,
+            &hitBatch);
+    }
 
     auto selected = false;
 
-    auto addSelection = [&hitBatch, &selectionList, &worldSpaceHitPts, proxyShape, &selected](
-                            const MString& command) {
-        selected = true;
-        MStringArray nodes;
-        MGlobal::executeCommand(command, nodes, false, true);
-
-        for (const auto& it : hitBatch) {
-            auto path = it.first;
-            auto obj = proxyShape->findRequiredPath(path);
-            if (obj != MObject::kNullObj) {
-                MFnDagNode dagNode(obj);
-                MDagPath   dg;
-                dagNode.getPath(dg);
-                const double* p = it.second.GetArray();
-
-                selectionList.add(dg);
-                worldSpaceHitPts.append(MPoint(p[0], p[1], p[2]));
-            }
-        }
+    auto transformPath = [proxyShape](const SdfPath& path) {
+        // if we encounter an instance proxy, select it's parent prim instead!
+        // Modifying an InstanceProxy will cause an exception to be thrown.
+        auto prim = proxyShape->getUsdStage()->GetPrimAtPath(path);
+        return prim.IsInstanceProxy() ? path.GetParentPath() : path;
     };
+
+    auto addSelection
+        = [&hitBatch, &selectionList, &worldSpaceHitPts, proxyShape, &selected, transformPath](
+              const MString& command) {
+              selected = true;
+              MStringArray nodes;
+              MGlobal::executeCommand(command, nodes, false, true);
+
+              for (const auto& it : hitBatch) {
+                  // Retarget hit path based on pick mode policy. The retargeted prim must
+                  // align with the path used in the 'AL_usdmaya_ProxyShapeSelect' command.
+                  const SdfPath hitPath = transformPath(it.first);
+                  const UsdPrim retargetedHitPrim
+                      = retargetSelectPrim(proxyShape->getUsdStage()->GetPrimAtPath(hitPath));
+                  const MObject obj = proxyShape->findRequiredPath(retargetedHitPrim.GetPath());
+
+                  if (obj != MObject::kNullObj) {
+                      MFnDagNode dagNode(obj);
+                      MDagPath   dg;
+                      dagNode.getPath(dg);
+                      const double* p = it.second.GetArray();
+
+                      selectionList.add(dg);
+                      worldSpaceHitPts.append(MPoint(p[0], p[1], p[2]));
+                  }
+              }
+          };
 
     // Maya determines the selection list adjustment mode by Ctrl/Shift modifiers.
     int modifiers = 0;
@@ -645,7 +740,7 @@ bool ProxyDrawOverride::userSelect(
         if (!hitBatch.empty()) {
             paths.reserve(hitBatch.size());
             for (const auto& it : hitBatch) {
-                paths.push_back(it.first);
+                paths.push_back(transformPath(it.first));
             }
         }
 
@@ -702,6 +797,17 @@ bool ProxyDrawOverride::userSelect(
             }
         } else {
 #endif
+
+            // Massage hit paths to align with pick mode policy
+            for (std::size_t i = 0; i < paths.size(); ++i) {
+                const SdfPath& path = paths[i];
+                const UsdPrim  retargetedPrim
+                    = retargetSelectPrim(proxyShape->getUsdStage()->GetPrimAtPath(path));
+                if (retargetedPrim.GetPath() != path) {
+                    paths[i] = retargetedPrim.GetPath();
+                }
+            }
+
             switch (listAdjustment) {
             case MGlobal::kReplaceList: {
                 MString command;

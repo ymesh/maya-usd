@@ -62,7 +62,8 @@ TF_DEFINE_PRIVATE_TOKENS(
 void UsdMayaSymmetricShaderReader::RegisterReader(
     const TfToken& usdShaderId,
     const TfToken& mayaNodeTypeName,
-    const TfToken& materialConversion)
+    const TfToken& materialConversion,
+    bool           fromPython)
 {
     UsdMayaShaderReaderRegistry::Register(
         usdShaderId,
@@ -71,7 +72,8 @@ void UsdMayaSymmetricShaderReader::RegisterReader(
         },
         [mayaNodeTypeName](const UsdMayaPrimReaderArgs& readerArgs) {
             return std::make_shared<UsdMayaSymmetricShaderReader>(readerArgs, mayaNodeTypeName);
-        });
+        },
+        fromPython);
 }
 
 /* static */
@@ -144,7 +146,7 @@ UsdMayaSymmetricShaderReader::UsdMayaSymmetricShaderReader(
 }
 
 /* override */
-bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext* context)
+bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext& context)
 {
     const UsdPrim&       prim = _GetArgs().GetUsdPrim();
     const UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -175,7 +177,7 @@ bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
 
     for (const UsdShadeInput& input : shaderSchema.GetInputs()) {
         const UsdAttribute& usdAttr = input.GetAttr();

@@ -19,6 +19,8 @@
 #include "AL/usdmaya/DebugCodes.h"
 #include "AL/usdmaya/TypeIDs.h"
 
+#include <mayaUsd/listeners/notice.h>
+
 #include <pxr/usd/sdf/textFileFormat.h>
 #include <pxr/usd/usd/usdFileFormat.h>
 #include <pxr/usd/usd/usdaFileFormat.h>
@@ -29,9 +31,46 @@
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
 #include <maya/MItDependencyNodes.h>
+#include <maya/MObjectHandle.h>
 #include <maya/MPlugArray.h>
+#include <maya/MProfiler.h>
 
 #include <mutex>
+
+namespace {
+const int _layerManagerProfilerCategory = MProfiler::addCategory(
+#if MAYA_API_VERSION >= 20190000
+    "LayerManager",
+    "LayerManager"
+#else
+    "LayerManager"
+#endif
+);
+
+MObjectHandle theLayerManagerHandle;
+
+struct _OnSceneResetListener : public TfWeakBase
+{
+    _OnSceneResetListener()
+    {
+        TF_DEBUG(ALUSDMAYA_LAYERS).Msg("Created _OnSceneResetListener\n");
+        TfWeakPtr<_OnSceneResetListener> me(this);
+        TfNotice::Register(me, &_OnSceneResetListener::OnSceneReset);
+    }
+
+    ~_OnSceneResetListener()
+    {
+        TF_DEBUG(ALUSDMAYA_LAYERS).Msg("Destroyed _OnSceneResetListener\n");
+    }
+
+    void OnSceneReset(const UsdMayaSceneResetNotice& notice)
+    {
+        TF_DEBUG(ALUSDMAYA_LAYERS).Msg("_OnSceneResetListener: Clearing LayerManager Cache\n");
+        theLayerManagerHandle = MObject::kNullObj;
+    }
+};
+
+} // namespace
 
 namespace {
 // Global mutex protecting _findNode / findOrCreateNode.
@@ -274,6 +313,7 @@ MStatus LayerManager::initialise()
         return status;
     }
     generateAETemplate();
+    static _OnSceneResetListener onSceneResetListener;
     return MS::kSuccess;
 }
 
@@ -287,12 +327,24 @@ MObject LayerManager::findNode()
 //----------------------------------------------------------------------------------------------------------------------
 MObject LayerManager::_findNode()
 {
+    if (theLayerManagerHandle.isValid() && theLayerManagerHandle.isAlive()) {
+        MObject theManager { theLayerManagerHandle.object() };
+        if (!theManager.isNull()) {
+            return theManager;
+        } else {
+            TF_DEBUG(ALUSDMAYA_LAYERS).Msg("LayerManager::_findNode cache got null mobject\n");
+        }
+    } else {
+        TF_DEBUG(ALUSDMAYA_LAYERS).Msg("LayerManager::_findNode cache got invalid mobjecthandle\n");
+    }
+
     MFnDependencyNode  fn;
     MItDependencyNodes iter(MFn::kPluginDependNode);
     for (; !iter.isDone(); iter.next()) {
         MObject mobj = iter.item();
         fn.setObject(mobj);
         if (fn.typeId() == kTypeId && !fn.isFromReferencedFile()) {
+            theLayerManagerHandle = mobj;
             return mobj;
         }
     }
@@ -386,6 +438,9 @@ void LayerManager::getLayerIdentifiers(MStringArray& outputNames)
 //----------------------------------------------------------------------------------------------------------------------
 MStatus LayerManager::populateSerialisationAttributes()
 {
+    MProfilingScope profilerScope(
+        _layerManagerProfilerCategory, MProfiler::kColorE_L3, "Populate serialisation attributes");
+
     TF_DEBUG(ALUSDMAYA_LAYERS).Msg("LayerManager::populateSerialisationAttributes\n");
     const char* errorString = "LayerManager::populateSerialisationAttributes";
 
@@ -426,6 +481,9 @@ MStatus LayerManager::populateSerialisationAttributes()
 
 MStatus LayerManager::clearSerialisationAttributes()
 {
+    MProfilingScope profilerScope(
+        _layerManagerProfilerCategory, MProfiler::kColorE_L3, "Clear serialisation attributes");
+
     TF_DEBUG(ALUSDMAYA_LAYERS).Msg("LayerManager::clearSerialisationAttributes\n");
     const char* errorString = "LayerManager::clearSerialisationAttributes";
 
@@ -450,6 +508,9 @@ MStatus LayerManager::clearSerialisationAttributes()
 
 void LayerManager::loadAllLayers()
 {
+    MProfilingScope profilerScope(
+        _layerManagerProfilerCategory, MProfiler::kColorE_L3, "Load all layers");
+
     TF_DEBUG(ALUSDMAYA_LAYERS).Msg("LayerManager::loadAllLayers\n");
     const char*    errorString = "LayerManager::loadAllLayers";
     const char*    identifierTempSuffix = "_tmp";

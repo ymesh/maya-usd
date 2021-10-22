@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
+#include <mayaUsd/fileio/registryHelper.h>
 #include <mayaUsd/fileio/utils/adaptor.h>
 #include <mayaUsd/utils/undoHelperCommand.h>
 #include <mayaUsd/utils/util.h>
@@ -25,7 +26,11 @@
 
 #include <maya/MObject.h>
 
-#include <boost/python.hpp>
+#include <boost/python/class.hpp>
+#include <boost/python/def.hpp>
+#include <boost/python/make_constructor.hpp>
+#include <boost/python/operators.hpp>
+#include <boost/python/self.hpp>
 
 using namespace boost::python;
 
@@ -173,6 +178,16 @@ static std::string _AttributeAdaptor__repr__(const UsdMayaAdaptor::AttributeAdap
     }
 }
 
+static void RegisterTypedSchemaConversion(const std::string& nodeTypeName, const TfType& usdType)
+{
+    UsdMayaAdaptor::RegisterTypedSchemaConversion(nodeTypeName, usdType, true);
+}
+
+static void RegisterAttributeAlias(const TfToken& attributeName, const std::string& alias)
+{
+    UsdMayaAdaptor::RegisterAttributeAlias(attributeName, alias, true);
+}
+
 void wrapAdaptor()
 {
     typedef UsdMayaAdaptor This;
@@ -216,10 +231,12 @@ void wrapAdaptor()
                   &This::GetRegisteredTypedSchemas,
                   return_value_policy<TfPySequenceToList>())
               .staticmethod("GetRegisteredTypedSchemas")
-              .def("RegisterAttributeAlias", &This::RegisterAttributeAlias)
+              .def("RegisterAttributeAlias", &::RegisterAttributeAlias)
               .staticmethod("RegisterAttributeAlias")
               .def("GetAttributeAliases", &This::GetAttributeAliases)
-              .staticmethod("GetAttributeAliases");
+              .staticmethod("GetAttributeAliases")
+              .def("RegisterTypedSchemaConversion", &::RegisterTypedSchemaConversion)
+              .staticmethod("RegisterTypedSchemaConversion");
 
     class_<This::SchemaAdaptor>("SchemaAdaptor")
         .def(!self)
