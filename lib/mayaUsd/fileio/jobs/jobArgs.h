@@ -22,6 +22,7 @@
 #include <pxr/base/tf/staticTokens.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/pxr.h>
+#include <pxr/usd/pcp/mapFunction.h>
 #include <pxr/usd/sdf/path.h>
 
 #include <maya/MString.h>
@@ -67,11 +68,13 @@ TF_DECLARE_PUBLIC_TOKENS(
     (exportMaterialCollections) \
     (exportReferenceObjects) \
     (exportRefsAsInstanceable) \
+    (exportRoots) \
     (exportSkels) \
     (exportSkin) \
     (exportUVs) \
     (exportVisibility) \
     (file) \
+    (filterTypes) \
     (ignoreWarnings) \
     (kind) \
     (materialCollectionsPath) \
@@ -217,6 +220,15 @@ struct UsdMayaJobExportArgs
     // the model path. This to allow a proper internal reference.
     SdfPath usdModelRootOverridePath; // XXX can we make this const?
 
+    // When using export roots feature we will leverage map function to
+    // override the sdfpath generated from source DAG path. Will be empty
+    // if export roots is not used.
+    const PcpMapFunction rootMapFunction;
+
+    // Maya type ids to avoid exporting; these are EXACT types, the constructor will also add all
+    // inherited types (so if you exclude "constraint", it will also exclude "parentConstraint")
+    const std::set<unsigned int> filteredTypeIds;
+
     /// Creates a UsdMayaJobExportArgs from the given \p dict, overlaid on
     /// top of the default dictionary given by GetDefaultDictionary().
     /// The values of \p dict are stronger (will override) the values from the
@@ -233,19 +245,9 @@ struct UsdMayaJobExportArgs
     MAYAUSD_CORE_PUBLIC
     static const VtDictionary& GetDefaultDictionary();
 
-    /// Adds type name to filter out during export. This will also add all
-    /// inherited types (so if you exclude "constraint", it will also exclude
-    /// "parentConstraint")
-    MAYAUSD_CORE_PUBLIC
-    void AddFilteredTypeName(const MString& typeName);
-
     /// Returns the resolved file name of the final export location
     MAYAUSD_CORE_PUBLIC
     std::string GetResolvedFileName() const;
-
-    const std::set<unsigned int>& GetFilteredTypeIds() const { return _filteredTypeIds; }
-
-    void ClearFilteredTypeIds() { _filteredTypeIds.clear(); }
 
 private:
     MAYAUSD_CORE_PUBLIC
@@ -253,13 +255,6 @@ private:
         const VtDictionary&             userArgs,
         const UsdMayaUtil::MDagPathSet& dagPaths,
         const std::vector<double>&      timeSamples = std::vector<double>());
-
-    // Maya type ids to avoid exporting; these are
-    // EXACT types, though the only exposed way to modify this,
-    // AddFilteredTypeName, will also add all inherited types
-    // (so if you exclude "constraint", it will also exclude
-    // "parentConstraint")
-    std::set<unsigned int> _filteredTypeIds;
 };
 
 MAYAUSD_CORE_PUBLIC
@@ -318,7 +313,7 @@ struct UsdMayaJobImportArgs
     static const VtDictionary& GetDefaultDictionary();
 
     MAYAUSD_CORE_PUBLIC
-    static const std::string GetImportUSDZTexturesFilePath(const std::string& userArg);
+    static const std::string GetImportUSDZTexturesFilePath(const VtDictionary& userArgs);
 
 private:
     MAYAUSD_CORE_PUBLIC

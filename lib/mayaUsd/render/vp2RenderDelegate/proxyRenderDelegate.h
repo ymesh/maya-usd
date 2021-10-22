@@ -24,6 +24,7 @@
 #include <pxr/pxr.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/prim.h>
+#include <pxr/usdImaging/usdImaging/version.h>
 
 #include <maya/MDagPath.h>
 #include <maya/MDrawContext.h>
@@ -40,17 +41,12 @@
 #include <ufe/observer.h>
 #endif
 
-// The new Maya point snapping support doesn't require point snapping items any more.
-#if MAYA_API_VERSION >= 20230000
-// The new Maya point snapping support has some known issues. Disable it for now.
-// #define MAYA_NEW_POINT_SNAPPING_SUPPORT
-#endif
-
 // Conditional compilation due to Maya API gap.
 #if MAYA_API_VERSION >= 20200000
 #define MAYA_ENABLE_UPDATE_FOR_SELECTION
 #endif
 
+#if PXR_VERSION < 2008
 #define ENABLE_RENDERTAG_VISIBILITY_WORKAROUND
 /*  In USD v20.05 and earlier when the purpose of an rprim changes the visibility gets dirtied,
     and that doesn't update the render tag version.
@@ -61,6 +57,7 @@
     Logged as:
     https://github.com/PixarAnimationStudios/USD/issues/1243
 */
+#endif
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -150,6 +147,17 @@ public:
         const MIntersection& intersection,
         MDagPath&            dagPath) const override;
 
+#if defined(USD_IMAGING_API_VERSION) && USD_IMAGING_API_VERSION >= 14
+    MAYAUSD_CORE_PUBLIC
+    SdfPath GetScenePrimPath(
+        const SdfPath&      rprimId,
+        int                 instanceIndex,
+        HdInstancerContext* instancerContext = nullptr) const;
+#else
+    MAYAUSD_CORE_PUBLIC
+    SdfPath GetScenePrimPath(const SdfPath& rprimId, int instanceIndex) const;
+#endif
+
     MAYAUSD_CORE_PUBLIC
     void SelectionChanged();
 
@@ -170,6 +178,14 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     bool DrawRenderTag(const TfToken& renderTag) const;
+
+#ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
+    MAYAUSD_CORE_PUBLIC
+    bool SnapToSelectedObjects() const;
+
+    MAYAUSD_CORE_PUBLIC
+    bool SnapToPoints() const;
+#endif
 
 private:
     ProxyRenderDelegate(const ProxyRenderDelegate&) = delete;
@@ -193,9 +209,9 @@ private:
     /*! \brief  Hold all data related to the proxy shape.
 
         In addition to holding data read from the proxy shape, ProxyShapeData tracks when data read
-       from the proxy shape changes. For simple numeric types cache the last value read from
-       _proxyShape & compare to the current value. For complicated types we keep a version number of
-       the last value we read to make fast comparisons.
+        from the proxy shape changes. For simple numeric types cache the last value read from
+        _proxyShape & compare to the current value. For complicated types we keep a version number
+        of the last value we read to make fast comparisons.
     */
     class ProxyShapeData
     {
@@ -252,8 +268,15 @@ private:
     bool _isPopulated {
         false
     }; //!< If false, scene delegate wasn't populated yet within render index
-    bool   _selectionChanged { true }; //!< Whether there is any selection change or not
-    MColor _wireframeColor;            //!< Wireframe color assigned to the proxy shape
+    bool _selectionChanged { true }; //!< Whether there is any selection change or not
+#ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
+    bool _selectionModeChanged { true }; //!< Whether the global selection mode has changed
+    bool _snapToPoints { false };        //!< Whether point snapping is enabled or not
+    bool _snapToSelectedObjects {
+        false
+    }; //!< Whether point snapping should snap to selected objects
+#endif
+    MColor _wireframeColor; //!< Wireframe color assigned to the proxy shape
 
     //! A collection of Rprims to prepare render data for specified reprs
     std::unique_ptr<HdRprimCollection> _defaultCollection;

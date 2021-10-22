@@ -19,6 +19,7 @@
 #include <mayaUsd/base/tokens.h>
 #include <mayaUsd/listeners/proxyShapeNotice.h>
 #include <mayaUsd/nodes/stageData.h>
+#include <mayaUsd/utils/customLayerData.h>
 #include <mayaUsd/utils/query.h>
 #include <mayaUsd/utils/stageCache.h>
 #include <mayaUsd/utils/util.h>
@@ -114,6 +115,7 @@ MayaUsdProxyShapeBase::ClosestPointDelegate MayaUsdProxyShapeBase::_sharedCloses
 
 const std::string kAnonymousLayerName { "anonymousLayer1" };
 const std::string kSessionLayerPostfix { "-session" };
+const std::string kUnsharedStageLayerName { "unshareableLayer" };
 
 // ========================================================
 
@@ -130,6 +132,7 @@ MObject MayaUsdProxyShapeBase::filePathAttr;
 MObject MayaUsdProxyShapeBase::primPathAttr;
 MObject MayaUsdProxyShapeBase::excludePrimPathsAttr;
 MObject MayaUsdProxyShapeBase::loadPayloadsAttr;
+MObject MayaUsdProxyShapeBase::shareStageAttr;
 MObject MayaUsdProxyShapeBase::timeAttr;
 MObject MayaUsdProxyShapeBase::complexityAttr;
 MObject MayaUsdProxyShapeBase::inStageDataAttr;
@@ -250,6 +253,15 @@ MStatus MayaUsdProxyShapeBase::initialize()
     numericAttrFn.setReadable(false);
     numericAttrFn.setAffectsAppearance(true);
     retValue = addAttribute(loadPayloadsAttr);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+    shareStageAttr
+        = numericAttrFn.create("shareStage", "scmp", MFnNumericData::kBoolean, 1.0, &retValue);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+    numericAttrFn.setKeyable(false);
+    numericAttrFn.setReadable(false);
+    numericAttrFn.setAffectsAppearance(true);
+    retValue = addAttribute(shareStageAttr);
     CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
     timeAttr = unitAttrFn.create("time", "tm", MFnUnitAttribute::kTime, 0.0, &retValue);
@@ -385,11 +397,17 @@ MStatus MayaUsdProxyShapeBase::initialize()
     retValue = attributeAffects(filePathAttr, outStageDataAttr);
     CHECK_MSTATUS_AND_RETURN_IT(retValue);
     retValue = attributeAffects(filePathAttr, outStageCacheIdAttr);
-    CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
     retValue = attributeAffects(primPathAttr, outStageDataAttr);
     CHECK_MSTATUS_AND_RETURN_IT(retValue);
     retValue = attributeAffects(primPathAttr, outStageCacheIdAttr);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+    retValue = attributeAffects(shareStageAttr, inStageDataCachedAttr);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+    retValue = attributeAffects(shareStageAttr, outStageDataAttr);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+    retValue = attributeAffects(shareStageAttr, outStageCacheIdAttr);
     CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
     retValue = attributeAffects(loadPayloadsAttr, inStageDataCachedAttr);
@@ -463,6 +481,9 @@ void MayaUsdProxyShapeBase::enableProxyAccessor()
 /* virtual */
 void MayaUsdProxyShapeBase::postConstructor()
 {
+    MProfilingScope profilingScope(
+        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Issue Invalidate Stage Notice");
+
     setRenderable(true);
 
     MayaUsdProxyStageInvalidateNotice(*this).Send();
@@ -477,6 +498,10 @@ MStatus MayaUsdProxyShapeBase::compute(const MPlug& plug, MDataBlock& dataBlock)
     if (plug == excludePrimPathsAttr || plug == timeAttr || plug == complexityAttr
         || plug == drawRenderPurposeAttr || plug == drawProxyPurposeAttr
         || plug == drawGuidePurposeAttr) {
+        MProfilingScope profilingScope(
+            _shapeBaseProfilerCategory,
+            MProfiler::kColorE_L3,
+            "Call MHWRender::MRenderer::setGeometryDrawDirty from compute");
         // If the attribute that needs to be computed is one of these, then it
         // does not affect the ouput stage data, but it *does* affect imaging
         // the shape. In that case, we notify Maya that the shape needs to be
@@ -494,7 +519,8 @@ MStatus MayaUsdProxyShapeBase::compute(const MPlug& plug, MDataBlock& dataBlock)
         ProxyAccessor::compute(_usdAccessor, plug, dataBlock);
         return retStatus;
     } else if (plug == outStageDataAttr) {
-        return computeOutStageData(dataBlock);
+        auto ret = computeOutStageData(dataBlock);
+        return ret;
     } else if (plug == outStageCacheIdAttr) {
         return computeOutStageCacheId(dataBlock);
     } else if (plug.isDynamic()) {
@@ -539,29 +565,54 @@ SdfLayerRefPtr MayaUsdProxyShapeBase::computeSessionLayer(MDataBlock&) { return 
 
 #endif
 
+namespace {
+
+void remapSublayerRecursive(
+    const SdfLayerRefPtr&              layer,
+    std::map<std::string, std::string> remappedLayers)
+{
+    if (!layer || remappedLayers.empty())
+        return;
+
+    bool                     updated = false;
+    SdfSubLayerProxy         sublayerPaths = layer->GetSubLayerPaths();
+    std::vector<std::string> newSublayerPaths;
+    newSublayerPaths.reserve(sublayerPaths.size());
+    for (const auto sublayerPath : sublayerPaths) {
+        auto sublayer = SdfLayer::Find(sublayerPath);
+        remapSublayerRecursive(sublayer, remappedLayers);
+        if (remappedLayers.empty())
+            return;
+
+        if (remappedLayers.find(sublayerPath) != remappedLayers.end()) {
+            updated = true;
+            if (!remappedLayers[sublayerPath].empty())
+                newSublayerPaths.push_back(remappedLayers[sublayerPath]);
+            remappedLayers.erase(sublayerPath);
+        } else {
+            newSublayerPaths.push_back(sublayerPath);
+        }
+    }
+
+    if (updated) {
+        layer->SetSubLayerPaths(newSublayerPaths);
+    }
+}
+
+} // namespace
+
 MStatus MayaUsdProxyShapeBase::computeInStageDataCached(MDataBlock& dataBlock)
 {
+    MProfilingScope profilingScope(
+        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Compute inStageDataCached plug");
+
     MStatus retValue = MS::kSuccess;
 
-    MDataHandle inDataHandle = dataBlock.inputValue(inStageDataAttr, &retValue);
-    CHECK_MSTATUS_AND_RETURN_IT(retValue);
-
-    // If inData has an incoming connection, then use it. Otherwise generate stage from the filepath
-    if (!inDataHandle.data().isNull()) {
-        //
-        // Propagate inData -> inDataCached
-        //
-        MDataHandle inDataCachedHandle = dataBlock.outputValue(inStageDataCachedAttr, &retValue);
-        CHECK_MSTATUS_AND_RETURN_IT(retValue);
-
-        inDataCachedHandle.copy(inDataHandle);
-
-        inDataCachedHandle.setClean();
-        return MS::kSuccess;
-    } else if (!dataBlock.context().isNormal()) {
+    // Background computation is relying on normal context
+    if (!dataBlock.context().isNormal()) {
         // Create the output outData ========
         MFnPluginData pluginDataFn;
-        pluginDataFn.create(MayaUsdStageData::mayaTypeId, &retValue);
+        MObject       stageDataObj = pluginDataFn.create(MayaUsdStageData::mayaTypeId, &retValue);
         CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
         MayaUsdStageData* outData
@@ -595,15 +646,67 @@ MStatus MayaUsdProxyShapeBase::computeInStageDataCached(MDataBlock& dataBlock)
         outDataCachedHandle.set(outData);
         outDataCachedHandle.setClean();
         return MS::kSuccess;
+    }
+
+    // Normal context computation
+    UsdStageRefPtr usdStage;
+    SdfPath        primPath;
+
+    MDataHandle inDataHandle = dataBlock.inputValue(inStageDataAttr, &retValue);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+    bool sharableStage = isShareableStage();
+
+#if defined(WANT_UFE_BUILD)
+    // Load the unshared comp from file
+    // This is so that we can remap the anon layer identifiers that have been loaded from disk which
+    // are saved in the unshared root layer
+    if (!_unsharedStageRootLayer && !sharableStage) {
+        // Once an anon layer is loaded the identifier changes
+        _unsharedStageRootLayer = computeRootLayer(dataBlock, "");
+        if (_unsharedStageRootLayer) {
+            // Anon layers when loaded will have difference identifiers, remap them
+            auto referencedLayers = MayaUsd::CustomLayerData::getStringArray(
+                _unsharedStageRootLayer, MayaUsdMetadata->ReferencedLayers);
+            VtArray<std::string> updatedReferences;
+            for (const auto& identifier : referencedLayers) {
+                // Update the identifier reference in the customer layer data
+                auto layer = LayerManager::findLayer(identifier);
+                if (layer) {
+                    updatedReferences.push_back(layer->GetIdentifier());
+                }
+                // We also need to push this anyway in case we dont find it since file backed layers
+                // arent in the layermanager database
+                else {
+                    updatedReferences.push_back(identifier);
+                }
+            }
+            if (!updatedReferences.empty()) {
+                MayaUsd::CustomLayerData::setStringArray(
+                    updatedReferences, _unsharedStageRootLayer, MayaUsdMetadata->ReferencedLayers);
+            }
+        }
+    }
+#endif
+
+    bool isIncomingStage = false;
+
+    // If inData has an incoming connection, then use it. Otherwise generate stage from the filepath
+    if (!inDataHandle.data().isNull()) {
+        MayaUsdStageData* inStageData
+            = dynamic_cast<MayaUsdStageData*>(inDataHandle.asPluginData());
+        usdStage = inStageData->stage;
+        primPath = inStageData->primPath;
+        isIncomingStage = true;
     } else {
         // Check if we have a Stage from the Cache Id
         const auto cacheIdNum = dataBlock.inputValue(stageCacheIdAttr, &retValue).asInt();
         CHECK_MSTATUS_AND_RETURN_IT(retValue);
-        UsdStageRefPtr usdStage;
-        const auto     cacheId = UsdStageCache::Id::FromLongInt(cacheIdNum);
+        const auto cacheId = UsdStageCache::Id::FromLongInt(cacheIdNum);
         const auto stageCached = cacheId.IsValid() && UsdUtilsStageCache::Get().Contains(cacheId);
         if (stageCached) {
             usdStage = UsdUtilsStageCache::Get().Find(cacheId);
+            isIncomingStage = true;
         } else {
             //
             // Calculate from USD filepath and primPath and variantKey
@@ -648,16 +751,17 @@ MStatus MayaUsdProxyShapeBase::computeInStageDataCached(MDataBlock& dataBlock)
                 .Msg("ProxyShapeBase::loadStage called for the usd file: %s\n", fileString.c_str());
 
             // == Load the Stage
-            auto loadSet = UsdStage::InitialLoadSet::LoadAll;
-
             MDataHandle loadPayloadsHandle = dataBlock.inputValue(loadPayloadsAttr, &retValue);
             CHECK_MSTATUS_AND_RETURN_IT(retValue);
-            if (!loadPayloadsHandle.asBool()) {
-                loadSet = UsdStage::InitialLoadSet::LoadNone;
-            }
+
+            UsdStage::InitialLoadSet loadSet = loadPayloadsHandle.asBool()
+                ? UsdStage::InitialLoadSet::LoadAll
+                : UsdStage::InitialLoadSet::LoadNone;
 
             {
+#if AR_VERSION == 1
                 PXR_NS::ArGetResolver().ConfigureResolverForAsset(fileString);
+#endif
 
                 // When opening or creating stages we must have an active UsdStageCache.
                 // The stage cache is the only one who holds a strong reference to the
@@ -666,12 +770,16 @@ MStatus MayaUsdProxyShapeBase::computeInStageDataCached(MDataBlock& dataBlock)
                 UsdStageCacheContext ctx(
                     UsdMayaStageCache::Get(loadSet == UsdStage::InitialLoadSet::LoadAll));
 
-                SdfLayerRefPtr rootLayer = computeRootLayer(dataBlock, fileString);
+                SdfLayerRefPtr rootLayer
+                    = sharableStage ? computeRootLayer(dataBlock, fileString) : nullptr;
                 if (nullptr == rootLayer)
                     rootLayer = SdfLayer::FindOrOpen(fileString);
 
                 if (rootLayer) {
                     SdfLayerRefPtr sessionLayer = computeSessionLayer(dataBlock);
+
+                    MProfilingScope profilingScope(
+                        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Open stage");
 
                     static const MString kSessionLayerOptionVarName(
                         MayaUsdOptionVars->ProxyTargetsSessionLayerOnOpen.GetText());
@@ -705,38 +813,121 @@ MStatus MayaUsdProxyShapeBase::computeInStageDataCached(MDataBlock& dataBlock)
                 }
             }
         }
-        SdfPath primPath;
-        if (usdStage) {
+
+        if (usdStage)
             primPath = usdStage->GetPseudoRoot().GetPath();
+    }
+
+    // Create the output outData
+    MFnPluginData pluginDataFn;
+    pluginDataFn.create(MayaUsdStageData::mayaTypeId, &retValue);
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+    MayaUsdStageData* stageData = reinterpret_cast<MayaUsdStageData*>(pluginDataFn.data(&retValue));
+    CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+    if (isIncomingStage) {
+        std::vector<std::string> incomingLayers { usdStage->GetRootLayer()->GetIdentifier() };
+        _incomingLayers = UsdMayaUtil::getAllSublayers(incomingLayers, true);
+    } else {
+        _incomingLayers.clear();
+    }
+
+    // Share the stage
+    if (sharableStage) {
+        // When we switch out of unshared we need to save this data so when the user toggles back
+        // they get the same state they were in, but in order to this we have to keep the layers in
+        // the heirharchy alive since the stage is gone and so they will get removed
+        if (_unsharedStageRootLayer) {
+            auto subLayerIds = UsdMayaUtil::getAllSublayers(_unsharedStageRootLayer);
+            _unsharedStageRootSublayers.clear();
+            for (const auto& identifier : subLayerIds) {
+                SdfLayerRefPtr sublayer = SdfLayer::Find(identifier);
+                if (sublayer) {
+                    _unsharedStageRootSublayers.push_back(sublayer);
+                }
+            }
         }
-
-        // Create the output outData ========
-        MFnPluginData pluginDataFn;
-        pluginDataFn.create(MayaUsdStageData::mayaTypeId, &retValue);
-        CHECK_MSTATUS_AND_RETURN_IT(retValue);
-
-        MayaUsdStageData* stageData
-            = reinterpret_cast<MayaUsdStageData*>(pluginDataFn.data(&retValue));
-        CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
         // Set the outUsdStageData
         stageData->stage = usdStage;
         stageData->primPath = primPath;
 
-        //
-        // set the data on the output plug
-        //
+        // Set the data on the output plug
         MDataHandle inDataCachedHandle = dataBlock.outputValue(inStageDataCachedAttr, &retValue);
         CHECK_MSTATUS_AND_RETURN_IT(retValue);
 
         inDataCachedHandle.set(stageData);
         inDataCachedHandle.setClean();
+
+        return MS::kSuccess;
+    }
+    // Own the stage
+    else {
+        SdfLayerRefPtr inRootLayer = usdStage->GetRootLayer();
+
+        if (!_unsharedStageRootLayer) {
+            _unsharedStageRootLayer = SdfLayer::CreateAnonymous(kUnsharedStageLayerName);
+            // Add the incoming root layer as a subpath
+            VtArray<std::string> referencedLayers { inRootLayer->GetIdentifier() };
+            MayaUsd::CustomLayerData::setStringArray(
+                referencedLayers, _unsharedStageRootLayer, MayaUsdMetadata->ReferencedLayers);
+            _unsharedStageRootLayer->SetSubLayerPaths({ inRootLayer->GetIdentifier() });
+        } else {
+            // Check if we need to remap the source
+            // At the moment we remap the old root with the new root  and we assumne that the root
+            // is the first item in the referenced layers
+            auto referencedLayers = MayaUsd::CustomLayerData::getStringArray(
+                _unsharedStageRootLayer, MayaUsdMetadata->ReferencedLayers);
+            auto oldRootIdentifer = referencedLayers.empty() ? "" : referencedLayers[0];
+
+            if (!oldRootIdentifer.empty() && oldRootIdentifer != inRootLayer->GetIdentifier()) {
+                // Remap the existing source to the new one
+                std::map<std::string, std::string> remappedLayers {
+                    { oldRootIdentifer, inRootLayer->GetIdentifier() }
+                };
+                remapSublayerRecursive(_unsharedStageRootLayer, remappedLayers);
+            }
+
+            // If its a new layer (or wasn't remapped properly)
+            auto sublayerIds = UsdMayaUtil::getAllSublayers(_unsharedStageRootLayer);
+            if (sublayerIds.find(inRootLayer->GetIdentifier()) == sublayerIds.end()) {
+                // Add new layer to subpaths
+                auto subLayers = _unsharedStageRootLayer->GetSubLayerPaths();
+                subLayers.push_back(inRootLayer->GetIdentifier());
+                _unsharedStageRootLayer->SetSubLayerPaths(subLayers);
+            }
+
+            // Remember layers referenced from source
+            const VtArray<std::string> newReferencedLayers { inRootLayer->GetIdentifier() };
+            MayaUsd::CustomLayerData::setStringArray(
+                newReferencedLayers, _unsharedStageRootLayer, MayaUsdMetadata->ReferencedLayers);
+        }
+
+        stageData->stage = UsdStage::UsdStage::Open(_unsharedStageRootLayer);
+        stageData->primPath = stageData->stage->GetPseudoRoot().GetPath();
+
+        MDataHandle inDataCachedHandle = dataBlock.outputValue(inStageDataCachedAttr, &retValue);
+        CHECK_MSTATUS_AND_RETURN_IT(retValue);
+
+        inDataCachedHandle.set(stageData);
+        inDataCachedHandle.setClean();
+
         return MS::kSuccess;
     }
 }
 
 MStatus MayaUsdProxyShapeBase::computeOutStageData(MDataBlock& dataBlock)
 {
+    MProfilingScope computeOutStageDatacomputeOutStageData(
+        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Compute outStageData plug");
+
+    struct in_computeGuard
+    {
+        in_computeGuard() { in_compute++; }
+        ~in_computeGuard() { in_compute--; }
+    } in_computeGuard;
+
     MStatus retValue = MS::kSuccess;
 
     const bool isNormalContext = dataBlock.context().isNormal();
@@ -995,6 +1186,9 @@ MBoundingBox MayaUsdProxyShapeBase::boundingBox() const
 {
     TRACE_FUNCTION();
 
+    MProfilingScope profilerScope(
+        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Compute bounding box");
+
     MStatus status;
 
     // Make sure outStage is up to date
@@ -1075,6 +1269,52 @@ bool MayaUsdProxyShapeBase::isStageValid() const
     return true;
 }
 
+bool MayaUsdProxyShapeBase::isShareableStage() const
+{
+    MStatus                localStatus;
+    MayaUsdProxyShapeBase* nonConstThis = const_cast<MayaUsdProxyShapeBase*>(this);
+    MDataBlock             dataBlock = nonConstThis->forceCache();
+
+    MDataHandle shareStageHandle = dataBlock.inputValue(shareStageAttr, &localStatus);
+
+    CHECK_MSTATUS_AND_RETURN(localStatus, false);
+
+    return shareStageHandle.asBool();
+}
+
+bool MayaUsdProxyShapeBase::isStageIncoming() const
+{
+    MStatus                localStatus;
+    MayaUsdProxyShapeBase* nonConstThis = const_cast<MayaUsdProxyShapeBase*>(this);
+    MDataBlock             dataBlock = nonConstThis->forceCache();
+
+    MDataHandle inDataHandle = dataBlock.inputValue(inStageDataAttr, &localStatus);
+    CHECK_MSTATUS_AND_RETURN(localStatus, false);
+
+    bool isIncomingStage = false;
+
+    // If inData has an incoming connection, then use it. Otherwise generate stage from the filepath
+    if (!inDataHandle.data().isNull()) {
+        isIncomingStage = true;
+    } else {
+        // Check if we have a Stage from the Cache Id
+        const auto cacheIdNum = dataBlock.inputValue(stageCacheIdAttr, &localStatus).asInt();
+        CHECK_MSTATUS_AND_RETURN(localStatus, false);
+        const auto cacheId = UsdStageCache::Id::FromLongInt(cacheIdNum);
+        const auto stageCached = cacheId.IsValid() && UsdUtilsStageCache::Get().Contains(cacheId);
+        if (stageCached) {
+            isIncomingStage = true;
+        }
+    }
+
+    return isIncomingStage;
+}
+
+bool MayaUsdProxyShapeBase::isIncomingLayer(const std::string& layerIdentifier) const
+{
+    return _incomingLayers.find(layerIdentifier) != _incomingLayers.end();
+}
+
 MStatus MayaUsdProxyShapeBase::preEvaluation(
     const MDGContext&      context,
     const MEvaluationNode& evaluationNode)
@@ -1090,6 +1330,7 @@ MStatus MayaUsdProxyShapeBase::preEvaluation(
             evaluationNode.dirtyPlugExists(filePathAttr)
             || evaluationNode.dirtyPlugExists(primPathAttr)
             || evaluationNode.dirtyPlugExists(loadPayloadsAttr)
+            || evaluationNode.dirtyPlugExists(shareStageAttr)
             || evaluationNode.dirtyPlugExists(inStageDataAttr)
             || evaluationNode.dirtyPlugExists(stageCacheIdAttr)) {
             _IncreaseUsdStageVersion();
@@ -1141,7 +1382,7 @@ MStatus MayaUsdProxyShapeBase::setDependentsDirty(const MPlug& plug, MPlugArray&
         plug == outStageDataAttr ||
         // All the plugs that affect outStageDataAttr
         plug == filePathAttr || plug == primPathAttr || plug == loadPayloadsAttr
-        || plug == inStageDataAttr || plug == stageCacheIdAttr) {
+        || plug == shareStageAttr || plug == inStageDataAttr || plug == stageCacheIdAttr) {
         _IncreaseUsdStageVersion();
         MayaUsdProxyStageInvalidateNotice(*this).Send();
     }
@@ -1361,6 +1602,9 @@ MDagPath MayaUsdProxyShapeBase::parentTransform()
 MayaUsdProxyShapeBase::MayaUsdProxyShapeBase(const bool enableUfeSelection)
     : MPxSurfaceShape()
     , _isUfeSelectionEnabled(enableUfeSelection)
+    , _unsharedStageRootLayer(nullptr)
+    , _unsharedStageRootSublayers()
+    , _incomingLayers()
 {
     TfRegistryManager::GetInstance().SubscribeTo<MayaUsdProxyShapeBase>();
 }
@@ -1447,13 +1691,8 @@ void MayaUsdProxyShapeBase::_OnStageObjectsChanged(const UsdNotice::ObjectsChang
         }
 
         // If the attribute is not part of the primitive schema, it does not affect extents
-#if PXR_VERSION > 2002
         auto attrDefn
             = changedPrim.GetPrimDefinition().GetSchemaAttributeSpec(changedPropertyToken);
-#else
-        auto attrDefn = PXR_NS::UsdSchemaRegistry::GetAttributeDefinition(
-            changedPrim.GetTypeName(), changedPropertyToken);
-#endif
         if (!attrDefn) {
             continue;
         }
@@ -1493,6 +1732,9 @@ bool MayaUsdProxyShapeBase::closestPoint(
     bool /*findClosestOnMiss*/,
     double /*tolerance*/)
 {
+    MProfilingScope profilerScope(
+        _shapeBaseProfilerCategory, MProfiler::kColorE_L3, "Compute closest point");
+
     if (_sharedClosestPointDelegate) {
         GfRay ray(
             GfVec3d(raySource.x, raySource.y, raySource.z),
@@ -1528,5 +1770,7 @@ Ufe::Path MayaUsdProxyShapeBase::ufePath() const
 #endif
 }
 #endif
+
+std::atomic<int> MayaUsdProxyShapeBase::in_compute { 0 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

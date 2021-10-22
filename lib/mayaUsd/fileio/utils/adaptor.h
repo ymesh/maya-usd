@@ -219,28 +219,19 @@ public:
     /// import.
     class SchemaAdaptor
     {
-        MObjectHandle _handle;
-#if PXR_VERSION > 2002
+        MObjectHandle            _handle;
         const UsdPrimDefinition* _schemaDef;
-#else
-        SdfPrimSpecHandle _schemaDef;
-#endif
-        TfToken _schemaName;
+        TfToken                  _schemaName;
 
     public:
         MAYAUSD_CORE_PUBLIC
         SchemaAdaptor();
 
-#if PXR_VERSION > 2002
         MAYAUSD_CORE_PUBLIC
         SchemaAdaptor(
             const MObjectHandle&     object,
             const TfToken&           schemaName,
             const UsdPrimDefinition* schemaPrimDef);
-#else
-        MAYAUSD_CORE_PUBLIC
-        SchemaAdaptor(const MObjectHandle& object, SdfPrimSpecHandle schemaDef);
-#endif
 
         MAYAUSD_CORE_PUBLIC
         explicit operator bool() const;
@@ -316,17 +307,10 @@ public:
         MAYAUSD_CORE_PUBLIC
         TfTokenVector GetAttributeNames() const;
 
-#if PXR_VERSION > 2002
         /// Gets the prim definition for this schema from the schema registry.
         /// Returns a null pointer if this schema adaptor is invalid.
         MAYAUSD_CORE_PUBLIC
         const UsdPrimDefinition* GetSchemaDefinition() const;
-#else
-        /// Gets the prim spec for this schema from the schema registry.
-        /// Returns a null handle if this schema adaptor is invalid.
-        MAYAUSD_CORE_PUBLIC
-        const SdfPrimSpecHandle GetSchemaDefinition() const;
-#endif
 
     private:
         /// Gets the name of the adapted Maya attribute for the given attribute
@@ -549,8 +533,10 @@ public:
     /// the same Maya type again will overwrite the previous registration.
     /// However, multiple Maya types may map to the same TfType.
     MAYAUSD_CORE_PUBLIC
-    static void
-    RegisterTypedSchemaConversion(const std::string& nodeTypeName, const TfType& usdType);
+    static void RegisterTypedSchemaConversion(
+        const std::string& nodeTypeName,
+        const TfType&      usdType,
+        bool               fromPython = false);
 
     /// For backwards compatibility only: when upgrading any pre-existing code
     /// to use the adaptor mechanism, you can instruct the adaptor to recognize
@@ -567,7 +553,10 @@ public:
     /// it always uses the generated name.
     /// \sa UsdMayaAdaptor::SchemaAdaptor::CreateAttribute()
     MAYAUSD_CORE_PUBLIC
-    static void RegisterAttributeAlias(const TfToken& attributeName, const std::string& alias);
+    static void RegisterAttributeAlias(
+        const TfToken&     attributeName,
+        const std::string& alias,
+        bool               fromPython = false);
 
     /// Gets the name of all possible Maya attribute names for the given USD
     /// schema \p attributeName, in the order in which the aliases were
