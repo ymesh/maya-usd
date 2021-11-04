@@ -53,7 +53,7 @@ CMakeSettings.json
 CMakeCache.txt
 CMakeLists.txt.user
 CMakeFiles/cmake.check_cache
-*build/
+
 
 ## Python ##
 __pycache__/
@@ -84,3 +84,6 @@ ehthumbs_vista.db
 .nfs
 # Files ending in ~ are Linux convention backup files
 *~
+
+/build/env*
+/build/tmp*
