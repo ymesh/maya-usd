@@ -17,6 +17,9 @@
 
 #include "private/UfeNotifGuard.h"
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/fileio/primUpdaterManager.h>
+#endif
 #include <mayaUsd/ufe/UsdObject3d.h>
 #include <mayaUsd/ufe/UsdSceneItem.h>
 #include <mayaUsd/ufe/UsdUndoAddNewPrimCommand.h>
@@ -43,6 +46,7 @@
 #include <ufe/object3d.h>
 #include <ufe/observableSelection.h>
 #include <ufe/path.h>
+#include <ufe/pathString.h>
 
 #include <algorithm>
 #include <cassert>
@@ -104,6 +108,11 @@ static const std::string kUSDCylinderPrimImage { "out_USD_Cylinder.png" };
 static constexpr char    kUSDSpherePrimItem[] = "Sphere";
 static constexpr char    kUSDSpherePrimLabel[] = "Sphere";
 static const std::string kUSDSpherePrimImage { "out_USD_Sphere.png" };
+static constexpr char    kEditAsMayaItem[] = "Edit As Maya Data";
+static constexpr char    kEditAsMayaLabel[] = "Edit As Maya Data";
+static const std::string kEditAsMayaImage { "edit_as_Maya.png" };
+static constexpr char    kDuplicateAsMayaItem[] = "Duplicate As Maya Data";
+static constexpr char    kDuplicateAsMayaLabel[] = "Duplicate As Maya Data";
 
 #if PXR_VERSION >= 2008
 static constexpr char kAllRegisteredTypesItem[] = "All Registered";
@@ -563,11 +572,20 @@ Ufe::ContextOps::Items UsdContextOps::getItems(const Ufe::ContextOps::ItemPath& 
         // Top-level item - USD Layer editor (for all context op types).
         // Only available when building with Qt enabled.
         items.emplace_back(kUSDLayerEditorItem, kUSDLayerEditorLabel, kUSDLayerEditorImage);
-        items.emplace_back(Ufe::ContextItem::kSeparator);
 #endif
 
         // Top-level items (do not add for gateway type node):
         if (!fIsAGatewayType) {
+#ifdef UFE_V3_FEATURES_AVAILABLE
+            if (PrimUpdaterManager::getInstance().canEditAsMaya(path())) {
+#endif
+                items.emplace_back(kEditAsMayaItem, kEditAsMayaLabel, kEditAsMayaImage);
+#ifdef UFE_V3_FEATURES_AVAILABLE
+            }
+#endif
+            items.emplace_back(kDuplicateAsMayaItem, kDuplicateAsMayaLabel);
+            items.emplace_back(Ufe::ContextItem::kSeparator);
+
             // Working set management (load and unload):
             const auto itemLabelPairs = _computeLoadAndUnloadItems(prim());
             for (const auto& itemLabelPair : itemLabelPairs) {
@@ -610,6 +628,7 @@ Ufe::ContextOps::Items UsdContextOps::getItems(const Ufe::ContextOps::ItemPath& 
                 ClearAllReferencesUndoableCommand::commandName,
                 ClearAllReferencesUndoableCommand::commandName);
         }
+
     } else {
         if (itemPath[0] == kUSDVariantSetsItem) {
             UsdVariantSets           varSets = prim().GetVariantSets();
@@ -769,6 +788,14 @@ Ufe::UndoableCommand::Ptr UsdContextOps::doOpCmd(const ItemPath& itemPath)
             return nullptr;
 
         return std::make_shared<ClearAllReferencesUndoableCommand>(prim());
+    } else if (itemPath[0] == kEditAsMayaItem) {
+        MString script;
+        script.format("mayaUsdMenu_pullToDG \"^1s\"", Ufe::PathString::string(path()).c_str());
+        MGlobal::executeCommand(script);
+    } else if (itemPath[0] == kDuplicateAsMayaItem) {
+        MString script;
+        script.format("mayaUsdMenu_duplicateToDG \"^1s\"", Ufe::PathString::string(path()).c_str());
+        MGlobal::executeCommand(script);
     }
 
     return nullptr;

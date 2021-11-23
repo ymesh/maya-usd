@@ -63,10 +63,17 @@ MSyntax MayaUSDExportCommand::createSyntax()
         kConvertMaterialsToFlag,
         UsdMayaJobExportArgsTokens->convertMaterialsTo.GetText(),
         MSyntax::kString);
+    syntax.makeFlagMultiUse(kConvertMaterialsToFlag);
     syntax.addFlag(
         kMaterialsScopeNameFlag,
         UsdMayaJobExportArgsTokens->materialsScopeName.GetText(),
         MSyntax::kString);
+    syntax.addFlag(
+        kApiSchemaFlag, UsdMayaJobExportArgsTokens->apiSchema.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kApiSchemaFlag);
+    syntax.addFlag(
+        kJobContextFlag, UsdMayaJobExportArgsTokens->jobContext.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kJobContextFlag);
     syntax.addFlag(
         kExportUVsFlag, UsdMayaJobExportArgsTokens->exportUVs.GetText(), MSyntax::kBoolean);
     syntax.addFlag(
@@ -108,6 +115,10 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportVisibility.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kExportComponentTagsFlag,
+        UsdMayaJobExportArgsTokens->exportComponentTags.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kIgnoreWarningsFlag,
         UsdMayaJobExportArgsTokens->ignoreWarnings.GetText(),
         MSyntax::kBoolean);
@@ -141,7 +152,7 @@ MSyntax MayaUSDExportCommand::createSyntax()
         kCompatibilityFlag, UsdMayaJobExportArgsTokens->compatibility.GetText(), MSyntax::kString);
 
     syntax.addFlag(kChaserFlag, UsdMayaJobExportArgsTokens->chaser.GetText(), MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobExportArgsTokens->chaser.GetText());
+    syntax.makeFlagMultiUse(kChaserFlag);
 
     syntax.addFlag(
         kChaserArgsFlag,
@@ -149,7 +160,7 @@ MSyntax MayaUSDExportCommand::createSyntax()
         MSyntax::kString,
         MSyntax::kString,
         MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobExportArgsTokens->chaserArgs.GetText());
+    syntax.makeFlagMultiUse(kChaserArgsFlag);
 
     syntax.addFlag(
         kMelPerFrameCallbackFlag,
@@ -319,8 +330,7 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
             std::string rootPath = tmpArgList.asString(0).asChar();
 
             if (!rootPath.empty()) {
-                MDagPath rootDagPath;
-                UsdMayaUtil::GetDagPathByName(rootPath, rootDagPath);
+                MDagPath rootDagPath = UsdMayaUtil::nameToDagPath(rootPath);
                 if (!rootDagPath.isValid()) {
                     MGlobal::displayError(
                         MString("Invalid dag path provided for exportRoot: ")

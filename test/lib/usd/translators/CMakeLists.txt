@@ -23,6 +23,7 @@ set(TEST_SCRIPT_FILES
     testUsdExportOpenLayer.py
     testUsdExportOverImport.py
     testUsdExportUsdzPackage.py
+    testUsdExportUsdPreviewSurface.py
     testUsdExportParentScope.py
     # To investigate: following test asserts in MFnParticleSystem, but passes.
     # PPT, 17-Jun-20.
@@ -47,6 +48,11 @@ set(TEST_SCRIPT_FILES
     testUsdExportVisibilityDefault.py
     testUsdImportAnonymousLayer.py
     testUsdImportCamera.py
+    testUsdImportBasisCurves.py
+    testUsdImportBatchNurbsCurves.py
+    testUsdImportLinearCurves.py
+    testUsdImportNurbsCurves.py
+    testUsdImportBatchBezierCurves.py
     testUsdImportColorSets.py
     testUsdImportDisplacement.py
     testUsdImportExportScope.py
@@ -186,6 +192,7 @@ if (MAYA_APP_VERSION VERSION_GREATER_EQUAL 2020)
                     "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
                     "${PXR_OVERRIDE_PLUGINPATH_NAME}=${CMAKE_CURRENT_BINARY_DIR}/../plugin/${plugin_type}"
                     "INPUT_PATH=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
             )
             set_property(TEST ${target} APPEND PROPERTY LABELS translators)
         endforeach()
@@ -210,6 +217,14 @@ if (MAYA_APP_VERSION VERSION_GREATER 2022 AND PXR_VERSION VERSION_GREATER 2102)
         # Add a ctest label to these tests for easy filtering.
         set_property(TEST ${target} APPEND PROPERTY LABELS translators)
     endforeach()
+
+    if (BUILD_RFM_TRANSLATORS)
+        mayaUsd_add_test(testUsdExportMultiMaterial
+            PYTHON_MODULE testUsdExportMultiMaterial
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        set_property(TEST testUsdExportMultiMaterial APPEND PROPERTY LABELS translators)
+    endif()
 endif()
 
 # We are explicitly not setting PXR_PLUGINPATH_NAME here. We want to test
@@ -221,3 +236,15 @@ mayaUsd_add_test(testUsdMayaListShadingModesCommand
         "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
 )
 set_property(TEST testUsdMayaListShadingModesCommand APPEND PROPERTY LABELS translators)
+
+# Requires Physics API to test some exporters:
+if (PXR_VERSION VERSION_GREATER 2105)
+    mayaUsd_add_test(testUsdExportSchemaApi
+        PYTHON_MODULE testUsdExportSchemaApi
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        ENV
+            "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
+            "${PXR_OVERRIDE_PLUGINPATH_NAME}=${CMAKE_CURRENT_BINARY_DIR}/../plugin/nullApiExporter"
+    )
+    set_property(TEST testUsdExportSchemaApi APPEND PROPERTY LABELS translators)
+endif()

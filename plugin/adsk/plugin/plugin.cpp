@@ -16,6 +16,7 @@
 #include "ProxyShape.h"
 #include "adskExportCommand.h"
 #include "adskImportCommand.h"
+#include "adskListJobContextsCommand.h"
 #include "adskListShadingModesCommand.h"
 #include "adskStageLoadUnloadCommands.h"
 #include "base/api.h"
@@ -68,6 +69,10 @@
 // functionality.  PPT, 1-Dec-2020.
 #include <maya/MGlobal.h>
 #include <maya/MPxCommand.h>
+#endif
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/fileio/primUpdaterManager.h>
 #endif
 
 #if defined(WANT_QT_BUILD)
@@ -258,6 +263,7 @@ MStatus initializePlugin(MObject obj)
         MayaUsdProxyShapePlugin::getProxyShapeClassification());
     CHECK_MSTATUS(status);
 
+    registerCommandCheck<MayaUsd::ADSKMayaUSDListJobContextsCommand>(plugin);
     registerCommandCheck<MayaUsd::ADSKMayaUSDListShadingModesCommand>(plugin);
 
     status = UsdMayaUndoHelperCommand::initialize(plugin);
@@ -322,6 +328,11 @@ MStatus initializePlugin(MObject obj)
     UsdMayaSceneResetNotice::InstallListener();
     UsdMayaDiagnosticDelegate::InstallDelegate();
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    // Install notifications
+    PrimUpdaterManager::getInstance();
+#endif
+
     return status;
 }
 
@@ -345,6 +356,7 @@ MStatus uninitializePlugin(MObject obj)
     }
 
     deregisterCommandCheck<MayaUsd::ADSKMayaUSDListShadingModesCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ADSKMayaUSDListJobContextsCommand>(plugin);
 
 #if defined(WANT_QT_BUILD)
     status = MayaUsd::USDImportDialogCmd::finalize(plugin);

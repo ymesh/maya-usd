@@ -29,6 +29,7 @@ global proc mayaUSDRegisterStrings() {
     register("kCreateUsdStageFromFile", "Create USD Stage from File");
     register("kCreateUsdStageFromFileOptions", "Create USD Stage from File Options");
     register("kCreateStageFromFile", "Create Stage from File");
+    register("kCreateStage", "Create");
     register("kDefaultPrim", "Default Prim");
     register("kDefaultPrimAnn", "As part of its metadata, each stage can identify a default prim. This is the primitive that is referenced in if you reference in a file.");
     register("kExcludePrimPaths", "Exclude Prim Paths:");
@@ -50,6 +51,7 @@ global proc mayaUSDRegisterStrings() {
     register("kMenuClear", "Clear");
     register("kMenuRevertToFile", "Revert to File");
     register("kMenuLayerEditor", "USD Layer Editor");
+    register("kContextMenuLayerEditor", "USD Layer Editor...");
     register("kMenuLayerEditorAnn", "Organize and edit USD data in layers");
     register("kMenuLoadSublayers", "Load Sublayers...");
     register("kMenuMute", "Mute");

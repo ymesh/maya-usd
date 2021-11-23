@@ -66,6 +66,22 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+namespace {
+// Simple RAII class to ensure tracking does not extend past the scope.
+struct TempNodeTrackerScope
+{
+    TempNodeTrackerScope(UsdMayaPrimReaderContext& context)
+        : _context(context)
+    {
+        _context.StartNewMayaNodeTracking();
+    }
+
+    ~TempNodeTrackerScope() { _context.StopNewMayaNodeTracking(); }
+
+    UsdMayaPrimReaderContext& _context;
+};
+} // namespace
+
 UsdMaya_ReadJob::UsdMaya_ReadJob(
     const MayaUsd::ImportData&  iImportData,
     const UsdMayaJobImportArgs& iArgs)
@@ -374,6 +390,7 @@ void UsdMaya_ReadJob::_DoImportPrimIt(
             = UsdMayaPrimReaderRegistry::FindOrFallback(typeName)) {
             UsdMayaPrimReaderSharedPtr primReader = factoryFn(args);
             if (primReader) {
+                TempNodeTrackerScope scope(readCtx);
                 primReader->Read(readCtx);
                 if (primReader->HasPostReadSubtree()) {
                     primReaderMap[prim.GetPath()] = primReader;
@@ -381,6 +398,7 @@ void UsdMaya_ReadJob::_DoImportPrimIt(
                 if (readCtx.GetPruneChildren()) {
                     primIt.PruneChildren();
                 }
+                UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(args, readCtx);
             }
         }
     }
@@ -588,6 +606,11 @@ void UsdMaya_ReadJob::SetMayaRootDagPath(const MDagPath& mayaRootDagPath)
 const MDagPath& UsdMaya_ReadJob::GetMayaRootDagPath() const { return mMayaRootDagPath; }
 
 double UsdMaya_ReadJob::timeSampleMultiplier() const { return mTimeSampleMultiplier; }
+
+const UsdMayaPrimReaderContext::ObjectRegistry& UsdMaya_ReadJob::GetNewNodeRegistry() const
+{
+    return mNewNodeRegistry;
+}
 
 double UsdMaya_ReadJob::_setTimeSampleMultiplierFrom(const double layerFPS)
 {
