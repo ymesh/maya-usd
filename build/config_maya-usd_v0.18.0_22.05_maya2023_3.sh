@@ -1,15 +1,13 @@
 #
-# Config Maya USD dev branch
+# Config Maya USD master branch
 #
 
-USD_VER="22.03"
-MAYA_VER="2022"
-#MAYA_BETA_VER="PR129"
-MAYA_MINOR_VER="2"
-DEVKIT_VER="2022.3"
-RMAN_VER="24.3"
-
-MAYAUSD_VER="0.16.0"
+MAYAUSD_VER="0.18.0"
+USD_VER="22.05"
+RMAN_VER="24.4"
+MAYA_VER="2023"
+#MAYA_MINOR_VER="3"
+DEVKIT_VER="2023"
 MAYA_PYTHON_VERSION="3"
 
 source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
