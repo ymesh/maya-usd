@@ -1,16 +1,14 @@
 #
-# Config Maya USD dev branch
+# Config Maya USD master branch
 #
 
-USD_VER="22.03"
-MAYA_VER="2022"
-#MAYA_BETA_VER="PR129"
-MAYA_MINOR_VER="2"
-DEVKIT_VER="2022.3"
-RMAN_VER="24.3"
-
-MAYAUSD_VER="0.16.0"
-MAYA_PYTHON_VERSION="2"
+MAYAUSD_VER="0.18.0"
+USD_VER="22.05"
+RMAN_VER="24.4"
+MAYA_VER="2024"
+#MAYA_MINOR_VER="3"
+DEVKIT_VER="Maya_PR_133"
+MAYA_PYTHON_VERSION="3"
 
 source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
 
@@ -38,7 +36,7 @@ deploy_dir="${deploy_root}/USD/autodesk/mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAY
 export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
 export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
-export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0"
+export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0_py${MAYA_PYTHON_VERSION}"
 export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.2_ABI_0"
 #export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
 #export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
@@ -92,7 +90,8 @@ cmake3 -LA -G "Unix Makefiles" \
 -DBUILD_TESTS=OFF \
 -DCMAKE_WANT_UFE_BUILD=ON \
 -DBUILD_SHARED_LIBS=ON \
--DBUILD_WITH_PYTHON_3=OFF \
+-DBUILD_WITH_PYTHON_3=ON \
+-DBUILD_WITH_PYTHON_3_VERSION="3.9" \
 -DMAYA_DEVKIT_LOCATION=${MAYA_DEVKIT_LOCATION} \
 -DUFE_INCLUDE_ROOT=${UFE_INCLUDE_ROOT} \
 -DUFE_LIB_ROOT=${UFE_LIB_ROOT} \
