@@ -1,20 +1,16 @@
 #
-# Config Maya USD dev branch
+# Config Maya USD master branch
 #
-# mayausd_v0.10.0_2022
 
-USD_VER="21.08"
-#USD_VER="21.02"
-MAYA_VER="2020"
-#MAYA_BETA_VER="PR122"
-MAYA_MINOR_VER="4"
-DEVKIT_VER="2020.4"
-RMAN_VER="24.1"
-
-MAYAUSD_VER="0.11.0"
+MAYAUSD_VER="0.18.0"
+USD_VER="22.05"
+RMAN_VER="24.4"
+MAYA_VER="2022"
+MAYA_MINOR_VER="3"
+DEVKIT_VER="2022.3"
 MAYA_PYTHON_VERSION="2"
 
-source ./env_python2/bin/activate
+source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
 
 cur_dir=`pwd`
 tmp_dir="tmp_mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}_${MAYA_PYTHON_VERSION}"
@@ -41,6 +37,7 @@ export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
 export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
 export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0"
+export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.2_ABI_0"
 #export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
 #export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
 #
@@ -51,7 +48,6 @@ export Boost_LIBRARY_DIR="${BOOST_ROOT}/lib"
 export BOOST_LIBRARYDIR="${BOOST_ROOT}/lib"
 
 export GTEST_ROOT="${deploy_root}/Google/googletest_1.11.0"
-
 
 # for solving uic compile errors
 # Put libicui18n.so.50, ..., etc. to /usr/local/lib
@@ -88,7 +84,7 @@ cmake3 -LA -G "Unix Makefiles" \
 -DBUILD_ADSK_PLUGIN=ON \
 -DBUILD_PXR_PLUGIN=OFF \
 -DBUILD_AL_PLUGIN=OFF \
--DBUILD_HDMAYA=ON \
+-DSKIP_USDMAYA_TESTS=ON \
 -DBUILD_RFM_TRANSLATORS=ON \
 -DBUILD_STRICT_MODE=OFF \
 -DBUILD_TESTS=OFF \
@@ -98,6 +94,8 @@ cmake3 -LA -G "Unix Makefiles" \
 -DMAYA_DEVKIT_LOCATION=${MAYA_DEVKIT_LOCATION} \
 -DUFE_INCLUDE_ROOT=${UFE_INCLUDE_ROOT} \
 -DUFE_LIB_ROOT=${UFE_LIB_ROOT} \
+-DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
+-DMAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG=OFF \
 -DQT_LOCATION=${QT_LOCATION} \
 -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
 -DCMAKE_CXX_STANDARD="14" \
@@ -107,8 +105,11 @@ cmake3 -LA -G "Unix Makefiles" \
 -DGTEST_ROOT=${GTEST_ROOT} \
 ../..
 
-# -DMAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG=OFF \
-# -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
+#-DBUILD_HDMAYA=ON \
+
+# -DCMAKE_WANT_MATERIALX_BUILD=ON \
+# -DMaterialX_DIR=${MaterialX_DIR} \
+# 
 # -DWANT_USD_RELATIVE_PATH=OFF \
 # -DSKIP_USDMAYA_TESTS=ON \
 # -DOpenGL_GL_PREFERENCE=GLVND \
@@ -154,7 +155,7 @@ deactivate
 # export LD_LIBRARY_PATH=${MAYA_LOCATION}/lib:${LD_LIBRARY_PATH}
 
 # !!! Put libicui18n.so.50 to /usr/local/lib & add:
-#export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 # or
-#export LD_LIBRARY_PATH=/usr/autodesk/maya2020/lib:${LD_LIBRARY_PATH}
-
+# export LD_LIBRARY_PATH=/usr/autodesk/maya2022/lib:${LD_LIBRARY_PATH}
+# echo $LD_LIBRARY_PATH
