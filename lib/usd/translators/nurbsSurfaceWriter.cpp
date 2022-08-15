@@ -336,7 +336,7 @@ bool PxrUsdTranslators_NurbsSurfaceWriter::writeNurbsSurfaceAttrs(
         SdfValueTypeName uvValueType = (UsdMayaWriteUtil::WriteUVAsFloat2())
             ? (SdfValueTypeNames->Float2Array)
             : (SdfValueTypeNames->TexCoord2fArray);
-        UsdGeomPrimvar uvSet = primSchema.CreatePrimvar(
+        UsdGeomPrimvar uvSet = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(
             UsdUtilsGetPrimaryUVSetName(), uvValueType, UsdGeomTokens->vertex);
         UsdMayaWriteUtil::SetAttribute(
             uvSet.GetAttr(), &stValues, UsdTimeCode::Default(), _GetSparseValueWriter());

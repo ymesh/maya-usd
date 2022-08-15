@@ -842,7 +842,7 @@ void PxrUsdTranslators_MeshWriter::cleanupPrimvars()
     // of the indices are assigned), then we can remove the unassigned value
     // and shift all the indices down.
     const UsdGeomMesh primSchema(GetUsdPrim());
-    for (const UsdGeomPrimvar& primvar : primSchema.GetPrimvars()) {
+    for (const UsdGeomPrimvar& primvar : UsdGeomPrimvarsAPI(primSchema).GetPrimvars()) {
         if (!primvar) {
             continue;
         }

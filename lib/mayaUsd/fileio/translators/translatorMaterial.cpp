@@ -232,7 +232,7 @@ static void _BindUVs(
     UsdGeomMesh mesh(primSchema.GetPrim());
     
     if (mesh) {
-        const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
+        const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
         for (const UsdGeomPrimvar& primvar : primvars) {
             const SdfValueTypeName typeName = primvar.GetTypeName();
             if (typeName == SdfValueTypeNames->TexCoord2fArray
