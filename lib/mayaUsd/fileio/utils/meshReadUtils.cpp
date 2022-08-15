@@ -599,7 +599,7 @@ void UsdMayaMeshReadUtils::assignPrimvarsToMesh(
     MFnMesh meshFn(meshObj);
 
     // GETTING PRIMVARS
-    const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
     bool                              firstUVPrimvar = true;
 
     for (const UsdGeomPrimvar& primvar : primvars) {

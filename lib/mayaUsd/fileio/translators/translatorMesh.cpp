@@ -145,7 +145,7 @@ TranslatorMeshRead::TranslatorMeshRead(
     mesh.GetPointsAttr().Get(&points, pointsTimeSample);
 
     /* If 'normals' and 'primvars:normals' are both specified, the latter has precedence. */
-    UsdGeomPrimvar primvar = mesh.GetPrimvar(UsdGeomTokens->normals);
+    UsdGeomPrimvar primvar = UsdGeomPrimvarsAPI(mesh).GetPrimvar(UsdGeomTokens->normals);
 
     if (primvar.HasValue()) {
         primvar.ComputeFlattened(&normals, normalsTimeSample);
