@@ -36,6 +36,8 @@
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdUtils/pipeline.h>
 
+#include <pxr/usd/usdGeom/primvarsAPI.h>
+
 #include <maya/MDoubleArray.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnNurbsCurve.h>
@@ -334,9 +336,8 @@ bool PxrUsdTranslators_NurbsSurfaceWriter::writeNurbsSurfaceAttrs(
         SdfValueTypeName uvValueType = (UsdMayaWriteUtil::WriteUVAsFloat2())
             ? (SdfValueTypeNames->Float2Array)
             : (SdfValueTypeNames->TexCoord2fArray);
-        UsdGeomPrimvar uvSet
-            = UsdGeomPrimvarsAPI(primSchema)
-                  .CreatePrimvar(UsdUtilsGetPrimaryUVSetName(), uvValueType, UsdGeomTokens->vertex);
+        UsdGeomPrimvar uvSet = primSchema.CreatePrimvar(
+            UsdUtilsGetPrimaryUVSetName(), uvValueType, UsdGeomTokens->vertex);
         UsdMayaWriteUtil::SetAttribute(
             uvSet.GetAttr(), &stValues, UsdTimeCode::Default(), _GetSparseValueWriter());
     }

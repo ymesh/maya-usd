@@ -226,8 +226,9 @@ static void _BindUVs(
 
     // We need the UV set names as they were in the USD scene, not the roundtripped original names:
     UsdGeomMesh mesh(primSchema.GetPrim());
+    
     if (mesh) {
-        const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
+        const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
         for (const UsdGeomPrimvar& primvar : primvars) {
             const SdfValueTypeName typeName = primvar.GetTypeName();
             if (typeName == SdfValueTypeNames->TexCoord2fArray
