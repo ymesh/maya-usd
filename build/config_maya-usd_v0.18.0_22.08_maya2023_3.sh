@@ -3,11 +3,11 @@
 #
 
 MAYAUSD_VER="0.18.0"
-USD_VER="22.05"
+USD_VER="22.08"
 RMAN_VER="24.4"
 MAYA_VER="2023"
 #MAYA_MINOR_VER="3"
-DEVKIT_VER="2023"
+DEVKIT_VER="2023.1"
 MAYA_PYTHON_VERSION="3"
 
 source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
@@ -37,7 +37,7 @@ export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
 export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
 export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0_py${MAYA_PYTHON_VERSION}"
-export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.2_ABI_0"
+export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.6_ABI_0"
 #export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
 #export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
 #
