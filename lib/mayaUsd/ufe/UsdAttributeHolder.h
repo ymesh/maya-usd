@@ -21,7 +21,8 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/prim.h>
 
-#include <ufe/attribute.h>
+#include <ufe/Attribute.h>
+#include <ufe/Value.h>
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
@@ -29,13 +30,9 @@ namespace ufe {
 //! \brief Internal helper class holding a USD attributes for query:
 class UsdAttributeHolder
 {
-protected:
-    UsdAttributeHolder(const PXR_NS::UsdAttribute& usdAttr);
-
 public:
-    typedef std::unique_ptr<UsdAttributeHolder> UPtr;
-    static UPtr                                 create(const PXR_NS::UsdAttribute& usdAttr);
-    virtual ~UsdAttributeHolder() = default;
+    UsdAttributeHolder(const PXR_NS::UsdAttribute& usdAttr);
+    ~UsdAttributeHolder() = default;
 
     virtual bool        isAuthored() const { return isValid() && _usdAttr.IsAuthored(); }
     virtual bool        isValid() const { return _usdAttr.IsValid(); }

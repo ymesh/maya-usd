@@ -42,30 +42,21 @@ UsdShaderAttributeHolder::UsdShaderAttributeHolder(
     PXR_NS::UsdShadeAttributeType     sdrType)
     : UsdAttributeHolder(
         usdPrim.GetAttribute(PXR_NS::UsdShadeUtils::GetFullName(sdrProp->GetName(), sdrType)))
+    , _usdPrim(usdPrim)
     , _sdrProp(sdrProp)
     , _sdrType(sdrType)
 {
-    // The _usdAttr in the base class will be in an invalid state if the attribute was never
-    // created, but it will still remember correctly the prim used to initialize it.
-
-    // sdrProp must be valid at creation and will stay valid.
+    // sdrProp must be valid at creation and will stay valid. usdPrim can be valid at creation and
+    // become invalid later.
     PXR_NAMESPACE_USING_DIRECTIVE
     TF_AXIOM(sdrProp && sdrType != PXR_NS::UsdShadeAttributeType::Invalid);
 }
 
-UsdAttributeHolder::UPtr UsdShaderAttributeHolder::create(
-    PXR_NS::UsdPrim                   usdPrim,
-    PXR_NS::SdrShaderPropertyConstPtr sdrProp,
-    PXR_NS::UsdShadeAttributeType     sdrType)
-{
-    return std::unique_ptr<UsdShaderAttributeHolder>(
-        new UsdShaderAttributeHolder(usdPrim, sdrProp, sdrType));
-}
 std::string UsdShaderAttributeHolder::isEditAllowedMsg() const
 {
     if (_Base::isValid()) {
         return _Base::isEditAllowedMsg();
-    } else if (usdPrim()) {
+    } else if (_usdPrim) {
         return std::string();
     } else {
         return "Editing is not allowed.";
@@ -106,7 +97,7 @@ bool UsdShaderAttributeHolder::set(const PXR_NS::VtValue& value, PXR_NS::UsdTime
         get(currentValue, time);
         if (currentValue == value) {
             return true;
-        } else if (usdPrim()) {
+        } else if (_usdPrim) {
             _CreateUsdAttribute();
         } else {
             return false;
@@ -140,7 +131,7 @@ Ufe::Value UsdShaderAttributeHolder::getMetadata(const std::string& key) const
 
 bool UsdShaderAttributeHolder::setMetadata(const std::string& key, const Ufe::Value& value)
 {
-    if (!isValid() && usdPrim()) {
+    if (!isValid() && _usdPrim) {
         _CreateUsdAttribute();
     }
 
@@ -183,7 +174,7 @@ Ufe::AttributeEnumString::EnumValues UsdShaderAttributeHolder::getEnumValues() c
 
 void UsdShaderAttributeHolder::_CreateUsdAttribute()
 {
-    PXR_NS::UsdShadeShader shader(usdPrim());
+    PXR_NS::UsdShadeShader shader(_usdPrim);
     if (_sdrType == PXR_NS::UsdShadeAttributeType::Output) {
         _usdAttr = shader.CreateOutput(_sdrProp->GetName(), usdAttributeType()).GetAttr();
     } else {

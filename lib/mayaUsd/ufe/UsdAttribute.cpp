@@ -331,8 +331,8 @@ namespace ufe {
 // UsdAttribute:
 //------------------------------------------------------------------------------
 
-UsdAttribute::UsdAttribute(UsdAttributeHolder::UPtr&& attrHolder)
-    : _attrHolder(std::move(attrHolder))
+UsdAttribute::UsdAttribute(UsdAttributeHolder* attrHolder)
+    : _attrHolder(attrHolder)
 {
 }
 
@@ -446,18 +446,18 @@ PXR_NS::SdfValueTypeName UsdAttribute::usdAttributeType() const
 //------------------------------------------------------------------------------
 
 UsdAttributeGeneric::UsdAttributeGeneric(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::AttributeGeneric(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
 {
 }
 
 /*static*/
 UsdAttributeGeneric::Ptr
-UsdAttributeGeneric::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeGeneric::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeGeneric>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeGeneric>(item, attrHolder);
     return attr;
 }
 
@@ -465,6 +465,7 @@ UsdAttributeGeneric::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::U
 // UsdAttributeGeneric - Ufe::AttributeGeneric overrides
 //------------------------------------------------------------------------------
 
+std::string UsdAttributeGeneric::nativeType() const
 std::string UsdAttributeGeneric::nativeType() const { return UsdAttribute::nativeType(); }
 
 #if (UFE_PREVIEW_VERSION_NUM >= 4015)
@@ -473,18 +474,18 @@ std::string UsdAttributeGeneric::nativeType() const { return UsdAttribute::nativ
 //------------------------------------------------------------------------------
 
 UsdAttributeFilename::UsdAttributeFilename(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::AttributeFilename(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
 {
 }
 
 /*static*/
 UsdAttributeFilename::Ptr
-UsdAttributeFilename::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeFilename::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeFilename>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeFilename>(item, attrHolder);
     return attr;
 }
 
@@ -533,18 +534,18 @@ Ufe::UndoableCommand::Ptr UsdAttributeFilename::setCmd(const std::string& value)
 //------------------------------------------------------------------------------
 
 UsdAttributeEnumString::UsdAttributeEnumString(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::AttributeEnumString(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
 {
 }
 
 /*static*/
 UsdAttributeEnumString::Ptr
-UsdAttributeEnumString::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeEnumString::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeEnumString>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeEnumString>(item, attrHolder);
     return attr;
 }
 
@@ -565,25 +566,7 @@ std::string UsdAttributeEnumString::get() const
 void UsdAttributeEnumString::set(const std::string& value)
 {
     setUsdAttr<std::string>(*this, value);
-}
-
-Ufe::UndoableCommand::Ptr UsdAttributeEnumString::setCmd(const std::string& value)
-{
-    auto self = std::static_pointer_cast<UsdAttributeEnumString>(shared_from_this());
-    if (!TF_VERIFY(self, kErrorMsgInvalidType))
-        return nullptr;
-
-    const std::string errMsg = isEditAllowedMsg();
-    if (!errMsg.empty()) {
-        MGlobal::displayError(errMsg.c_str());
-        return nullptr;
-    }
-
-    return std::make_shared<SetUndoableCommand<std::string, UsdAttributeEnumString>>(self, value);
-}
-
 Ufe::AttributeEnumString::EnumValues UsdAttributeEnumString::getEnumValues() const
-{
     return UsdAttribute::getEnumValues();
 }
 
@@ -592,18 +575,18 @@ Ufe::AttributeEnumString::EnumValues UsdAttributeEnumString::getEnumValues() con
 //------------------------------------------------------------------------------
 
 UsdAttributeEnumToken::UsdAttributeEnumToken(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::AttributeEnumString(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
 {
 }
 
 /*static*/
 UsdAttributeEnumToken::Ptr
-UsdAttributeEnumToken::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeEnumToken::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeEnumToken>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeEnumToken>(item, attrHolder);
     return attr;
 }
 
@@ -625,6 +608,26 @@ void UsdAttributeEnumToken::set(const std::string& value)
 {
     PXR_NS::TfToken tok(value);
     setUsdAttr<PXR_NS::TfToken>(*this, tok);
+}
+
+Ufe::UndoableCommand::Ptr UsdAttributeEnumToken::setCmd(const std::string& value)
+{
+    auto self = std::dynamic_pointer_cast<UsdAttributeEnumToken>(shared_from_this());
+    if (!TF_VERIFY(self, kErrorMsgInvalidType))
+        return nullptr;
+
+    const std::string errMsg = isEditAllowedMsg();
+    if (!errMsg.empty()) {
+        MGlobal::displayError(errMsg.c_str());
+        return nullptr;
+    }
+
+    return std::make_shared<SetUndoableCommand<std::string, UsdAttributeEnumToken>>(self, value);
+}
+
+Ufe::AttributeEnumString::EnumValues UsdAttributeEnumToken::getEnumValues() const
+{
+    return UsdAttribute::getEnumValues();
 }
 
 Ufe::UndoableCommand::Ptr UsdAttributeEnumToken::setCmd(const std::string& value)
@@ -653,10 +656,10 @@ Ufe::AttributeEnumString::EnumValues UsdAttributeEnumToken::getEnumValues() cons
 
 template <typename T>
 TypedUsdAttribute<T>::TypedUsdAttribute(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::TypedAttribute<T>(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
 {
 }
 
@@ -802,9 +805,9 @@ template <typename T> void TypedUsdAttribute<T>::set(const T& value)
 
 /*static*/
 UsdAttributeBool::Ptr
-UsdAttributeBool::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeBool::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeBool>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeBool>(item, attrHolder);
     return attr;
 }
 
@@ -814,9 +817,9 @@ UsdAttributeBool::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr
 
 /*static*/
 UsdAttributeInt::Ptr
-UsdAttributeInt::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeInt::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeInt>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeInt>(item, attrHolder);
     return attr;
 }
 
@@ -826,21 +829,9 @@ UsdAttributeInt::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&
 
 /*static*/
 UsdAttributeFloat::Ptr
-UsdAttributeFloat::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeFloat::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeFloat>(item, std::move(attrHolder));
-    return attr;
-}
-
-//------------------------------------------------------------------------------
-// UsdAttributeDouble:
-//------------------------------------------------------------------------------
-
-/*static*/
-UsdAttributeDouble::Ptr
-UsdAttributeDouble::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
-{
-    auto attr = std::make_shared<UsdAttributeDouble>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeFloat>(item, attrHolder);
     return attr;
 }
 
@@ -848,19 +839,11 @@ UsdAttributeDouble::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UP
 // UsdAttributeString:
 //------------------------------------------------------------------------------
 
-UsdAttributeString::UsdAttributeString(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
-    : Ufe::AttributeString(item)
-    , UsdAttribute(std::move(attrHolder))
-{
-}
-
 /*static*/
-UsdAttributeString::Ptr
-UsdAttributeString::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeDouble::Ptr
+UsdAttributeDouble::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeString>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeDouble>(item, attrHolder);
     return attr;
 }
 
@@ -902,19 +885,71 @@ Ufe::UndoableCommand::Ptr UsdAttributeString::setCmd(const std::string& value)
 // UsdAttributeToken:
 //------------------------------------------------------------------------------
 
-UsdAttributeToken::UsdAttributeToken(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeString::UsdAttributeString(
+    const UsdSceneItem::Ptr& item,
+    UsdAttributeHolder*      attrHolder)
     : Ufe::AttributeString(item)
-    , UsdAttribute(std::move(attrHolder))
+    , UsdAttribute(attrHolder)
+{
+}
+
+/*static*/
+UsdAttributeString::Ptr
+UsdAttributeString::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
+{
+    auto attr = std::make_shared<UsdAttributeString>(item, attrHolder);
+    return attr;
+}
+
+std::string UsdAttributeString::get() const
+{
+    if (!hasValue())
+        return std::string();
+
+    PXR_NS::VtValue vt;
+    if (UsdAttribute::get(vt, getCurrentTime(sceneItem())) && vt.IsHolding<std::string>()) {
+        return vt.UncheckedGet<std::string>();
+    }
+
+    return std::string();
+}
+
+void UsdAttributeString::set(const std::string& value)
+{
+    // We need to figure out if the USDAttribute is holding a TfToken or string.
+    setUsdAttr<std::string>(*this, value);
+}
+
+Ufe::UndoableCommand::Ptr UsdAttributeString::setCmd(const std::string& value)
+{
+    auto self = std::dynamic_pointer_cast<UsdAttributeString>(shared_from_this());
+    if (!TF_VERIFY(self, kErrorMsgInvalidType))
+        return nullptr;
+
+    const std::string errMsg = isEditAllowedMsg();
+    if (!errMsg.empty()) {
+        MGlobal::displayError(errMsg.c_str());
+        return nullptr;
+    }
+
+    return std::make_shared<SetUndoableCommand<std::string, UsdAttributeString>>(self, value);
+}
+
+//------------------------------------------------------------------------------
+// UsdAttributeToken:
+//------------------------------------------------------------------------------
+
+UsdAttributeToken::UsdAttributeToken(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
+    : Ufe::AttributeString(item)
+    , UsdAttribute(attrHolder)
 {
 }
 
 /*static*/
 UsdAttributeToken::Ptr
-UsdAttributeToken::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeToken::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeToken>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeToken>(item, attrHolder);
     return attr;
 }
 
@@ -939,7 +974,7 @@ void UsdAttributeToken::set(const std::string& value)
 
 Ufe::UndoableCommand::Ptr UsdAttributeToken::setCmd(const std::string& value)
 {
-    auto self = std::static_pointer_cast<UsdAttributeToken>(shared_from_this());
+    auto self = std::dynamic_pointer_cast<UsdAttributeToken>(shared_from_this());
     if (!TF_VERIFY(self, kErrorMsgInvalidType))
         return nullptr;
 
@@ -957,11 +992,10 @@ Ufe::UndoableCommand::Ptr UsdAttributeToken::setCmd(const std::string& value)
 //------------------------------------------------------------------------------
 
 /*static*/
-UsdAttributeColorFloat3::Ptr UsdAttributeColorFloat3::create(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeColorFloat3::Ptr
+UsdAttributeColorFloat3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeColorFloat3>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeColorFloat3>(item, attrHolder);
     return attr;
 }
 
@@ -971,11 +1005,10 @@ UsdAttributeColorFloat3::Ptr UsdAttributeColorFloat3::create(
 //------------------------------------------------------------------------------
 
 /*static*/
-UsdAttributeColorFloat4::Ptr UsdAttributeColorFloat4::create(
-    const UsdSceneItem::Ptr&   item,
-    UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeColorFloat4::Ptr
+UsdAttributeColorFloat4::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeColorFloat4>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeColorFloat4>(item, attrHolder);
     return attr;
 }
 #endif
@@ -986,9 +1019,9 @@ UsdAttributeColorFloat4::Ptr UsdAttributeColorFloat4::create(
 
 /*static*/
 UsdAttributeInt3::Ptr
-UsdAttributeInt3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeInt3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeInt3>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeInt3>(item, attrHolder);
     return attr;
 }
 
@@ -999,9 +1032,9 @@ UsdAttributeInt3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr
 
 /*static*/
 UsdAttributeFloat2::Ptr
-UsdAttributeFloat2::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeFloat2::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeFloat2>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeFloat2>(item, attrHolder);
     return attr;
 }
 #endif
@@ -1012,9 +1045,9 @@ UsdAttributeFloat2::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UP
 
 /*static*/
 UsdAttributeFloat3::Ptr
-UsdAttributeFloat3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeFloat3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeFloat3>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeFloat3>(item, attrHolder);
     return attr;
 }
 
@@ -1025,9 +1058,9 @@ UsdAttributeFloat3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UP
 
 /*static*/
 UsdAttributeFloat4::Ptr
-UsdAttributeFloat4::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeFloat4::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeFloat4>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeFloat4>(item, attrHolder);
     return attr;
 }
 #endif
@@ -1038,9 +1071,9 @@ UsdAttributeFloat4::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UP
 
 /*static*/
 UsdAttributeDouble3::Ptr
-UsdAttributeDouble3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeDouble3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeDouble3>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeDouble3>(item, attrHolder);
     return attr;
 }
 
@@ -1051,9 +1084,9 @@ UsdAttributeDouble3::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::U
 
 /*static*/
 UsdAttributeMatrix3d::Ptr
-UsdAttributeMatrix3d::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeMatrix3d::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeMatrix3d>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeMatrix3d>(item, attrHolder);
     return attr;
 }
 
@@ -1063,9 +1096,9 @@ UsdAttributeMatrix3d::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::
 
 /*static*/
 UsdAttributeMatrix4d::Ptr
-UsdAttributeMatrix4d::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder)
+UsdAttributeMatrix4d::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder* attrHolder)
 {
-    auto attr = std::make_shared<UsdAttributeMatrix4d>(item, std::move(attrHolder));
+    auto attr = std::make_shared<UsdAttributeMatrix4d>(item, attrHolder);
     return attr;
 }
 
