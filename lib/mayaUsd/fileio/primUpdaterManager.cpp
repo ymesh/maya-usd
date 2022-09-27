@@ -497,6 +497,8 @@ PullImportPaths pullImport(
         Ufe::Path::Segments s { ps, Ufe::PathSegment(v.first, rtid, '/') };
         Ufe::Path           p(std::move(s));
         objToUfePath.insert(ObjToUfePath::value_type(MObjectHandle(v.second), p));
+
+        context.replicateExtrasFromUSDtoMaya(p, v.second);
     }
     progressBar.advance();
 
@@ -626,6 +628,7 @@ PushCustomizeSrc pushExport(
     auto usdPathToDagPathMap = std::make_shared<UsdPathToDagPathMap>();
     for (const auto& v : writeJob.GetDagPathToUsdPathMap()) {
         usdPathToDagPathMap->insert(UsdPathToDagPathMap::value_type(v.second, v.first));
+        context.replicateExtrasFromMayaToUSD(v.first, v.second);
     }
 
     std::get<UsdPathToDagPathMapPtr>(pushCustomizeSrc) = usdPathToDagPathMap;
@@ -1121,6 +1124,7 @@ bool PrimUpdaterManager::editAsMaya(const Ufe::Path& path, const VtDictionary& u
 
     auto& scene = Ufe::Scene::instance();
     auto  ufeItem = Ufe::Hierarchy::createItem(path);
+    context.prepareToReplicateExtrasFromUSDtoMaya(ufeItem);
     if (!updaterArgs._copyOperation && TF_VERIFY(ufeItem))
         scene.notify(Ufe::ObjectPreDelete(ufeItem));
 
@@ -1426,6 +1430,7 @@ bool PrimUpdaterManager::duplicate(
 
         UsdMayaPrimUpdaterContext context(
             srcProxyShape->getTime(), srcProxyShape->getUsdStage(), ctxArgs);
+        context.prepareToReplicateExtrasFromUSDtoMaya(Ufe::Hierarchy::createItem(srcPath));
         progressBar.advance();
 
         pullImport(srcPath, srcPrim, context);
