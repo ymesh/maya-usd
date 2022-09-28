@@ -1494,7 +1494,8 @@ bool PrimUpdaterManager::duplicate(
         }
         progressBar.advance();
 
-        context._pushExtras.finalize(MayaUsd::ufe::stagePath(context.GetUsdStage()));
+        std::string* rootRename = (dstChildName != srcRootPath.GetName()) ? &dstChildName : nullptr;
+        context._pushExtras.finalize(MayaUsd::ufe::stagePath(context.GetUsdStage()), rootRename);
         progressBar.advance();
 
         auto ufeItem = Ufe::Hierarchy::createItem(dstPath);
