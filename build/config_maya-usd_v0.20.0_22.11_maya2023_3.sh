@@ -2,7 +2,7 @@
 # Config Maya USD master branch
 #
 
-MAYAUSD_VER="0.19.0"
+MAYAUSD_VER="0.20.0"
 USD_VER="22.11"
 RMAN_VER="24.4"
 MAYA_VER="2023"

@@ -55,6 +55,7 @@ namespace ufe {
 namespace {
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4010)
 std::pair<PXR_NS::SdrShaderPropertyConstPtr, PXR_NS::UsdShadeAttributeType>
 _GetSdrPropertyAndType(const Ufe::SceneItem::Ptr& item, const std::string& tokName)
 {
@@ -237,6 +238,11 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
         UFE_ASSERT_MSG(ctorIt != ctorMap.end(), kErrorMsgUnknown);
         if (ctorIt != ctorMap.end())
             newAttr = ctorIt->second(fItem, std::move(UsdAttributeHolder::create(usdAttr)));
+        fUsdAttributes[name] = newAttr;
+    }
+#if (UFE_PREVIEW_VERSION_NUM >= 4024)
+    // If this is a Usd attribute (cannot change) then we cache it for future access.
+    if (!canRemoveAttribute(fItem, name)) {
         fUsdAttributes[name] = newAttr;
     }
 #else

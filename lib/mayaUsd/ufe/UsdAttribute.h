@@ -239,7 +239,7 @@ public:
 private:
     bool isHoldingTfToken() const;
 
-    const bool _isHoldingTfToken;
+    const bool _isHoldingTfToken = false;
 }; // UsdAttributeEnumString
 
 //! \brief Interface for enumerated USD TfToken attributes.

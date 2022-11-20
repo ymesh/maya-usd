@@ -465,7 +465,6 @@ UsdAttributeGeneric::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::U
 // UsdAttributeGeneric - Ufe::AttributeGeneric overrides
 //------------------------------------------------------------------------------
 
-std::string UsdAttributeGeneric::nativeType() const
 std::string UsdAttributeGeneric::nativeType() const { return UsdAttribute::nativeType(); }
 
 #if (UFE_PREVIEW_VERSION_NUM >= 4015)
@@ -584,6 +583,7 @@ Ufe::UndoableCommand::Ptr UsdAttributeEnumString::setCmd(const std::string& valu
 }
 
 Ufe::AttributeEnumString::EnumValues UsdAttributeEnumString::getEnumValues() const
+{
     return UsdAttribute::getEnumValues();
 }
 
