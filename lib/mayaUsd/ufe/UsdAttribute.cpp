@@ -647,26 +647,6 @@ Ufe::AttributeEnumString::EnumValues UsdAttributeEnumToken::getEnumValues() cons
     return UsdAttribute::getEnumValues();
 }
 
-Ufe::UndoableCommand::Ptr UsdAttributeEnumToken::setCmd(const std::string& value)
-{
-    auto self = std::static_pointer_cast<UsdAttributeEnumToken>(shared_from_this());
-    if (!TF_VERIFY(self, kErrorMsgInvalidType))
-        return nullptr;
-
-    const std::string errMsg = isEditAllowedMsg();
-    if (!errMsg.empty()) {
-        MGlobal::displayError(errMsg.c_str());
-        return nullptr;
-    }
-
-    return std::make_shared<SetUndoableCommand<std::string, UsdAttributeEnumToken>>(self, value);
-}
-
-Ufe::AttributeEnumString::EnumValues UsdAttributeEnumToken::getEnumValues() const
-{
-    return UsdAttribute::getEnumValues();
-}
-
 //------------------------------------------------------------------------------
 // TypedUsdAttribute<T>:
 //------------------------------------------------------------------------------
@@ -853,7 +833,7 @@ UsdAttributeFloat::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPt
 }
 
 //------------------------------------------------------------------------------
-// UsdAttributeString:
+// UsdAttributeDouble:
 //------------------------------------------------------------------------------
 
 /*static*/
@@ -864,42 +844,8 @@ UsdAttributeDouble::create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UP
     return attr;
 }
 
-std::string UsdAttributeString::get() const
-{
-    if (!hasValue())
-        return std::string();
-
-    PXR_NS::VtValue vt;
-    if (UsdAttribute::get(vt, getCurrentTime(sceneItem())) && vt.IsHolding<std::string>()) {
-        return vt.UncheckedGet<std::string>();
-    }
-
-    return std::string();
-}
-
-void UsdAttributeString::set(const std::string& value)
-{
-    // We need to figure out if the USDAttribute is holding a TfToken or string.
-    setUsdAttr<std::string>(*this, value);
-}
-
-Ufe::UndoableCommand::Ptr UsdAttributeString::setCmd(const std::string& value)
-{
-    auto self = std::static_pointer_cast<UsdAttributeString>(shared_from_this());
-    if (!TF_VERIFY(self, kErrorMsgInvalidType))
-        return nullptr;
-
-    const std::string errMsg = isEditAllowedMsg();
-    if (!errMsg.empty()) {
-        MGlobal::displayError(errMsg.c_str());
-        return nullptr;
-    }
-
-    return std::make_shared<SetUndoableCommand<std::string, UsdAttributeString>>(self, value);
-}
-
 //------------------------------------------------------------------------------
-// UsdAttributeToken:
+// UsdAttributeString:
 //------------------------------------------------------------------------------
 
 UsdAttributeString::UsdAttributeString(
