@@ -20,6 +20,7 @@ import fixturesUtils
 import mayaUtils
 import usdUtils
 import ufeUtils
+import mayaUsd
 
 from pxr import UsdGeom
 from pxr import UsdShade
@@ -146,9 +147,9 @@ class ContextOpsTestCase(unittest.TestCase):
             if c.checked:
                 self.assertEqual(c.item, 'Ball_8')
 
-    def testSwitchVariantInWeakerLayer(self):
+    def testSwitchVariantInLayer(self):
         """
-        Test that switching variant in a weaker layer is restricted.
+        Test switching variant in layers: stronger, weaker, session.
         """
         contextItems = self.contextOps.getItems([])
 
@@ -200,7 +201,15 @@ class ContextOpsTestCase(unittest.TestCase):
         # Verify the variant has not switched.
         self.assertEqual(shadingVariant(), 'Cue')
         self.assertEqual(shadingVariantOnPrim(), 'Cue')
-        
+
+        # Verify we can switch variant in Session Layer.
+        stage.SetEditTarget(stage.GetSessionLayer())
+        cmd = self.contextOps.doOpCmd(
+            ['Variant Sets', 'shadingVariant', 'Ball_8'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+        self.assertEqual(shadingVariant(), 'Ball_8')
+        self.assertEqual(shadingVariantOnPrim(), 'Ball_8')
 
     def testDoOp(self):
         # Change visibility, undo / redo.
@@ -394,6 +403,102 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertEqual(ufeObs.nbAddNotif(), 2)
         self.assertEqual(ufeObs.nbDeleteNotif(), 2)
 
+    def testAddNewPrimInWeakerLayer(self):
+        cmds.file(new=True, force=True)
+
+        # Create a proxy shape with empty stage to start with.
+        import mayaUsd_createStageWithNewLayer
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        # Create our UFE notification observer
+        ufeObs = TestAddPrimObserver()
+        ufe.Scene.addObserver(ufeObs)
+
+        # Create a ContextOps interface for the proxy shape.
+        proxyShapePath = ufe.Path([mayaUtils.createUfePathSegment(proxyShape)])
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        contextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+
+         # Create a sub-layers SubLayerA.
+        stage = mayaUsd.lib.GetPrim(proxyShape).GetStage()
+        rootLayer = stage.GetRootLayer()
+        subLayerA = cmds.mayaUsdLayerEditor(rootLayer.identifier, edit=False, addAnonymous="SubLayerA")[0]
+
+        # Add a new prim.
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Xform'])
+        self.assertIsNotNone(cmd)
+        ufeObs.reset()
+        ufeCmd.execute(cmd)
+
+        # Ensure we got the correct UFE notifs.
+        self.assertEqual(ufeObs.nbAddNotif(), 1)
+        self.assertEqual(ufeObs.nbDeleteNotif(), 0)
+
+        # The proxy shape should now have a single UFE child item.
+        proxyShapehier = ufe.Hierarchy.hierarchy(proxyShapeItem)
+        self.assertTrue(proxyShapehier.hasChildren())
+        self.assertEqual(len(proxyShapehier.children()), 1)
+
+        # Add a new prim to the prim we just added.
+        cmds.pickWalk(d='down')
+
+        # Get the scene item from the UFE selection.
+        snIter = iter(ufe.GlobalSelection.get())
+        xformItem = next(snIter)
+
+        # Create a ContextOps interface for it.
+        contextOps = ufe.ContextOps.contextOps(xformItem)
+
+        # Add a new prim.
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Xform'])
+        self.assertIsNotNone(cmd)
+        ufeObs.reset()
+        ufeCmd.execute(cmd)
+
+        # Ensure we got the correct UFE notifs.
+        self.assertEqual(ufeObs.nbAddNotif(), 1)
+        self.assertEqual(ufeObs.nbDeleteNotif(), 0)
+
+        # The xform prim should now have a single UFE child item.
+        xformHier = ufe.Hierarchy.hierarchy(xformItem)
+        self.assertTrue(xformHier.hasChildren())
+        self.assertEqual(len(xformHier.children()), 1)
+
+        # Set target to the weaker sub-layer.
+        cmds.mayaUsdEditTarget(proxyShape, edit=True, editTarget=subLayerA)
+
+        # Add another prim
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Capsule'])
+        self.assertIsNotNone(cmd)
+        ufeObs.reset()
+        ufeCmd.execute(cmd)
+
+        # Ensure we got the correct UFE notifs.
+        self.assertEqual(ufeObs.nbAddNotif(), 1)
+        self.assertEqual(ufeObs.nbDeleteNotif(), 0)
+
+        # The xform prim should now have two UFE child items.
+        self.assertTrue(xformHier.hasChildren())
+        self.assertEqual(len(xformHier.children()), 2)
+
+        # Undo will remove the new prim, meaning one less child.
+        ufeObs.reset()
+        cmds.undo()
+        self.assertTrue(xformHier.hasChildren())
+        self.assertEqual(len(xformHier.children()), 1)
+
+        # Ensure we got the correct UFE notifs.
+        self.assertEqual(ufeObs.nbAddNotif(), 0)
+        self.assertEqual(ufeObs.nbDeleteNotif(), 1)
+
+        cmds.redo()
+        self.assertTrue(xformHier.hasChildren())
+        self.assertEqual(len(xformHier.children()), 2)
+
+        # Ensure we got the correct UFE notifs.
+        self.assertEqual(ufeObs.nbAddNotif(), 1)
+        self.assertEqual(ufeObs.nbDeleteNotif(), 1)
+
     @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
     def testMaterialBinding(self):
         """This test builds a material using only Ufe pre-4.10 capabilities."""
@@ -499,9 +604,9 @@ class ContextOpsTestCase(unittest.TestCase):
 
         # Complex command. We should now have a fully working preview surface material bound to
         # the capsule prim:
-        def checkMaterial(self, rootHier, numMat, idx, matType, context, shaderOutputName):
+        def checkMaterial(self, rootHier, rootHierChildren, numMat, idx, matType, context, shaderOutputName, scope="/mtl"):
             self.assertTrue(rootHier.hasChildren())
-            self.assertEqual(len(rootHier.children()), 2)
+            self.assertEqual(len(rootHier.children()), rootHierChildren)
 
             def checkItem(self, item, type, path):
                 self.assertEqual(item.nodeType(), type)            
@@ -509,19 +614,19 @@ class ContextOpsTestCase(unittest.TestCase):
                 self.assertEqual(prim.GetPath(), Sdf.Path(path))
 
             scopeItem = rootHier.children()[-1]
-            checkItem(self, scopeItem, "Scope", "/mtl")
+            checkItem(self, scopeItem, "Scope", "{0}".format(scope))
 
             scopeHier = ufe.Hierarchy.hierarchy(scopeItem)
             self.assertTrue(scopeHier.hasChildren())
             self.assertEqual(len(scopeHier.children()), numMat)
             materialItem = scopeHier.children()[idx]
-            checkItem(self, materialItem, "Material", "/mtl/{0}1".format(matType))
+            checkItem(self, materialItem, "Material", "{0}/{1}1".format(scope, matType))
 
             # Binding and selection are always on the last item:
             if (numMat - 1 == idx):
                 self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
                 self.assertEqual(UsdShade.MaterialBindingAPI(capsulePrim).GetDirectBinding().GetMaterialPath(),
-                                Sdf.Path("/mtl/{0}1".format(matType)))
+                                Sdf.Path("{0}/{1}1".format(scope, matType)))
                 selection = ufe.GlobalSelection.get()
                 self.assertEqual(len(selection), 1)
                 self.assertEqual(selection.front().nodeName(), "{0}1".format(matType))
@@ -532,7 +637,7 @@ class ContextOpsTestCase(unittest.TestCase):
             self.assertTrue(hier.hasChildren())
             self.assertEqual(len(hier.children()), 1)
             shaderItem = hier.children()[0]
-            checkItem(self, shaderItem, "Shader", "/mtl/{0}1/{0}1".format(matType))
+            checkItem(self, shaderItem, "Shader", "{0}/{1}1/{1}1".format(scope, matType))
 
             materialPrim = UsdShade.Material(usdUtils.getPrimFromSceneItem(materialItem))
             self.assertTrue(materialPrim)
@@ -542,26 +647,26 @@ class ContextOpsTestCase(unittest.TestCase):
 
             sourceInfos, invalidPaths = surfaceOutput.GetConnectedSources()
             self.assertEqual(len(sourceInfos), 1)
-            self.assertEqual(sourceInfos[0].source.GetPath(), Sdf.Path("/mtl/{0}1/{0}1".format(matType)))
+            self.assertEqual(sourceInfos[0].source.GetPath(), Sdf.Path("{0}/{1}1/{1}1".format(scope, matType)))
             self.assertEqual(sourceInfos[0].sourceName, shaderOutputName)
 
-        checkMaterial(self, rootHier, 1, 0, "UsdPreviewSurface", "", "surface")
+        checkMaterial(self, rootHier, 2, 1, 0, "UsdPreviewSurface", "", "surface")
 
         cmdSS = contextOps.doOpCmd(['Assign New Material', 'MaterialX', 'ND_standard_surface_surfaceshader'])
         self.assertIsNotNone(cmdSS)
         ufeCmd.execute(cmdSS)
 
-        checkMaterial(self, rootHier, 2, 0, "UsdPreviewSurface", "", "surface")
-        checkMaterial(self, rootHier, 2, 1, "standard_surface", "mtlx", "out")
+        checkMaterial(self, rootHier, 2, 2, 0, "UsdPreviewSurface", "", "surface")
+        checkMaterial(self, rootHier, 2, 2, 1, "standard_surface", "mtlx", "out")
 
         cmds.undo()
 
-        checkMaterial(self, rootHier, 1, 0, "UsdPreviewSurface", "", "surface")
+        checkMaterial(self, rootHier, 2, 1, 0, "UsdPreviewSurface", "", "surface")
 
         cmds.redo()
 
-        checkMaterial(self, rootHier, 2, 0, "UsdPreviewSurface", "", "surface")
-        checkMaterial(self, rootHier, 2, 1, "standard_surface", "mtlx", "out")
+        checkMaterial(self, rootHier, 2, 2, 0, "UsdPreviewSurface", "", "surface")
+        checkMaterial(self, rootHier, 2, 2, 1, "standard_surface", "mtlx", "out")
 
         cmds.undo()
         cmds.undo()
@@ -572,8 +677,11 @@ class ContextOpsTestCase(unittest.TestCase):
 
         cmds.redo()
 
-        checkMaterial(self, rootHier, 1, 0, "UsdPreviewSurface", "", "surface")
+        checkMaterial(self, rootHier, 2, 1, 0, "UsdPreviewSurface", "", "surface")
 
+        os.putenv("MAYAUSD_MATERIALS_SCOPE_NAME", "test_scope")
+        ufeCmd.execute(cmdSS)
+        checkMaterial(self, rootHier, 3, 1, 0, "standard_surface", "mtlx", "out", "/test_scope")
 
     @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Test only available in UFE preview version 0.4.10 and greater')
     @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')

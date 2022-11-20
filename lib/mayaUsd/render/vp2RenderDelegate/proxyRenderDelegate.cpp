@@ -55,6 +55,7 @@
 #include <maya/MDGMessage.h>
 #include <maya/MDisplayLayerMessage.h>
 #endif
+#include <maya/M3dView.h>
 #include <maya/MEventMessage.h>
 #include <maya/MFileIO.h>
 #include <maya/MFnPluginData.h>
@@ -62,7 +63,6 @@
 #include <maya/MProfiler.h>
 #include <maya/MSelectionContext.h>
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
-#include <maya/M3dView.h>
 #include <maya/MFnDisplayLayer.h>
 #include <maya/MFnDisplayLayerManager.h>
 #include <maya/MNodeMessage.h>
@@ -291,6 +291,9 @@ void _ConfigureReprs()
     // Edge desc for bbox display.
     HdMesh::ConfigureRepr(HdVP2ReprTokens->bbox, reprDescEdge);
 
+    // Forced representations are used for instanced geometry with display layer overrides
+    HdMesh::ConfigureRepr(HdVP2ReprTokens->forcedBbox, reprDescEdge);
+
     // smooth hull for untextured display
     HdBasisCurves::ConfigureRepr(
         HdVP2ReprTokens->smoothHullUntextured, HdBasisCurvesGeomStylePatch);
@@ -374,6 +377,14 @@ void displayLayerDirtyCB(MObject& node, void* clientData)
     }
 }
 #endif
+
+void colorPrefsChangedCB(void* clientData)
+{
+    ProxyRenderDelegate* prd = static_cast<ProxyRenderDelegate*>(clientData);
+    if (prd) {
+        prd->ColorPrefsChanged();
+    }
+}
 
 // Copied from renderIndex.cpp, the code that does HdRenderIndex::GetDrawItems. But I just want the
 // rprimIds, I don't want to go all the way to draw items.
@@ -521,6 +532,9 @@ ProxyRenderDelegate::~ProxyRenderDelegate()
         MMessage::removeCallback(cb.second);
     }
 #endif
+    for (auto id : _mayaColorPrefsCallbackIds) {
+        MMessage::removeCallback(id);
+    }
 }
 
 //! \brief  This drawing routine supports all devices (DirectX and OpenGL)
@@ -697,6 +711,13 @@ void ProxyRenderDelegate::_InitRenderDelegate()
                     displayLayerMembershipChangedCB, this);
         }
 #endif
+        // Monitor color prefs.
+        _mayaColorPrefsCallbackIds.push_back(
+            MEventMessage::addEventCallback("ColorIndexChanged", colorPrefsChangedCB, this));
+        _mayaColorPrefsCallbackIds.push_back(
+            MEventMessage::addEventCallback("DisplayColorChanged", colorPrefsChangedCB, this));
+        _mayaColorPrefsCallbackIds.push_back(
+            MEventMessage::addEventCallback("DisplayRGBColorChanged", colorPrefsChangedCB, this));
 
         // We don't really need any HdTask because VP2RenderDelegate uses Hydra
         // engine for data preparation only, but we have to add a dummy render
@@ -807,32 +828,72 @@ void ProxyRenderDelegate::_UpdateSceneDelegate()
     }
 }
 
+SdfPath ProxyRenderDelegate::GetPathInPrototype(const SdfPath& id)
+{
+    auto usdInstancePath = GetScenePrimPath(id, 0);
+    auto usdInstancePrim = _proxyShapeData->UsdStage()->GetPrimAtPath(usdInstancePath);
+    return usdInstancePrim.GetPrimInPrototype().GetPath();
+}
+
+void ProxyRenderDelegate::UpdateInstancingMapEntry(
+    const SdfPath& oldPathInPrototype,
+    const SdfPath& newPathInPrototype,
+    const SdfPath& rprimId)
+{
+    if (oldPathInPrototype != newPathInPrototype) {
+        // remove the old entry from the map
+        if (!oldPathInPrototype.IsEmpty()) {
+            auto range = _instancingMap.equal_range(oldPathInPrototype);
+            auto it = std::find(
+                range.first,
+                range.second,
+                std::pair<const SdfPath, SdfPath>(oldPathInPrototype, rprimId));
+            if (it != range.second) {
+                _instancingMap.erase(it);
+            }
+        }
+
+        // add new entry to the map
+        if (!newPathInPrototype.IsEmpty()) {
+            _instancingMap.insert(std::make_pair(newPathInPrototype, rprimId));
+        }
+    }
+}
+
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
 void ProxyRenderDelegate::_DirtyUsdSubtree(const UsdPrim& prim)
 {
     if (!prim.IsValid())
         return;
 
-    HdChangeTracker&      changeTracker = _renderIndex->GetChangeTracker();
-    constexpr HdDirtyBits dirtyBits = HdChangeTracker::DirtyVisibility | HdChangeTracker::DirtyRepr
-        | HdChangeTracker::DirtyDisplayStyle | MayaUsdRPrim::DirtySelectionHighlight
-        | HdChangeTracker::DirtyMaterialId;
+    HdChangeTracker& changeTracker = _renderIndex->GetChangeTracker();
 
-    if (prim.IsA<UsdGeomGprim>() && prim.IsActive()) {
-        auto indexPath = _sceneDelegate->ConvertCachePathToIndexPath(prim.GetPath());
-        if (_renderIndex->HasRprim(indexPath)) {
-            changeTracker.MarkRprimDirty(indexPath, dirtyBits);
-        }
-    }
+    auto markRprimDirty = [this, &changeTracker](const UsdPrim& prim) {
+        constexpr HdDirtyBits dirtyBits = HdChangeTracker::DirtyVisibility
+            | HdChangeTracker::DirtyRepr | HdChangeTracker::DirtyDisplayStyle
+            | MayaUsdRPrim::DirtySelectionHighlight | HdChangeTracker::DirtyMaterialId;
 
-    UsdPrimSubtreeRange range = prim.GetDescendants();
-    for (auto iter = range.begin(); iter != range.end(); ++iter) {
-        if (iter->IsA<UsdGeomGprim>()) {
-            auto indexPath = _sceneDelegate->ConvertCachePathToIndexPath(iter->GetPath());
-            if (_renderIndex->HasRprim(indexPath)) {
-                changeTracker.MarkRprimDirty(indexPath, dirtyBits);
+        if (prim.IsA<UsdGeomGprim>()) {
+            if (prim.IsInstanceProxy()) {
+                auto range = _instancingMap.equal_range(prim.GetPrimInPrototype().GetPath());
+                for (auto it = range.first; it != range.second; ++it) {
+                    if (_renderIndex->HasRprim(it->second)) {
+                        changeTracker.MarkRprimDirty(it->second, dirtyBits);
+                    }
+                }
+            } else {
+                auto indexPath = _sceneDelegate->ConvertCachePathToIndexPath(prim.GetPath());
+                if (_renderIndex->HasRprim(indexPath)) {
+                    changeTracker.MarkRprimDirty(indexPath, dirtyBits);
+                }
             }
         }
+    };
+
+    markRprimDirty(prim);
+    auto range = prim.GetFilteredDescendants(UsdTraverseInstanceProxies());
+    for (auto iter = range.begin(); iter != range.end(); ++iter) {
+        markRprimDirty(iter->GetPrim());
     }
 }
 
@@ -921,9 +982,8 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
         HdVP2RenderDelegate::sProfilerCategory, MProfiler::kColorC_L1, "Execute");
 
     ++_frameCounter;
-#ifdef MAYA_HAS_DISPLAY_LAYER_API
+
     _refreshRequested = false;
-#endif
 
     _UpdateRenderTags();
 
@@ -1011,6 +1071,11 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
             _defaultCollection->SetReprSelector(reprSelector);
             _taskController->SetCollection(*_defaultCollection);
             dirtyBits |= MayaUsdRPrim::DirtyDisplayMode;
+        }
+
+        if (_colorPrefsChanged) {
+            _colorPrefsChanged = false;
+            dirtyBits |= MayaUsdRPrim::DirtySelectionHighlight;
         }
 
 #if MAYA_API_VERSION >= 20230200
@@ -1176,6 +1241,15 @@ SdfPath ProxyRenderDelegate::GetScenePrimPath(const SdfPath& rprimId, int instan
 #endif
 
     return usdPath;
+}
+
+MString ProxyRenderDelegate::GetUfePathPrefix() const
+{
+#if defined(WANT_UFE_BUILD)
+    return GetProxyShapeDagPath().fullPathName() + MayaUsd::ufe::pathSegmentSeparator().c_str();
+#else
+    return MString();
+#endif
 }
 
 //! \brief  Selection for both instanced and non-instanced cases.
@@ -1462,13 +1536,20 @@ void ProxyRenderDelegate::DisplayLayerDirty(MFnDisplayLayer& displayLayer)
     }
 }
 
+#endif
+
 void ProxyRenderDelegate::_RequestRefresh()
 {
     if (!_refreshRequested)
         M3dView::scheduleRefreshAllViews();
     _refreshRequested = true;
 }
-#endif
+
+void ProxyRenderDelegate::ColorPrefsChanged()
+{
+    _colorPrefsChanged = true;
+    _RequestRefresh();
+}
 
 //! \brief  Populate lead and active selection for Rprims under the proxy shape.
 void ProxyRenderDelegate::_PopulateSelection()
