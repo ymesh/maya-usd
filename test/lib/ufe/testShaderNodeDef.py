@@ -27,7 +27,6 @@ import mayaUsd.ufe
 import os
 import unittest
 
-
 class ShaderNodeDefTestCase(unittest.TestCase):
 
     pluginsLoaded = False
@@ -47,66 +46,55 @@ class ShaderNodeDefTestCase(unittest.TestCase):
         self.assertTrue(self.pluginsLoaded)
 
     def getNodeDefHandler(self):
-        rid = ufe.RunTimeMgr.instance().getId("USD")
+        rid = ufe.RunTimeMgr.instance().getId('USD')
         nodeDefHandler = ufe.RunTimeMgr.instance().nodeDefHandler(rid)
         self.assertIsNotNone(nodeDefHandler)
         return nodeDefHandler
 
-    @unittest.skipIf(
-        os.getenv("UFE_PREVIEW_VERSION_NUM", "0000") < "4001",
-        "nodeDefHandler is only available in UFE preview version 0.4.1 and greater",
-    )
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4001', 'nodeDefHandler is only available in UFE preview version 0.4.1 and greater')
     def testDefinitions(self):
         nodeDefHandler = self.getNodeDefHandler()
         nodeDefs = nodeDefHandler.definitions("Shader")
         nodeDefTypes = [nodeDef.type() for nodeDef in nodeDefs]
         # A list of various mtlx nodes
-        mtlxDefs = [
-            "ND_image_color3",
-            "ND_tiledimage_float",
-            "ND_triplanarprojection_vector3",
-            "ND_constant_color3",
-            "ND_ramplr_color3",
-            "ND_noise2d_color3",
-            "ND_noise3d_float",
-            "ND_fractal3d_color4",
-            "ND_cellnoise3d_float",
-            "ND_worleynoise2d_vector3",
-            "ND_worleynoise3d_float",
-            "ND_position_vector3",
-            "ND_normal_vector3",
-            "ND_tangent_vector3",
-            "ND_texcoord_vector2",
-            "ND_add_color3",
-            "ND_subtract_vector2",
-            "ND_multiply_float",
-            "ND_divide_vector4FA",
-            "ND_modulo_vector3",
-            "ND_invert_color4",
-            "ND_absval_float",
-            "ND_floor_color3",
-            "ND_ceil_vector3",
-            "ND_power_color4",
-            "ND_cos_float",
-            "ND_clamp_float",
-            "ND_normalize_vector3",
-            "ND_dotproduct_vector3",
-            "ND_transpose_matrix33",
-            "ND_determinant_matrix44",
-            "ND_smoothstep_color3",
-            "ND_rgbtohsv_color3",
-        ]
+        mtlxDefs = ["ND_image_color3",
+                    "ND_tiledimage_float",
+                    "ND_triplanarprojection_vector3",
+                    "ND_constant_color3",
+                    "ND_ramplr_color3",
+                    "ND_noise2d_color3",
+                    "ND_noise3d_float",
+                    "ND_fractal3d_color4",
+                    "ND_cellnoise3d_float",
+                    "ND_worleynoise2d_vector3",
+                    "ND_worleynoise3d_float",
+                    "ND_position_vector3",
+                    "ND_normal_vector3",
+                    "ND_tangent_vector3",
+                    "ND_texcoord_vector2",
+                    "ND_add_color3",
+                    "ND_subtract_vector2",
+                    "ND_multiply_float",
+                    "ND_divide_vector4FA",
+                    "ND_modulo_vector3",
+                    "ND_invert_color4",
+                    "ND_absval_float",
+                    "ND_floor_color3",
+                    "ND_ceil_vector3",
+                    "ND_power_color4",
+                    "ND_cos_float",
+                    "ND_clamp_float",
+                    "ND_normalize_vector3",
+                    "ND_dotproduct_vector3",
+                    "ND_transpose_matrix33",
+                    "ND_determinant_matrix44",
+                    "ND_smoothstep_color3",
+                    "ND_rgbtohsv_color3"]
         for mtlxDef in mtlxDefs:
             self.assertTrue(mtlxDef in nodeDefTypes)
 
-    @unittest.skipIf(
-        os.getenv("UFE_PREVIEW_VERSION_NUM", "0000") < "4001",
-        "nodeDefHandler is only available in UFE preview version 0.4.1 and greater",
-    )
-    @unittest.skipIf(
-        os.getenv("UFE_PREVIEW_VERSION_NUM", "0000") >= "4015",
-        "filename and float2 are no longer generic starting with Ufe 0.4.15",
-    )
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4001', 'nodeDefHandler is only available in UFE preview version 0.4.1 and greater')
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') >= '4015', 'filename and float2 are no longer generic starting with Ufe 0.4.15')
     def testDefinitionByType(self):
         type = "ND_image_color3"
         nodeDefHandler = self.getNodeDefHandler()
@@ -150,10 +138,7 @@ class ShaderNodeDefTestCase(unittest.TestCase):
         self.assertEqual(outputs[0].name(), "out")
         self.assertEqual(outputs[0].type(), "ColorFloat3")
 
-    @unittest.skipIf(
-        os.getenv("UFE_PREVIEW_VERSION_NUM", "0000") < "4015",
-        "filename and float2 are no longer generic starting with Ufe 0.4.15",
-    )
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4015', 'filename and float2 are no longer generic starting with Ufe 0.4.15')
     def testDefinitionByType(self):
         type = "ND_image_color3"
         nodeDefHandler = self.getNodeDefHandler()
@@ -197,10 +182,7 @@ class ShaderNodeDefTestCase(unittest.TestCase):
         self.assertEqual(outputs[0].name(), "out")
         self.assertEqual(outputs[0].type(), "ColorFloat3")
 
-    @unittest.skipIf(
-        os.getenv("UFE_PREVIEW_VERSION_NUM", "0000") < "4010",
-        "Improvements to nodeDef only available in UFE preview version 0.4.8 and greater",
-    )
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Improvements to nodeDef only available in UFE preview version 0.4.8 and greater')
     def testClassificationsAndMetadata(self):
         type = "ND_image_color3"
         nodeDefHandler = self.getNodeDefHandler()
@@ -230,3 +212,6 @@ class ShaderNodeDefTestCase(unittest.TestCase):
         nodeDef = nodeDefHandler.definition("ND_add_float")
         output = nodeDef.output("out")
         self.assertEqual(output.getMetadata("__SDR__defaultinput"), ufe.Value("in1"))
+
+
+

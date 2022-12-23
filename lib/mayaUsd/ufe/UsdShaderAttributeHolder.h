@@ -23,8 +23,7 @@
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usdShade/utils.h>
 
-#include <ufe/Attribute.h>
-#include <ufe/Value.h>
+#include <ufe/attribute.h>
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
@@ -36,10 +35,6 @@ class UsdShaderAttributeHolder : public UsdAttributeHolder
     typedef UsdAttributeHolder _Base;
 
     UsdShaderAttributeHolder(
-        PXR_NS::UsdShadeAttributeType     sdrType);
-
-public:
-    static UPtr create(
         PXR_NS::UsdPrim                   usdPrim,
         PXR_NS::SdrShaderPropertyConstPtr sdrProp,
         PXR_NS::UsdShadeAttributeType     sdrType);
@@ -74,6 +69,7 @@ public:
 private:
     PXR_NS::SdrShaderPropertyConstPtr _sdrProp;
     PXR_NS::UsdShadeAttributeType     _sdrType;
+
     void _CreateUsdAttribute();
 }; // UsdShaderAttributeHolder
 
