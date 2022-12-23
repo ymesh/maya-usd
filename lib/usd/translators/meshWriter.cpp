@@ -841,8 +841,8 @@ void PxrUsdTranslators_MeshWriter::cleanupPrimvars()
     // If the indexed primvar doesn't need the unassigned value (because all
     // of the indices are assigned), then we can remove the unassigned value
     // and shift all the indices down.
-    const UsdGeomPrimvarsAPI pvAPI(GetUsdPrim());
-    for (const UsdGeomPrimvar& primvar : pvAPI.GetPrimvars()) {
+    const UsdGeomMesh primSchema(GetUsdPrim());
+    for (const UsdGeomPrimvar& primvar : UsdGeomPrimvarsAPI(primSchema).GetPrimvars()) {
         if (!primvar) {
             continue;
         }

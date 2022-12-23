@@ -55,7 +55,7 @@ CMakeSettings.json
 CMakeCache.txt
 CMakeLists.txt.user
 CMakeFiles/cmake.check_cache
-*build/
+
 
 ## Python ##
 __pycache__/
@@ -72,6 +72,7 @@ __pycache__/
 
 ## macOS ##
 .DS_Store
+._.DS_Store
 .AppleDouble
 .LSOverride
 
@@ -86,3 +87,6 @@ ehthumbs_vista.db
 .nfs
 # Files ending in ~ are Linux convention backup files
 *~
+
+/build/env*
+/build/tmp*

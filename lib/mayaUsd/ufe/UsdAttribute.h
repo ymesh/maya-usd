@@ -239,6 +239,11 @@ public:
     void                      set(const std::string& value) override;
     Ufe::UndoableCommand::Ptr setCmd(const std::string& value) override;
     EnumValues                getEnumValues() const override;
+
+private:
+    bool isHoldingTfToken() const;
+
+    const bool _isHoldingTfToken = false;
 }; // UsdAttributeEnumString
 
 //! \brief Interface for enumerated USD TfToken attributes.

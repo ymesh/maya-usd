@@ -152,48 +152,32 @@ You then need to set the generator to ```Ninja``` and the ```CMAKE_MAKE_PROGRAM`
 ```
 python build.py --generator Ninja --build-args=-DCMAKE_MAKE_PROGRAM='path to ninja binary'
 ```
-##### Build and Install locations
-
-By default, the build and install directories are created inside the **workspace** directory. However, you can change these locations by setting the ```--build-location``` and ```--install-location``` flags. 
-
-##### Build Log
-
-By default the build log is written into ```build_log.txt``` inside the build directory. If you want to redirect the output stream to the console instead,
-you can pass ```--redirect-outstream-file``` and set it to false.
-
-##### Additional flags and options
-
-Run the script with the ```--help``` parameter to see all the possible flags and short descriptions.
-
-#### 6. How To Run Unit Tests
-
-Unit tests can be run by setting ```--stages=test``` or by simply calling `ctest` directly from the build directory.
-
-For example, to run all Animal Logic's tests from the command-line go into ```build/<variant>/plugin/al``` and call `ctest`.
-
+##### Windows:
 ```
-➜  ctest -j 8
-Test project /Users/sabrih/Desktop/workspace/build/Debug/plugin/al
-    Start 4: AL_USDMayaTestPlugin
-    Start 5: TestUSDMayaPython
-    Start 8: TestPxrUsdTranslators
-    Start 7: TestAdditionalTranslators
-    Start 1: AL_MayaUtilsTests
-    Start 3: Python:AL_USDTransactionTests
-    Start 2: GTest:AL_USDTransactionTests
-    Start 6: testMayaSchemas
-1/8 Test #2: GTest:AL_USDTransactionTests .....   Passed    0.06 sec
-2/8 Test #6: testMayaSchemas ..................   Passed    0.10 sec
-3/8 Test #3: Python:AL_USDTransactionTests ....   Passed    0.73 sec
-4/8 Test #1: AL_MayaUtilsTests ................   Passed    6.01 sec
-5/8 Test #8: TestPxrUsdTranslators ............   Passed    9.96 sec
-6/8 Test #5: TestUSDMayaPython ................   Passed   10.28 sec
-7/8 Test #7: TestAdditionalTranslators ........   Passed   12.06 sec
-8/8 Test #4: AL_USDMayaTestPlugin .............   Passed   27.43 sec
-100% tests passed, 0 tests failed out of 8
+C:\> python build.py --maya-location "C:\Program Files\Autodesk\maya2019" --pxrusd-location C:\USD-Master C:\workspace
 ```
 
-# Additional Build Instruction
+## CMake Options
+
+Name                        | Description                                       | Default
+---                         | ---                                               | ---
+BUILD_AL_PLUGIN             | Builds the Animal Logic USD plugin and libraries. | ON
+BUILD_PXR_PLUGIN            | Builds the Pixar USD plugin and libraries.        | ON
+
+# Building USD
+
+##### Flags, Version
+
+When building Pixar USD, you need to pass ```--no-maya``` flag to ensure that ```third_party/maya``` plugin doesn't get built since this plugin is now part of maya-usd.
+
+It is important that the version between ```Pixar USD``` and ```Maya USD plugin``` match. See [`doc/DEVELOPER.md`](DEVELOPER.md#source-versions) for the compatible source versions.
+
+##### Boost:
+
+Currently Animal Logic plugin has a dependency on some of the boost components ( e.g thread, filesystem ). When building Pixar USD, one needs to pass following key,value paired arguments for boost to include those components: 
+e.g 
+
+```python build_usd.py --build-args boost,"--with-date_time --with-thread --with-system --with-filesystem" --no-maya ~/Desktop/BUILD```
 
 ##### Python:
 

@@ -22,6 +22,7 @@
 #include <pxr/usd/usd/prim.h>
 
 #include <ufe/attribute.h>
+#include <ufe/value.h>
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {

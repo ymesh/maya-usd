@@ -33,6 +33,7 @@
 #include <pxr/pxr.h>
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/pointBased.h>
+#include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdGeom/primvar.h>
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdGeom/subset.h>
@@ -270,8 +271,7 @@ UsdGeomPrimvar createUVPrimVar(
         ? (SdfValueTypeNames->Float2Array)
         : (SdfValueTypeNames->TexCoord2fArray);
 
-    UsdGeomPrimvar primVar
-        = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, uvValueType, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, uvValueType, interp);
 
     setPrimvar(
         primVar, assignmentIndices, VtValue(data), VtValue(UnauthoredUV), usdTime, valueWriter);
@@ -686,10 +686,8 @@ void UsdMayaMeshWriteUtils::exportReferenceMesh(
     const int      numVertices = referenceMesh.numVertices();
     VtVec3fArray   points(mayaRawVec3, mayaRawVec3 + numVertices);
 
-    UsdGeomPrimvar primVar
-        = UsdGeomPrimvarsAPI(primSchema)
-              .CreatePrimvar(
-                  UsdUtilsGetPrefName(), SdfValueTypeNames->Point3fArray, UsdGeomTokens->vertex);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(
+        UsdUtilsGetPrefName(), SdfValueTypeNames->Point3fArray, UsdGeomTokens->vertex);
 
     if (!primVar) {
         return;
@@ -1151,8 +1149,7 @@ bool UsdMayaMeshWriteUtils::createRGBPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema)
-                                 .CreatePrimvar(name, SdfValueTypeNames->Color3fArray, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, SdfValueTypeNames->Color3fArray, interp);
 
     setPrimvar(
         primVar,
@@ -1190,8 +1187,7 @@ bool UsdMayaMeshWriteUtils::createRGBAPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema)
-                                 .CreatePrimvar(name, SdfValueTypeNames->Color4fArray, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, SdfValueTypeNames->Color4fArray, interp);
 
     VtArray<GfVec4f> rgbaData(numValues);
     for (size_t i = 0; i < rgbaData.size(); ++i) {
@@ -1233,8 +1229,7 @@ bool UsdMayaMeshWriteUtils::createAlphaPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar
-        = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, SdfValueTypeNames->FloatArray, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, SdfValueTypeNames->FloatArray, interp);
     setPrimvar(
         primVar,
         assignmentIndices,

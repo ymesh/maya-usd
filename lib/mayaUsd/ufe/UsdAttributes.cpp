@@ -61,7 +61,7 @@ _GetSdrPropertyAndType(const Ufe::SceneItem::Ptr& item, const std::string& tokNa
 {
     auto shaderNode = UsdShaderNodeDefHandler::usdDefinition(item);
     if (shaderNode) {
-        auto baseNameAndType = PXR_NS::UsdShadeUtils::GetBaseNameAndType(PXR_NS::TfToken(tokName));
+        auto baseNameAndType = PXR_NS::UsdShadeUtils::GetBaseNameAndType(TfToken(tokName));
         switch (baseNameAndType.second) {
         case PXR_NS::UsdShadeAttributeType::Invalid: return { nullptr, baseNameAndType.second };
         case PXR_NS::UsdShadeAttributeType::Input:
@@ -174,12 +174,8 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
         ctorMap
         = { ADD_UFE_USD_CTOR(Bool),
             ADD_UFE_USD_CTOR(Int),
-            ADD_UFE_USD_CTOR(Float),
-            ADD_UFE_USD_CTOR(Double),
-            ADD_UFE_USD_CTOR(ColorFloat3),
             ADD_UFE_USD_CTOR(Int3),
             ADD_UFE_USD_CTOR(Float3),
-            ADD_UFE_USD_CTOR(Double3),
             ADD_UFE_USD_CTOR(Generic),
 #if (UFE_PREVIEW_VERSION_NUM >= 4015)
             ADD_UFE_USD_CTOR(ColorFloat4),
@@ -222,8 +218,8 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
         if (ctorIt != ctorMap.end()) {
             newAttr = ctorIt->second(
                 fItem,
-                UsdShaderAttributeHolder::create(
-                    fPrim, shaderPropAndType.first, shaderPropAndType.second));
+                std::move(UsdShaderAttributeHolder::create(
+                    fPrim, shaderPropAndType.first, shaderPropAndType.second)));
         }
     }
 #endif
@@ -241,9 +237,9 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
         auto ctorIt = ctorMap.find(newAttrType);
         UFE_ASSERT_MSG(ctorIt != ctorMap.end(), kErrorMsgUnknown);
         if (ctorIt != ctorMap.end())
-            newAttr = ctorIt->second(fItem, UsdAttributeHolder::create(usdAttr));
+            newAttr = ctorIt->second(fItem, std::move(UsdAttributeHolder::create(usdAttr)));
+        fUsdAttributes[name] = newAttr;
     }
-
 #if (UFE_PREVIEW_VERSION_NUM >= 4024)
     // If this is a Usd attribute (cannot change) then we cache it for future access.
     if (!canRemoveAttribute(fItem, name)) {
