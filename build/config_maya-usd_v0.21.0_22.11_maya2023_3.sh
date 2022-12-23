@@ -7,7 +7,7 @@ USD_VER="22.11"
 RMAN_VER="24.4"
 MAYA_VER="2023"
 #MAYA_MINOR_VER="3"
-DEVKIT_VER="2023.2"
+DEVKIT_VER="2023.3"
 MAYA_PYTHON_VERSION="3"
 
 source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
@@ -34,10 +34,11 @@ deploy_dir="${deploy_root}/USD/autodesk/mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAY
 #export CXX=/usr/bin/clang++
 
 export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
-export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
+# export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
+export MAYA_DEVKIT_LOCATION=/home/data/code/LIBS/Autodesk/SDK/Maya/Maya${DEVKIT_VER}""
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
 export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0_py${MAYA_PYTHON_VERSION}"
-export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.6_ABI_0"
+export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.4_ABI_0"
 #export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
 #export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
 #
@@ -95,6 +96,7 @@ cmake3 -LA -G "Unix Makefiles" \
 -DMAYA_DEVKIT_LOCATION=${MAYA_DEVKIT_LOCATION} \
 -DUFE_INCLUDE_ROOT=${UFE_INCLUDE_ROOT} \
 -DUFE_LIB_ROOT=${UFE_LIB_ROOT} \
+-DCMAKE_WANT_MATERIALX_BUILD=ON \
 -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
 -DMAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG=OFF \
 -DQT_LOCATION=${QT_LOCATION} \
