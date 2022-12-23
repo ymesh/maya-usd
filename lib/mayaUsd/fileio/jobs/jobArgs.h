@@ -53,6 +53,12 @@ TF_DECLARE_PUBLIC_TOKENS(
 // clang-format off
 #define PXRUSDMAYA_JOB_EXPORT_ARGS_TOKENS \
     /* Dictionary keys */ \
+    (animation) \
+    (startTime) \
+    (endTime) \
+    (frameStride) \
+    (frameSample) \
+    (apiSchema) \
     (chaser) \
     (chaserArgs) \
     (compatibility) \
@@ -64,25 +70,30 @@ TF_DECLARE_PUBLIC_TOKENS(
     (exportCollectionBasedBindings) \
     (exportColorSets) \
     (exportDisplayColor) \
+    (exportDistanceUnit) \
     (exportInstances) \
     (exportMaterialCollections) \
-    (exportReferenceObjects) \
+    (referenceObjectMode) \
     (exportRefsAsInstanceable) \
     (exportRoots) \
     (exportSkels) \
     (exportSkin) \
     (exportUVs) \
     (exportVisibility) \
+    (jobContext) \
+    (exportComponentTags) \
     (file) \
     (filterTypes) \
     (ignoreWarnings) \
     (kind) \
+    (disableModelKindProcessor) \
     (materialCollectionsPath) \
     (materialsScopeName) \
     (melPerFrameCallback) \
     (melPostCallback) \
     (mergeTransformAndShape) \
     (normalizeNurbs) \
+    (preserveUVSetNames) \
     (parentScope) \
     (pythonPerFrameCallback) \
     (pythonPostCallback) \
@@ -90,12 +101,17 @@ TF_DECLARE_PUBLIC_TOKENS(
     (renderLayerMode) \
     (shadingMode) \
     (convertMaterialsTo) \
+    (remapUVSetsTo) \
     (stripNamespaces) \
     (verbose) \
     (staticSingleSample) \
     (geomSidedness)   \
+    (worldspace) \
     /* Special "none" token */ \
     (none) \
+    /* referenceObjectMode values */ \
+    (attributeOnly) \
+    (defaultToMesh) \
     /* renderLayerMode values */ \
     (defaultLayer) \
     (currentLayer) \
@@ -122,6 +138,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (apiSchema) \
     (assemblyRep) \
     (excludePrimvar) \
+    (jobContext) \
     (metadata) \
     (shadingMode) \
     (preferredMaterial) \
@@ -129,6 +146,8 @@ TF_DECLARE_PUBLIC_TOKENS(
     (importInstances) \
     (importUSDZTextures) \
     (importUSDZTexturesFilePath) \
+    (pullImportStage) \
+    (preserveTimeline) \
     /* assemblyRep values */ \
     (Collapsed) \
     (Full) \
@@ -160,16 +179,18 @@ struct UsdMayaJobExportArgs
     const bool        exportColorSets;
     const bool        exportDefaultCameras;
     const bool        exportDisplayColor;
+    const bool        exportDistanceUnit;
     const bool        exportInstances;
     const bool        exportMaterialCollections;
     const bool        exportMeshUVs;
     const bool        exportNurbsExplicitUV;
-    const bool        exportReferenceObjects;
+    const TfToken     referenceObjectMode;
     const bool        exportRefsAsInstanceable;
     const TfToken     exportSkels;
     const TfToken     exportSkin;
     const bool        exportBlendShapes;
     const bool        exportVisibility;
+    const bool        exportComponentTags;
     const std::string file;
     const bool        ignoreWarnings;
 
@@ -186,22 +207,31 @@ struct UsdMayaJobExportArgs
     /// a single node in the output USD.
     const bool mergeTransformAndShape;
     const bool normalizeNurbs;
+    const bool preserveUVSetNames;
     const bool stripNamespaces;
+    // Export root prims using their worldspace transform instead of local transform.
+    const bool worldspace;
 
     /// This is the path of the USD prim under which *all* prims will be
     /// authored.
-    const SdfPath parentScope;
-    const TfToken renderLayerMode;
-    const TfToken rootKind;
-    const TfToken shadingMode;
-    const TfToken convertMaterialsTo;
-    const bool    verbose;
-    const bool    staticSingleSample;
-    const TfToken geomSidedness;
+    const SdfPath      parentScope;
+    const TfToken      renderLayerMode;
+    const TfToken      rootKind;
+    const bool         disableModelKindProcessor;
+    const TfToken      shadingMode;
+    TfToken            convertMaterialsTo; // Can not be const, iteration variable.
+    const TfToken::Set allMaterialConversions;
+    const bool         verbose;
+    const bool         staticSingleSample;
+    const TfToken      geomSidedness;
+    const TfToken::Set includeAPINames;
+    const TfToken::Set jobContextNames;
 
     using ChaserArgs = std::map<std::string, std::string>;
     const std::vector<std::string>          chaserNames;
     const std::map<std::string, ChaserArgs> allChaserArgs;
+
+    const std::map<std::string, std::string> remapUVSetsTo;
 
     const std::string melPerFrameCallback;
     const std::string melPostCallback;
@@ -241,9 +271,28 @@ struct UsdMayaJobExportArgs
         const UsdMayaUtil::MDagPathSet& dagPaths,
         const std::vector<double>&      timeSamples = std::vector<double>());
 
+    /// Fills a VtDictionary from the given text-encoded options.
+    /// Issues runtime errors if some options contain values of the wrong format.
+    ///
+    /// The text encoding is in the form: name1=value1;name2=value2;...
+    MAYAUSD_CORE_PUBLIC
+    static MStatus
+    GetDictionaryFromEncodedOptions(const MString& textEncodedOptions, VtDictionary* userArgs);
+
+    /// Extract the time samples corresponding to the animation options.
+    MAYAUSD_CORE_PUBLIC
+    static void
+    GetDictionaryTimeSamples(const VtDictionary& userArgs, std::vector<double>& timeSamples);
+
     /// Gets the default arguments dictionary for UsdMayaJobExportArgs.
     MAYAUSD_CORE_PUBLIC
     static const VtDictionary& GetDefaultDictionary();
+
+    /// Gets the guide dictionary for UsdMayaJobExportArgs.
+    ///
+    /// Used in GetDictionaryFromArgDatabase() to deduce the type of an argument.
+    MAYAUSD_CORE_PUBLIC
+    static const VtDictionary& GetGuideDictionary();
 
     /// Returns the resolved file name of the final export location
     MAYAUSD_CORE_PUBLIC
@@ -265,6 +314,7 @@ struct UsdMayaJobImportArgs
     const TfToken      assemblyRep;
     const TfToken::Set excludePrimvarNames;
     const TfToken::Set includeAPINames;
+    const TfToken::Set jobContextNames;
     const TfToken::Set includeMetadataKeys;
     struct ShadingMode
     {
@@ -272,13 +322,15 @@ struct UsdMayaJobImportArgs
         TfToken materialConversion;
     };
     using ShadingModes = std::vector<ShadingMode>;
-    ShadingModes      shadingModes; // XXX can we make this const?
-    const TfToken     preferredMaterial;
-    const std::string importUSDZTexturesFilePath;
-    const bool        importUSDZTextures;
-    const bool        importInstances;
-    const bool        useAsAnimationCache;
-    const bool        importWithProxyShapes;
+    ShadingModes         shadingModes; // XXX can we make this const?
+    const TfToken        preferredMaterial;
+    const std::string    importUSDZTexturesFilePath;
+    const bool           importUSDZTextures;
+    const bool           importInstances;
+    const bool           useAsAnimationCache;
+    const bool           importWithProxyShapes;
+    const bool           preserveTimeline;
+    const UsdStageRefPtr pullImportStage;
     /// The interval over which to import animated data.
     /// An empty interval (<tt>GfInterval::IsEmpty()</tt>) means that no
     /// animated (time-sampled) data should be imported.
@@ -311,6 +363,12 @@ struct UsdMayaJobImportArgs
     /// Gets the default arguments dictionary for UsdMayaJobImportArgs.
     MAYAUSD_CORE_PUBLIC
     static const VtDictionary& GetDefaultDictionary();
+
+    /// Gets the guide dictionary for UsdMayaJobImportArgs.
+    ///
+    /// Used in GetDictionaryFromArgDatabase() to deduce the type of an argument.
+    MAYAUSD_CORE_PUBLIC
+    static const VtDictionary& GetGuideDictionary();
 
     MAYAUSD_CORE_PUBLIC
     static const std::string GetImportUSDZTexturesFilePath(const VtDictionary& userArgs);

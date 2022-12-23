@@ -19,15 +19,15 @@
 import os
 import sys
 import unittest
-import tempfile
 
 from maya import cmds
 
 from AL import usdmaya
 
-from pxr import Usd, UsdUtils, Tf
+from pxr import Usd, UsdUtils, Tf, Sdf
 
 import fixturesUtils
+
 
 class CubeGenerator(usdmaya.TranslatorBase):
     '''
@@ -74,7 +74,7 @@ class CubeGenerator(usdmaya.TranslatorBase):
         return True
 
     def canExport(self, mayaObjectName):
-        return False
+        return usdmaya.ExportFlag.kNotSupported
 
     def needsTransformParent(self):
         return True
@@ -157,7 +157,7 @@ class DeleteParentNodeOnPostImport(usdmaya.TranslatorBase):
         if self.__class__.parentNode:
             cmds.delete(self.__class__.parentNode)
             # re-create the node
-            # print 'CCCCCCCCCCCCc', cmds.createNode('AL_usdmaya_Transform', name='rig', parent='|bobo|root|peter01')
+            # print('CCCCCCCCCCCCc', cmds.createNode('AL_usdmaya_Transform', name='rig', parent='|bobo|root|peter01'))
 
         return True
 
@@ -176,13 +176,68 @@ class DeleteParentNodeOnPostImport(usdmaya.TranslatorBase):
         return True
 
     def canExport(self, mayaObjectName):
-        return False
+        return usdmaya.ExportFlag.kNotSupported
 
     def exportObject(self, stage, path, usdPath, params):
         return
 
+class UpdateableTranslator(usdmaya.TranslatorBase):
+
+    def initialize(self):
+        self.actions = []
+        return True
+
+    def getTranslatedType(self):
+        return Tf.Type.Unknown
+
+    def needsTransformParent(self):
+        return True
+
+    def supportsUpdate(self):
+        return True
+
+    def importableByDefault(self):
+        return True
+
+    def importObject(self, prim, parent=None):
+        self.actions.append('import ' + str(prim.GetPath()))
+        return True
+
+    def postImport(self, prim):
+        self.actions.append('postImport ' + str(prim.GetPath()))
+        return True
+
+    def generateUniqueKey(self, prim):
+        return str(prim.GetPath())
+
+    def update(self, prim):
+        self.actions.append('update ' + str(prim.GetPath()))
+        return True
+
+    def preTearDown(self, prim):
+        return True
+
+    def tearDown(self, path):
+        return True
+
+    def canExport(self, mayaObjectName):
+        return usdmaya.ExportFlag.kNotSupported
+
+    def exportObject(self, stage, path, usdPath, params):
+        return
 
 class TestPythonTranslators(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        # Setup for test output
+        inputPath = fixturesUtils.setUpClass(__file__, loadPlugin=False)
+        cls._testDataDir = os.path.join(inputPath, '../test_data/')
+        sys.path.append(cls._testDataDir)
+
+    @classmethod
+    def tearDownClass(cls):
+        fixturesUtils.tearDownClass(unloadPlugin=False)
 
     def setUp(self):
         cmds.file(force=True, new=True)
@@ -210,7 +265,7 @@ class TestPythonTranslators(unittest.TestCase):
 
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -226,12 +281,11 @@ class TestPythonTranslators(unittest.TestCase):
         prim = stage.GetPrimAtPath('/root/peter01/rig')
         # self.assertTrue(usdmaya.TranslatorBase.generateTranslatorId(prim)=="assettype:beast_rig")
 
-    @unittest.skipIf(sys.version_info[0] >= 3, "RecursionError: maximum recursion depth exceeded while calling a Python object")
     def test_variantSwitch_that_removes_prim_and_create_new_one(self):
 
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -248,7 +302,11 @@ class TestPythonTranslators(unittest.TestCase):
         '''
         Variant switch that leads to another prim being created.
         '''
-        vs.SetVariantSelection("sixCubesRig2")
+        try:
+            vs.SetVariantSelection("sixCubesRig2")
+        except RecursionError:
+            # Force RecursionErrors to fail the test instead of erroring them
+            self.fail("Raised RecursionError unexpectedly!")
 
         self.assertEqual(CubeGenerator.getState()["tearDownCount"],1)
         self.assertEqual(CubeGenerator.getState()["importObjectCount"],2)
@@ -261,7 +319,7 @@ class TestPythonTranslators(unittest.TestCase):
 
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -283,11 +341,10 @@ class TestPythonTranslators(unittest.TestCase):
         self.assertEqual(CubeGenerator.getState()["importObjectCount"], 1)
         self.assertFalse(cmds.objExists('|bobo|root|peter01|rig'))
 
-    @unittest.skipIf(sys.version_info[0] >= 3, "RecursionError: maximum recursion depth exceeded while calling a Python object")
     def test_variantSwitch_that_keeps_existing_prim_runs_teardown_and_import(self):
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -311,7 +368,11 @@ class TestPythonTranslators(unittest.TestCase):
         '''
         Variant switch that leads to same prim still existing.
         '''
-        vs.SetVariantSelection("sixCubesRig")
+        try:
+            vs.SetVariantSelection("sixCubesRig")
+        except RecursionError:
+            # Force RecursionErrors to fail the test instead of erroring them
+            self.fail("Raised RecursionError unexpectedly!")
 
         self.assertEqual(CubeGenerator.getState()["tearDownCount"],1)
         self.assertEqual(CubeGenerator.getState()["importObjectCount"],2)
@@ -327,7 +388,7 @@ class TestPythonTranslators(unittest.TestCase):
     def test_set_inactive_prim_removes_parent_transform(self):
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -357,18 +418,17 @@ class TestPythonTranslators(unittest.TestCase):
         usdmaya.TranslatorBase.registerTranslator(CubeGenerator(), 'beast_rig')
 
         # Make a dummy stage that mimics prim path found in test data
-        otherHandle = tempfile.NamedTemporaryFile(delete=True, suffix=".usda")
-        otherHandle.close()
+        otherHandle = os.path.abspath(type(self).__name__ + ".usda")
 
         # Scope
         if True:
             stage = Usd.Stage.CreateInMemory()
             stage.DefinePrim("/root/peter01")
-            stage.Export(otherHandle.name)
+            stage.Export(otherHandle)
 
         # Open both stages
-        testStage = Usd.Stage.Open("../test_data/inactivetest.usda")
-        otherStage = Usd.Stage.Open(otherHandle.name)
+        testStage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
+        otherStage = Usd.Stage.Open(otherHandle)
 
         # Cache
         stageCache = UsdUtils.StageCache.Get()
@@ -390,16 +450,13 @@ class TestPythonTranslators(unittest.TestCase):
         # Ensure stage on proxy wasn't modified
         self.assertEqual(CubeGenerator.getState()["tearDownCount"], 0)
 
-        # Cleanup
-        os.remove(otherHandle.name)
-
     # this test is in progress... I cannot make it fail currently but
     # the motion translator in unicorn is definitely crashing Maya
     # if needsTransformParent() returns True.
     def test_deletion_of_parent_node_by_translator_does_not_crash_Maya(self):
         usdmaya.TranslatorBase.registerTranslator(DeleteParentNodeOnPostImport(), 'beast_rig')
 
-        stage = Usd.Stage.Open("../test_data/inactivetest.usda")
+        stage = Usd.Stage.Open(self._testDataDir + "inactivetest.usda")
         prim = stage.GetPrimAtPath('/root/peter01')
         vs = prim.GetVariantSet("cubes")
         vs.SetVariantSelection("fiveCubes")
@@ -417,6 +474,127 @@ class TestPythonTranslators(unittest.TestCase):
 
         vs.SetVariantSelection("noCubes")
 
+    def test_import_and_update_consistency(self):
+        '''
+        test consistency when called via TranslatePrim, or triggered via onObjectsChanged
+        '''
+        updateableTranslator = UpdateableTranslator()
+        usdmaya.TranslatorBase.registerTranslator(updateableTranslator, 'test')
+
+        stage = Usd.Stage.Open(self._testDataDir + "translator_update_postimport.usda")
+        stageCache = UsdUtils.StageCache.Get()
+        stageCache.Insert(stage)
+        stageId = stageCache.GetId(stage)
+        shapeName = 'updateProxyShape'
+        cmds.AL_usdmaya_ProxyShapeImport(stageId=stageId.ToLongInt(), name=shapeName)
+
+        # Verify if the methods have been called
+        self.assertTrue("import /root/peter01/rig" in updateableTranslator.actions)
+        self.assertTrue("postImport /root/peter01/rig" in updateableTranslator.actions)
+        # "update()" method should not be called
+        self.assertFalse("update /root/peter01/rig" in updateableTranslator.actions)
+
+        updateableTranslator.actions = []
+        cmds.AL_usdmaya_TranslatePrim(up="/root/peter01/rig", fi=True, proxy=shapeName)
+        # "update()" should have been called
+        self.assertTrue("update /root/peter01/rig" in updateableTranslator.actions)
+
+    def test_resync_prims(self):
+        '''
+        test resync deleted USD prims that are types for translator
+        '''
+        updateableTranslator = UpdateableTranslator()
+        usdmaya.TranslatorBase.registerTranslator(updateableTranslator, 'test')
+
+        stage = Usd.Stage.Open(self._testDataDir + "resync_root.usda")
+        stageCache = UsdUtils.StageCache.Get()
+        stageCache.Insert(stage)
+        stageId = stageCache.GetId(stage)
+        shapeName = 'updateProxyShape'
+        cmds.AL_usdmaya_ProxyShapeImport(stageId=stageId.ToLongInt(), name=shapeName)
+
+        # Touch and make the session layer dirty
+        rig = stage.GetPrimAtPath("/root/group1/rig1")
+        rig.SetMetadata("customData", {"tag": "test"})
+        rig = stage.GetPrimAtPath("/root/group2/rig2")
+        rig.SetMetadata("customData", {"tag": "test"})
+
+        # Verify all three nodes exist in Maya
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group1|rig1|test1"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group2|rig2|test2"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group3|rig3|test3"))
+
+        # Remove children prims from all layers
+        for layer in stage.GetLayerStack(includeSessionLayers=False):
+            group1 = layer.GetPrimAtPath("/root/group1")
+            del group1.nameChildren["rig1"]
+            group2 = layer.GetPrimAtPath("/root/group2")
+            del group2.nameChildren["rig2"]
+
+        # Get translator context
+        ctx = updateableTranslator.getPythonTranslators()[0].context()
+        self.assertTrue(ctx)
+
+        # Verify translator mapping indirectly via calling "getTransformPath()"
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group1/rig1/test1")),
+            "|updateProxyShape|root|group1|rig1|test1")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group2/rig2/test2")),
+            "|updateProxyShape|root|group2|rig2|test2")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group3/rig3/test3")),
+            "|updateProxyShape|root|group3|rig3|test3")
+
+        # Maya nodes should all exist
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group1|rig1|test1"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group2|rig2|test2"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group3|rig3|test3"))
+
+        # Resync group3, group1 and group2 should be untouched
+        cmds.AL_usdmaya_ProxyShapeResync(proxy='updateProxyShape', primPath="/root/group3")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group1/rig1/test1")),
+            "|updateProxyShape|root|group1|rig1|test1")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group2/rig2/test2")),
+            "|updateProxyShape|root|group2|rig2|test2")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group3/rig3/test3")),
+            "|updateProxyShape|root|group3|rig3|test3")
+        # Maya nodes should all exist
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group1|rig1|test1"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group2|rig2|test2"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group3|rig3|test3"))
+
+        # Resync group1, group2 and group3 should still exist
+        cmds.AL_usdmaya_ProxyShapeResync(proxy='updateProxyShape', primPath="/root/group1")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group1/rig1/test1")), "")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group2/rig2/test2")),
+            "|updateProxyShape|root|group2|rig2|test2")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group3/rig3/test3")),
+            "|updateProxyShape|root|group3|rig3|test3")
+        # rig1 should have been removed while rig2 and rig3 still exist
+        self.assertFalse(cmds.ls("|updateProxyShape|root|group1|rig1|test1"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group2|rig2|test2"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group3|rig3|test3"))
+
+        # Resync group2, now only group3 exists
+        cmds.AL_usdmaya_ProxyShapeResync(proxy='updateProxyShape', primPath="/root/group2")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group1/rig1/test1")), "")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group2/rig2/test2")), "")
+        self.assertEqual(
+            ctx.getTransformPath(Sdf.Path("/root/group3/rig3/test3")),
+            "|updateProxyShape|root|group3|rig3|test3")
+        # rig1 and rig2 should have been removed while rig3 still exist
+        self.assertFalse(cmds.ls("|updateProxyShape|root|group1|rig1|test1"))
+        self.assertFalse(cmds.ls("|updateProxyShape|root|group2|rig2|test2"))
+        self.assertTrue(cmds.ls("|updateProxyShape|root|group3|rig3|test3"))
 
 class TestTranslatorUniqueKey(usdmaya.TranslatorBase):
     """
@@ -454,7 +632,7 @@ class TestTranslatorUniqueKey(usdmaya.TranslatorBase):
         return True
 
     def canExport(self, mayaObjectName):
-        return False
+        return usdmaya.ExportFlag.kNotSupported
 
     def needsTransformParent(self):
         return True
@@ -504,6 +682,16 @@ class TestTranslatorUniqueKey(usdmaya.TranslatorBase):
 
 class TestPythonTranslatorsUniqueKey(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        # Setup for test output
+        inputPath = fixturesUtils.setUpClass(__file__, loadPlugin=False)
+        cls._testDataDir = os.path.join(inputPath, '../test_data/')
+
+    @classmethod
+    def tearDownClass(cls):
+        fixturesUtils.tearDownClass(unloadPlugin=False)
+
     def setUp(self):
         cmds.file(force=True, new=True)
         cmds.loadPlugin("AL_USDMayaPlugin", quiet=True)
@@ -513,7 +701,7 @@ class TestPythonTranslatorsUniqueKey(unittest.TestCase):
 
         usdmaya.TranslatorBase.registerTranslator(self.translator, 'beast_bindings')
 
-        self.stage = Usd.Stage.Open('../test_data/rig_bindings.usda')
+        self.stage = Usd.Stage.Open(self._testDataDir + 'rig_bindings.usda')
         self.rootPrim = self.stage.GetPrimAtPath('/root')
 
         self.stageCache = UsdUtils.StageCache.Get()
@@ -677,5 +865,11 @@ class TestPythonTranslatorsUniqueKey(unittest.TestCase):
         self.assertTrue(cmds.objExists('|bindings_grp|root|dynamic_five_cubes'))
 
 
-if __name__ == '__main__':
-    fixturesUtils.runTests(globals())
+if __name__ == "__main__":
+
+    tests = [unittest.TestLoader().loadTestsFromTestCase(TestPythonTranslators)]
+    tests += [unittest.TestLoader().loadTestsFromTestCase(TestPythonTranslatorsUniqueKey)]
+
+    results = [unittest.TextTestRunner(verbosity=2).run(test) for test in tests]
+    exitCode = int(not all([result.wasSuccessful() for result in results]))
+    cmds.quit(force=True, exitCode=(exitCode))

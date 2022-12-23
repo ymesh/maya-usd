@@ -25,19 +25,25 @@ add_library(${PYTHON_TARGET_NAME} SHARED)
 target_sources(${PYTHON_TARGET_NAME} 
     PRIVATE
         module.cpp
+        pythonObjectRegistry.cpp
+        wrapSparseValueWriter.cpp
         wrapAdaptor.cpp
         wrapBlockSceneModificationContext.cpp
         wrapColorSpace.cpp
         wrapConverter.cpp
         wrapDiagnosticDelegate.cpp
+        wrapEditRouter.cpp
         wrapMeshWriteUtils.cpp
+        wrapOpUndoItem.cpp
         wrapQuery.cpp
         wrapReadUtil.cpp
         wrapRoundTripUtil.cpp
         wrapStageCache.cpp
         wrapTokens.cpp
+        wrapTranslatorUtil.cpp
         wrapUsdUndoManager.cpp
         wrapUserTaggedAttribute.cpp
+        wrapUtil.cpp
         wrapWriteUtil.cpp
         wrapXformStack.cpp
 
@@ -46,7 +52,20 @@ target_sources(${PYTHON_TARGET_NAME}
         wrapPrimWriter.cpp
         wrapExportChaser.cpp
         wrapImportChaser.cpp
+        wrapJobContextRegistry.cpp
+        wrapSchemaApiAdaptor.cpp
+        wrapShadingUtil.cpp
+        wrapShadingMode.cpp
 )
+
+# Edit as Maya requires UFE path mapping.
+if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
+    target_sources(${PYTHON_TARGET_NAME}
+        PRIVATE
+            wrapPrimUpdater.cpp
+            wrapPrimUpdaterManager.cpp
+    )
+endif()
 
 # -----------------------------------------------------------------------------
 # compiler configuration

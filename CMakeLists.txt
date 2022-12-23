@@ -33,6 +33,9 @@ option(BUILD_TESTS "Build tests." ON)
 option(BUILD_STRICT_MODE "Enforce all warnings as errors." ON)
 option(BUILD_SHARED_LIBS "Build libraries as shared or static." ON)
 option(BUILD_WITH_PYTHON_3 "Build with python 3." OFF)
+if(APPLE)
+    option(BUILD_UB2 "Build Universal Binary 2 (UB2) Intel64+arm64" OFF)
+endif()
 set(BUILD_WITH_PYTHON_3_VERSION 3.7 CACHE STRING "The version of Python 3 to build with")
 option(CMAKE_WANT_UFE_BUILD "Enable building with UFE (if found)." ON)
 option(CMAKE_WANT_MATERIALX_BUILD "Enable building with MaterialX (experimental)." OFF)
@@ -53,7 +56,16 @@ set(PXR_OVERRIDE_PLUGINPATH_NAME PXR_PLUGINPATH_NAME
 # Avoid noisy install messages
 set(CMAKE_INSTALL_MESSAGE "NEVER")
 
-set(CMAKE_OSX_ARCHITECTURES "x86_64")
+if(APPLE)
+    if(BUILD_UB2)
+        message(STATUS "Building with Universal Binary 2")
+        set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
+    else()
+        set(CMAKE_OSX_ARCHITECTURES "x86_64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 10.14)
+    endif()
+endif()
 
 set(CMAKE_MODULE_PATH
     ${CMAKE_MODULE_PATH}
@@ -61,7 +73,7 @@ set(CMAKE_MODULE_PATH
 )
 
 # Use RUNPATH instead of RPATH for all shared libs, executables and modules on Linux
-if(IS_LINUX)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux") # IS_LINUX not yet defined
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
@@ -70,6 +82,13 @@ endif()
 #------------------------------------------------------------------------------
 # modules and definitions
 #------------------------------------------------------------------------------
+include(cmake/utils.cmake)
+find_package(Maya 2018 REQUIRED)
+
+if(APPLE AND BUILD_UB2 AND NOT MAYA_MACOSX_BUILT_WITH_UB2)
+    message(WARNING  "Maya was NOT built with Universal Binary 2")
+endif()
+
 if (BUILD_MAYAUSD_LIBRARY)
     include(cmake/mayausd_version.info)
     set(MAYAUSD_VERSION "${MAYAUSD_MAJOR_VERSION}.${MAYAUSD_MINOR_VERSION}.${MAYAUSD_PATCH_LEVEL}")
@@ -96,20 +115,15 @@ message(STATUS "   PYTHON_INCLUDE_DIRS = ${PYTHON_INCLUDE_DIRS}")
 message(STATUS "   PYTHON_LIBRARIES    = ${PYTHON_LIBRARIES}")
 message(STATUS "   Python_EXECUTABLE   = ${Python_EXECUTABLE}")
 
-include(cmake/utils.cmake)
-
 include(cmake/jinja.cmake)
 
-find_package(Maya 2018 REQUIRED)
+find_package(USD 0.20.05 REQUIRED)
 if (CMAKE_WANT_MATERIALX_BUILD)
-    # Requires USD_SHA1 > 891eef161aeed582b9831584ab7f31ebe4bc52e8 for hdMtlx module
-    find_package(USD 0.21.08 REQUIRED)
-    # USD must have been built with MaterialX:
+    # Requires at least USD 21.08 for hdMtlx module and USD must have been built with MaterialX:
     if(NOT TARGET hdMtlx)
-        message(FATAL_ERROR "MaterialX option requires USD binaries compiled with -DPXR_ENABLE_MATERIALX_SUPPORT=ON and recent enough to have the hdMtlx module")
+        set(CMAKE_WANT_MATERIALX_BUILD OFF)
+        message(WARNING "Disabling MaterialX VP2 rendering: it is not supported by this USD package.")
     endif()
-else()
-    find_package(USD 0.20.05 REQUIRED)
 endif()
 include(cmake/usd.cmake)
 
@@ -140,16 +154,16 @@ if(CMAKE_WANT_UFE_BUILD)
     endif()
 endif()
 
-if(CMAKE_WANT_MATERIALX_BUILD)
+if(CMAKE_WANT_MATERIALX_BUILD AND MAYA_LIGHTAPI_VERSION LESS 2)
+    set(CMAKE_WANT_MATERIALX_BUILD OFF)
+    message(WARNING "Disabling MaterialX VP2 rendering: it is not supported by this version of Maya.")
+endif()
+
+if(TARGET hdMtlx)
+    # MaterialX was built into USD. We need to know where to find MaterialX targets.
     find_package(MaterialX REQUIRED)
     if(TARGET MaterialXCore)
         message(STATUS "Found MaterialX")
-        if(NOT TARGET MaterialXGenOgsXml)
-            message(FATAL_ERROR "MaterialX option requires the MaterialXGenOgsXml target found in the adsk_contrib/dev branch of the Autodesk-forks MaterialX library compiled with -DMATERIALX_BUILD_GEN_OGSXML=ON")
-        endif()
-    endif()
-    if (MAYA_LIGHTAPI_VERSION LESS 2)
-        message(FATAL_ERROR "MaterialX option requires a Maya version that implements the light API version 2")
     endif()
 endif()
 
@@ -176,9 +190,9 @@ endif()
 include(cmake/compiler_config.cmake)
 
 #------------------------------------------------------------------------------
-# gulark filesystem
+# gulrak filesystem
 #------------------------------------------------------------------------------
-include(cmake/gulark.cmake)
+include(cmake/gulrak.cmake)
 
 #------------------------------------------------------------------------------
 # test

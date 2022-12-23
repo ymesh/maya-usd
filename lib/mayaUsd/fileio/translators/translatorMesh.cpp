@@ -20,7 +20,10 @@
 #include <mayaUsd/fileio/utils/readUtil.h>
 #include <mayaUsd/nodes/pointBasedDeformerNode.h>
 #include <mayaUsd/nodes/stageNode.h>
+#include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/util.h>
+
+#include <pxr/usd/usdGeom/primvarsAPI.h>
 
 #include <maya/MColor.h>
 #include <maya/MColorArray.h>
@@ -142,7 +145,7 @@ TranslatorMeshRead::TranslatorMeshRead(
     mesh.GetPointsAttr().Get(&points, pointsTimeSample);
 
     /* If 'normals' and 'primvars:normals' are both specified, the latter has precedence. */
-    UsdGeomPrimvar primvar = mesh.GetPrimvar(UsdGeomTokens->normals);
+    UsdGeomPrimvar primvar = UsdGeomPrimvarsAPI(mesh).GetPrimvar(UsdGeomTokens->normals);
 
     if (primvar.HasValue()) {
         primvar.ComputeFlattened(&normals, normalsTimeSample);
@@ -197,11 +200,20 @@ TranslatorMeshRead::TranslatorMeshRead(
     // set mesh name
     const auto& primName = prim.GetName().GetString();
     const auto  shapeName = TfStringPrintf("%sShape", primName.c_str());
-    meshFn.setName(MString(shapeName.c_str()), false, &stat);
 
-    if (!stat) {
-        *status = stat;
-        return;
+    const bool creatingOnlyMeshData
+        = !transformObj.isNull() && MFn::kMeshData == transformObj.apiType();
+
+    // Set the mesh name if creating a maya mesh node object and not only creating the
+    // mesh data.
+    const bool creatingMeshNode = !creatingOnlyMeshData;
+    if (creatingMeshNode) {
+        meshFn.setName(MString(shapeName.c_str()), false, &stat);
+
+        if (!stat) {
+            *status = stat;
+            return;
+        }
     }
 
     // store the path
@@ -396,14 +408,13 @@ MStatus TranslatorMeshRead::setPointBasedDeformerForMayaNode(
     CHECK_MSTATUS(status);
 
     // Get the newly created point based deformer node.
-    status = UsdMayaUtil::GetMObjectByName(
-        m_newPointBasedDeformerName.asChar(), m_pointBasedDeformerNode);
+    status = UsdMayaUtil::GetMObjectByName(m_newPointBasedDeformerName, m_pointBasedDeformerNode);
     CHECK_MSTATUS(status);
 
     MFnDependencyNode depNodeFn(m_pointBasedDeformerNode, &status);
     CHECK_MSTATUS(status);
 
-    MDGModifier dgMod;
+    MDGModifier& dgMod = MDGModifierUndoItem::create("Deformer connection");
 
     // Set the prim path on the deformer node.
     MPlug primPathPlug

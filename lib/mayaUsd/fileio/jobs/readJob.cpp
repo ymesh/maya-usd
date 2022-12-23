@@ -21,6 +21,8 @@
 #include <mayaUsd/fileio/translators/translatorXformable.h>
 #include <mayaUsd/fileio/utils/readUtil.h>
 #include <mayaUsd/nodes/stageNode.h>
+#include <mayaUsd/undo/OpUndoItemMuting.h>
+#include <mayaUsd/utils/progressBarScope.h>
 #include <mayaUsd/utils/stageCache.h>
 #include <mayaUsd/utils/util.h>
 #include <mayaUsd/utils/utilFileSystem.h>
@@ -30,6 +32,7 @@
 #include <pxr/usd/sdf/fileFormat.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/path.h>
+#include <pxr/usd/usd/editContext.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/primFlags.h>
 #include <pxr/usd/usd/primRange.h>
@@ -64,7 +67,120 @@
 #include <utility>
 #include <vector>
 
+using namespace MAYAUSD_NS_DEF;
+
 PXR_NAMESPACE_OPEN_SCOPE
+
+namespace {
+// Simple RAII class to ensure tracking does not extend past the scope.
+struct TempNodeTrackerScope
+{
+    TempNodeTrackerScope(UsdMayaPrimReaderContext& context)
+        : _context(context)
+    {
+        _context.StartNewMayaNodeTracking();
+    }
+
+    ~TempNodeTrackerScope() { _context.StopNewMayaNodeTracking(); }
+
+    UsdMayaPrimReaderContext& _context;
+};
+
+struct AutoTimelineRestore
+{
+    AutoTimelineRestore(bool preserve)
+        : preserveTimeline(preserve)
+        , originalAnimStartTime(MAnimControl::animationStartTime())
+        , originalAnimEndTime(MAnimControl::animationEndTime())
+        , originalMinTime(MAnimControl::minTime())
+        , originalMaxTime(MAnimControl::maxTime())
+
+    {
+    }
+
+    ~AutoTimelineRestore()
+    {
+        if (!preserveTimeline)
+            return;
+
+        try {
+            if (MAnimControl::minTime() != originalMinTime) {
+                MAnimControl::setMinTime(originalMinTime);
+            }
+
+            if (MAnimControl::maxTime() != originalMaxTime) {
+                MAnimControl::setMaxTime(originalMaxTime);
+            }
+
+            if (MAnimControl::animationStartTime() != originalAnimStartTime) {
+                MAnimControl::setAnimationStartTime(originalAnimStartTime);
+            }
+
+            if (MAnimControl::animationEndTime() != originalAnimEndTime) {
+                MAnimControl::setAnimationEndTime(originalAnimEndTime);
+            }
+
+        } catch (std::exception&) {
+            // Ignore - don't trhow exceptions from the destructor.
+        }
+    }
+
+    const bool  preserveTimeline; // If false, the timeline values are not preserved.
+    const MTime originalAnimStartTime;
+    const MTime originalAnimEndTime;
+    const MTime originalMinTime;
+    const MTime originalMaxTime;
+};
+
+bool IsValidVariant(const UsdVariantSet& varSet)
+{
+    if (!varSet.IsValid())
+        return false;
+
+    if (varSet.GetVariantNames().size() == 0)
+        return false;
+
+    return true;
+}
+
+bool IsValidVariantSelection(const UsdVariantSet& varSet, const std::string& selection)
+{
+    const std::vector<std::string> names = varSet.GetVariantNames();
+    if (std::find(names.begin(), names.end(), selection) == names.end())
+        return false;
+
+    return true;
+}
+
+void ApplyVariantSelections(const UsdPrim& prim, const SdfVariantSelectionMap& selections)
+{
+    for (auto& variant : selections) {
+        const std::string& varSetName = variant.first;
+        const std::string& varSelection = variant.second;
+        UsdVariantSet      varSet = prim.GetVariantSet(varSetName);
+
+        if (!IsValidVariant(varSet)) {
+            TF_WARN(
+                "Invalid variant (%s) for prim (%s).",
+                varSetName.c_str(),
+                prim.GetName().GetText());
+            continue;
+        }
+
+        if (!IsValidVariantSelection(varSet, varSelection)) {
+            TF_WARN(
+                "Invalid variant selection (%s) in variant (%s) for prim (%s).",
+                varSelection.c_str(),
+                varSetName.c_str(),
+                prim.GetName().GetText());
+            continue;
+        }
+
+        varSet.SetVariantSelection(varSelection);
+    }
+}
+
+} // namespace
 
 UsdMaya_ReadJob::UsdMaya_ReadJob(
     const MayaUsd::ImportData&  iImportData,
@@ -81,6 +197,15 @@ UsdMaya_ReadJob::~UsdMaya_ReadJob() { }
 
 bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
 {
+    // When we are called from PrimUpdaterManager we should already have
+    // a computation scope. If we are called from elsewhere don't show any
+    // progress bar here.
+    MayaUsd::ProgressBarScope progressBar(16);
+
+    // Do not use the global undo info recording system.
+    // The read job Undo() / redo() functions will handle all operations.
+    OpUndoItemMuting undoMuting;
+
     MStatus status;
 
     if (!TF_VERIFY(!mImportData.empty())) {
@@ -91,6 +216,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
     if (!rootLayer) {
         return false;
     }
+    progressBar.advance();
 
     TfToken modelName = UsdUtilsGetModelNameFromRootLayer(rootLayer);
 
@@ -105,6 +231,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
 
     SdfLayerRefPtr sessionLayer
         = UsdUtilsStageCache::GetSessionLayerForVariantSelections(modelName, varSelsVec);
+    progressBar.advance();
 
     // Layer and Stage used to Read in the USD file
     UsdStageRefPtr stage;
@@ -116,16 +243,22 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
             mImportData.stagePopulationMask(),
             mImportData.stageInitialLoadSet());
     } else {
-        UsdStageCacheContext stageCacheContext(UsdMayaStageCache::Get(
-            mImportData.stageInitialLoadSet() == UsdStage::InitialLoadSet::LoadAll));
-        stage = UsdStage::Open(rootLayer, sessionLayer, mImportData.stageInitialLoadSet());
+        UsdStageCache        stageCache;
+        UsdStageCacheContext stageCacheContext(stageCache);
+        if (mArgs.pullImportStage)
+            stage = mArgs.pullImportStage;
+        else
+            stage = UsdStage::Open(rootLayer, sessionLayer, mImportData.stageInitialLoadSet());
     }
     if (!stage) {
         return false;
     }
+    progressBar.advance();
 
+    UsdEditContext editContext(stage, stage->GetSessionLayer());
     stage->SetEditTarget(stage->GetSessionLayer());
     _setTimeSampleMultiplierFrom(stage->GetTimeCodesPerSecond());
+    progressBar.advance();
 
     // XXX Currently all distance values are set directly from USD and will be
     // interpreted as centimeters (Maya's internal distance unit). Future work
@@ -141,13 +274,12 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
                     "distance unit.");
         }
     }
+    progressBar.advance();
 
     // If the import time interval isn't empty, we expand the Min/Max time
     // sliders to include the stage's range if necessary.
+    AutoTimelineRestore timelineRestore(mArgs.preserveTimeline);
     if (!mArgs.timeInterval.IsEmpty()) {
-        MTime currentMinTime = MAnimControl::minTime();
-        MTime currentMaxTime = MAnimControl::maxTime();
-
         GfInterval stageInterval;
         if (mArgs.timeInterval.IsFinite()) {
             if (mArgs.timeInterval.GetMin() > mArgs.timeInterval.GetMax()) {
@@ -164,15 +296,16 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
         }
 
         MTime::Unit timeUnit = MTime::uiUnit();
-        if (stageInterval.GetMin() < currentMinTime.value()) {
+        if (stageInterval.GetMin() < timelineRestore.originalMinTime.value()) {
             MAnimControl::setMinTime(
                 MTime(stageInterval.GetMin() * mTimeSampleMultiplier, timeUnit));
         }
-        if (stageInterval.GetMax() > currentMaxTime.value()) {
+        if (stageInterval.GetMax() > timelineRestore.originalMaxTime.value()) {
             MAnimControl::setMaxTime(
                 MTime(stageInterval.GetMax() * mTimeSampleMultiplier, timeUnit));
         }
     }
+    progressBar.advance();
 
     // Use the primPath to get the root usdNode
     std::string primPath = mImportData.rootPrimPath();
@@ -186,6 +319,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
             mImportData.filename().c_str());
         usdRootPrim = stage->GetPseudoRoot();
     }
+    progressBar.advance();
 
     bool isImportingPseudoRoot = (usdRootPrim == stage->GetPseudoRoot());
 
@@ -195,21 +329,25 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
     }
 
     // Set the variants on the usdRootPrim
-    for (auto& variant : mImportData.rootVariantSelections()) {
-        usdRootPrim.GetVariantSet(variant.first).SetVariantSelection(variant.second);
-    }
+    ApplyVariantSelections(usdRootPrim, mImportData.rootVariantSelections());
+    progressBar.advance();
 
     // Set the variants on all the import data prims.
     for (auto& varPrim : mImportData.primVariantSelections()) {
-        for (auto& variant : varPrim.second) {
-            UsdPrim usdVarPrim = stage->GetPrimAtPath(varPrim.first);
-            usdVarPrim.GetVariantSet(variant.first).SetVariantSelection(variant.second);
+        const SdfPath& primName = varPrim.first;
+        UsdPrim        usdVarPrim = stage->GetPrimAtPath(primName);
+        if (!usdVarPrim.IsValid()) {
+            TF_WARN("Invalid prim specified (%s) for variant selection.", primName.GetText());
+            continue;
         }
+        ApplyVariantSelections(usdVarPrim, varPrim.second);
     }
+    progressBar.advance();
 
     Usd_PrimFlagsPredicate predicate = UsdPrimDefaultPredicate;
 
     PreImport(predicate);
+    progressBar.advance();
 
     UsdPrimRange range(usdRootPrim, predicate);
     if (range.empty()) {
@@ -236,6 +374,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
 
     mNewNodeRegistry.insert(
         std::make_pair(rootPathToRegister.GetString(), mMayaRootDagPath.node()));
+    progressBar.advance();
 
     if (mArgs.useAsAnimationCache) {
         MDGModifier dgMod;
@@ -260,6 +399,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
         status = dgMod.doIt();
         CHECK_MSTATUS_AND_RETURN(status, false);
     }
+    progressBar.advance();
 
     // check if "USDZ Texture Import" option is checked and the archive in question is a USDZ.
     if (mArgs.importUSDZTextures && stage->GetRootLayer()->GetFileFormat()->IsPackage()) {
@@ -273,6 +413,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
     }
 
     DoImport(range, usdRootPrim);
+    progressBar.advance();
 
     // NOTE: (yliangsiew) Storage to later pass on to `PostImport` for import chasers.
     MDagPathArray currentAddedDagPaths;
@@ -301,6 +442,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
             }
         }
     }
+    progressBar.advance();
 
     // NOTE: (yliangsiew) Look into a registry of post-import "chasers" here
     // and call `PostImport` on each of them.
@@ -315,6 +457,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
             TF_RUNTIME_ERROR("Failed to create import chaser: %s", importChaserName.c_str());
         }
     }
+    progressBar.advance();
 
     for (const UsdMayaImportChaserRefPtr& chaser : this->mImportChasers) {
         bool bStat
@@ -324,6 +467,7 @@ bool UsdMaya_ReadJob::Read(std::vector<MDagPath>* addedDagPaths)
             return false;
         }
     }
+    progressBar.advance();
 
     UsdMayaReadUtil::mapFileHashes.clear();
 
@@ -374,6 +518,7 @@ void UsdMaya_ReadJob::_DoImportPrimIt(
             = UsdMayaPrimReaderRegistry::FindOrFallback(typeName)) {
             UsdMayaPrimReaderSharedPtr primReader = factoryFn(args);
             if (primReader) {
+                TempNodeTrackerScope scope(readCtx);
                 primReader->Read(readCtx);
                 if (primReader->HasPostReadSubtree()) {
                     primReaderMap[prim.GetPath()] = primReader;
@@ -381,6 +526,7 @@ void UsdMaya_ReadJob::_DoImportPrimIt(
                 if (readCtx.GetPruneChildren()) {
                     primIt.PruneChildren();
                 }
+                UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(args, readCtx);
             }
         }
     }
@@ -435,6 +581,9 @@ void UsdMaya_ReadJob::_DoImportInstanceIt(
         duplicateNode.addChild(childObject, MFnDagNode::kNextPos, true);
     }
 
+    // Add duplicate node to registry.
+    readCtx.RegisterNewMayaNode(primPath.GetString(), duplicateObject);
+
     // Read xformable attributes from the
     // UsdPrim on to the transform node.
     UsdGeomXformable      xformable(prim);
@@ -465,6 +614,8 @@ bool UsdMaya_ReadJob::_DoImport(UsdPrimRange& rootRange, const UsdPrim& usdRootP
 {
     const bool buildInstances = mArgs.importInstances;
 
+    MayaUsd::ProgressBarScope progressBar(0);
+
     // We want both pre- and post- visit iterations over the prims in this
     // method. To do so, iterate over all the root prims of the input range,
     // and create new PrimRanges to iterate over their subtrees.
@@ -477,6 +628,9 @@ bool UsdMaya_ReadJob::_DoImport(UsdPrimRange& rootRange, const UsdPrim& usdRootP
             ? UsdPrimRange::PreAndPostVisit(rootPrim)
             : UsdPrimRange::PreAndPostVisit(
                 rootPrim, UsdTraverseInstanceProxies(UsdPrimAllPrimsPredicate));
+
+        const int                     loopSize = std::distance(range.begin(), range.end());
+        MayaUsd::ProgressBarLoopScope instanceLoop(loopSize);
         for (auto primIt = range.begin(); primIt != range.end(); ++primIt) {
             const UsdPrim&           prim = *primIt;
             UsdMayaPrimReaderContext readCtx(&mNewNodeRegistry);
@@ -487,19 +641,26 @@ bool UsdMaya_ReadJob::_DoImport(UsdPrimRange& rootRange, const UsdPrim& usdRootP
             } else {
                 _DoImportPrimIt(primIt, usdRootPrim, readCtx, primReaderMap);
             }
+            instanceLoop.loopAdvance();
         }
     }
 
     if (buildInstances) {
+        progressBar.addSteps(1);
+
         MDGModifier              deletePrototypeMod;
         UsdMayaPrimReaderContext readCtx(&mNewNodeRegistry);
         readCtx.SetTimeSampleMultiplier(mTimeSampleMultiplier);
 
 #if PXR_VERSION < 2011
-        for (const auto& prototype : usdRootPrim.GetStage()->GetMasters()) {
+        auto prototypes = usdRootPrim.GetStage()->GetMasters();
 #else
-        for (const auto& prototype : usdRootPrim.GetStage()->GetPrototypes()) {
+        auto prototypes = usdRootPrim.GetStage()->GetPrototypes();
 #endif
+        const int                     loopSize = prototypes.size();
+        MayaUsd::ProgressBarLoopScope prototypesLoop(loopSize);
+        for (const auto& prototype : prototypes) {
+
             const SdfPath prototypePath = prototype.GetPath();
             MObject       prototypeObject = readCtx.GetMayaNode(prototypePath, false);
             if (prototypeObject != MObject::kNullObj) {
@@ -510,10 +671,16 @@ bool UsdMaya_ReadJob::_DoImport(UsdPrimRange& rootRange, const UsdPrim& usdRootP
                         prototypeNode.removeChildAt(prototypeNode.childCount() - 1);
                     }
                 }
+#if MAYA_API_VERSION > 20200200
+                deletePrototypeMod.deleteNode(prototypeObject, false);
+#else
                 deletePrototypeMod.deleteNode(prototypeObject);
+#endif
             }
+            prototypesLoop.loopAdvance();
         }
         deletePrototypeMod.doIt();
+        progressBar.advance();
     }
 
     return true;
@@ -525,6 +692,10 @@ bool UsdMaya_ReadJob::SkipRootPrim(bool isImportingPseudoRoot) { return isImport
 
 bool UsdMaya_ReadJob::Redo()
 {
+    // Do not use the global undo info recording system.
+    // The read job Undo() / redo() functions will handle all operations.
+    OpUndoItemMuting undoMuting;
+
     // Undo the undo
     MStatus status = mDagModifierUndo.undoIt();
 
@@ -542,6 +713,10 @@ bool UsdMaya_ReadJob::Redo()
 
 bool UsdMaya_ReadJob::Undo()
 {
+    // Do not use the global undo info recording system.
+    // The read job Undo() / redo() functions will handle all operations.
+    OpUndoItemMuting undoMuting;
+
     // NOTE: (yliangsiew) All chasers need to have their Undo run as well.
     for (const UsdMayaImportChaserRefPtr& chaser : this->mImportChasers) {
         bool bStat = chaser->Undo();
@@ -570,7 +745,11 @@ bool UsdMaya_ReadJob::Undo()
                         }
                     }
                 }
+#if MAYA_API_VERSION > 20200200
+                mDagModifierUndo.deleteNode(it.second, false);
+#else
                 mDagModifierUndo.deleteNode(it.second);
+#endif
             }
         }
     }
@@ -588,6 +767,11 @@ void UsdMaya_ReadJob::SetMayaRootDagPath(const MDagPath& mayaRootDagPath)
 const MDagPath& UsdMaya_ReadJob::GetMayaRootDagPath() const { return mMayaRootDagPath; }
 
 double UsdMaya_ReadJob::timeSampleMultiplier() const { return mTimeSampleMultiplier; }
+
+const UsdMayaPrimReaderContext::ObjectRegistry& UsdMaya_ReadJob::GetNewNodeRegistry() const
+{
+    return mNewNodeRegistry;
+}
 
 double UsdMaya_ReadJob::_setTimeSampleMultiplierFrom(const double layerFPS)
 {

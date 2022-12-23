@@ -19,12 +19,12 @@
 import fixturesUtils
 import mayaUtils
 import testUtils
-from testUtils import assertVectorAlmostEqual
+from testUtils import assertVectorAlmostEqual, assertVectorNotAlmostEqual
 import usdUtils
 
 import mayaUsd.ufe
 
-from pxr import UsdGeom, Vt, Gf
+from pxr import UsdGeom, Vt, Gf, Sdf
 
 from maya import cmds
 from maya import standalone
@@ -34,10 +34,14 @@ import ufe
 import os
 import unittest
 
+def filterUsdStr(usdSceneStr):
+    '''Remove empty lines and lines starting with pound character.'''
+    nonBlankLines = filter(None, [l.rstrip() for l in usdSceneStr.splitlines()])
+    finalLines = [l for l in nonBlankLines if not l.startswith('#')]
+    return '\n'.join(finalLines)
 
 def childrenNames(children):
     return [str(child.path().back()) for child in children]
-
 
 def matrixToList(m):
     mList = []
@@ -276,7 +280,7 @@ class ParentCmdTestCase(unittest.TestCase):
         cylChildren = cylHier.children()
         self.assertEqual(len(cylChildren), 1)
 
-    @unittest.skipUnless(mayaUtils.previewReleaseVersion() >= 123, 'Requires Maya fixes only available in Maya Preview Release 123 or later.')
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentAbsoluteSingleMatrixOp(self):
         """Test parent -absolute on prim with a single matrix op."""
 
@@ -409,7 +413,7 @@ class ParentCmdTestCase(unittest.TestCase):
         cylChildren = cylHier.children()
         self.assertEqual(len(cylChildren), 1)
 
-    @unittest.skipUnless(mayaUtils.previewReleaseVersion() >= 123, 'Requires Maya fixes only available in Maya Preview Release 123 or later.')
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentAbsoluteFallback(self):
         """Test parent -absolute on prim with a fallback Maya transform stack."""
         # Create a scene with an xform and a capsule.
@@ -531,7 +535,7 @@ class ParentCmdTestCase(unittest.TestCase):
 
         checkParentDone()
 
-    @unittest.skipUnless(mayaUtils.previewReleaseVersion() >= 123, 'Requires Maya fixes only available in Maya Preview Release 123 or later.')
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentAbsoluteMultiMatrixOp(self):
         """Test parent -absolute on prim with a transform stack with multiple matrix ops."""
 
@@ -939,6 +943,15 @@ class ParentCmdTestCase(unittest.TestCase):
             self.assertIn("pSphere1", childrenNames(children))
             self.assertIn("pCylinderShape1", childrenNames(children))
 
+    def testIllegalInstance(self):
+        '''Parenting an object to an instance must report an error.'''
+
+        with OpenFileCtx("simpleHierarchy.ma"):
+            with self.assertRaises(RuntimeError):
+                cmds.parent(
+                    "|mayaUsdProxy1|mayaUsdProxyShape1,/hierarchy_instance2",
+                    "|mayaUsdProxy1|mayaUsdProxyShape1,/hierarchy_instance1")
+
     def testUnparentUSD(self):
         '''Unparent USD node.'''
 
@@ -1039,7 +1052,7 @@ class ParentCmdTestCase(unittest.TestCase):
             cmds.parent("|Tree_usd|Tree_usdShape,/TreeBase/trunk",
                         "|Tree_usd|Tree_usdShape,/TreeBase/leavesXform/leaves")
 
-    @unittest.skipIf(mayaUtils.previewReleaseVersion() < 128, 'Test requires fix in Maya Preview Release 128 or greater.')
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentHierarchy(self):
         '''Parenting a node and a descendant.'''
 
@@ -1156,6 +1169,454 @@ class ParentCmdTestCase(unittest.TestCase):
 
         children = hierarchyAfter()
         checkAfter(*children)
+
+    def testEditRouter(self):
+        '''Test edit router functionality.'''
+
+        cmds.file(new=True, force=True)
+        import mayaUsd_createStageWithNewLayer
+
+        psPathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+
+        # Create the following layer hierarchy:
+        #
+        # anonymousLayer1
+        #  |_ bSubLayer
+        #  |_ aSubLayer
+        #
+        # Sublayer B is thus higher-priority than A.
+        rootLayerId = stage.GetRootLayer().identifier
+        aSubLayerId = cmds.mayaUsdLayerEditor(rootLayerId, edit=True, addAnonymous="aSubLayer")[0]
+        bSubLayerId = cmds.mayaUsdLayerEditor(rootLayerId, edit=True, addAnonymous="bSubLayer")[0]
+
+        # Create the following hierarchy in lower-priority layer A.
+        #
+        # ps
+        #  |_ A
+        #      |_ B
+        #  |_ C
+        #
+        cmds.mayaUsdEditTarget(psPathStr, edit=True, editTarget=aSubLayerId)
+        stage.DefinePrim('/A', 'Xform')
+        stage.DefinePrim('/A/B', 'Xform')
+        stage.DefinePrim('/C', 'Xform')
+
+        def firstSubLayer(context, routingData):
+            # Write edits to the highest-priority child layer of the root.
+
+            # Here, prim is the parent prim.
+            prim = context.get('prim')
+            self.assertIsNot(prim, None)
+            self.assertFalse(len(prim.GetStage().GetRootLayer().subLayerPaths)==0)
+            layerId = prim.GetStage().GetRootLayer().subLayerPaths[0]
+            layer = Sdf.Layer.Find(layerId)
+            # Make sure the destination exists in the target layer, otherwise
+            # SdfCopySpec will error.
+            Sdf.JustCreatePrimInLayer(layer, prim.GetPath())
+            routingData['layer'] = layerId
+
+        # Register our edit router which directs the parent edit to
+        # higher-priority layer B, which is not the edit target.
+        mayaUsd.lib.registerEditRouter('parent', firstSubLayer)
+
+        # Check that layer B is empty.
+        bSubLayer = Sdf.Layer.Find(bSubLayerId)
+        self.assertEqual(filterUsdStr(bSubLayer.ExportToString()), '')
+
+        # We select B and C, in order, and parent.  This parents B to C.
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A/B'))
+        c = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C'))
+        sn.append(b)
+        sn.append(c)
+
+        a = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A'))
+        self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), a)
+
+        cmds.parent()
+
+        # Check that prim B is now a child of prim C.  Re-create its scene
+        # item, as its path has changed.
+        b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C/B'))
+        self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), c)
+
+        # Check that layer B now has the parent overs.
+        self.assertEqual(filterUsdStr(bSubLayer.ExportToString()),
+                         'over "C"\n{\n    def Xform "B"\n    {\n    }\n}')
+
+        # Restore default edit router.
+        mayaUsd.lib.restoreDefaultEditRouter('parent')
+
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 7, 'Require parent command fix from Maya')
+    def testParentAbsoluteUnderScope(self):
+        """Test parent -absolute to move prim under scope."""
+
+        cmds.file(new=True, force=True)
+
+        # Create a scene with an xform, a scope under the xform and a capsule.
+        import mayaUsd_createStageWithNewLayer
+
+        mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        proxyShapePathStr = '|stage1|stageShape1'
+        stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
+
+        xformPrim = stage.DefinePrim('/Xform1', 'Xform')
+        self.assertIsNotNone(xformPrim)
+        scopePrim = stage.DefinePrim('/Xform1/Scope1', 'Scope')
+        self.assertIsNotNone(scopePrim)
+        capsulePrim = stage.DefinePrim('/Capsule1', 'Capsule')
+        self.assertIsNotNone(capsulePrim)
+
+        proxyShapePathSegment = mayaUtils.createUfePathSegment(
+            proxyShapePathStr)
+
+        # Translate and rotate the xform.
+        xformPath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Xform1')])
+        xformItem = ufe.Hierarchy.createItem(xformPath)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(xformItem)
+
+        cmds.move(0, -5, 0, r=True, os=True, wd=True)
+        cmds.rotate(0, -90, 0, r=True, os=True, fo=True)
+
+        xformXformable = UsdGeom.Xformable(xformPrim)
+        self.assertEqual(
+            xformXformable.GetXformOpOrderAttr().Get(), Vt.TokenArray((
+                "xformOp:translate", "xformOp:rotateXYZ")))
+
+        sn.clear()
+
+        # Translate and rotate the capsule.
+        capsulePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Capsule1')])
+        capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+        self.assertIsNotNone(capsuleItem)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(capsuleItem)
+
+        cmds.move(0, 15, 0, r=True, os=True, wd=True)
+        cmds.rotate(0, 60, 0, r=True, os=True, fo=True)
+
+        sn.clear()
+
+        # Capture the capsule world space transform to verify later.
+        capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+        capsuleWorld = capsuleT3d.inclusiveMatrix()
+        capsuleWorldPre = matrixToList(capsuleWorld)
+
+        # Scope path and item.
+        scopePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Xform1/Scope1')])
+        scopeItem = ufe.Hierarchy.createItem(scopePath)
+        self.assertIsNotNone(scopeItem)
+
+        def checkParentDone():
+            # The scope has the capsule as its child.
+            scopeHier = ufe.Hierarchy.hierarchy(scopeItem)
+            self.assertIsNotNone(scopeHier)
+            scopeChildren = scopeHier.children()
+            self.assertEqual(len(scopeChildren), 1)
+            self.assertIn('Capsule1', childrenNames(scopeChildren))
+
+        def checkParentNotDone():
+            # The scope has no child.
+            scopeHier = ufe.Hierarchy.hierarchy(scopeItem)
+            self.assertIsNotNone(scopeHier)
+            scopeChildren = scopeHier.children()
+            self.assertEqual(len(scopeChildren), 0)
+
+        def checkCapsuleMatrix(capsulePath):
+            # Confirm that the capsule has not moved in world space.  Must
+            # re-create the scene item after path change.
+            capsulePath = ufe.Path(
+                [proxyShapePathSegment,
+                    usdUtils.createUfePathSegment(capsulePath)])
+            capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+            self.assertIsNotNone(capsuleItem)
+            capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+            self.assertIsNotNone(capsuleT3d)
+            capsuleWorld = capsuleT3d.inclusiveMatrix()
+            assertVectorAlmostEqual(
+                self, capsuleWorldPre, matrixToList(capsuleWorld))
+
+        # The scope currently has no children, capsule has not moved.
+        checkParentNotDone()
+        checkCapsuleMatrix('/Capsule1')
+
+        # Parent the capsule to the scope.
+        cmds.parent(ufe.PathString.string(capsulePath),
+                    ufe.PathString.string(scopePath))
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1')
+
+        # Undo: the scope no longer has a child, the capsule is still where
+        # it has always been.
+        cmds.undo()
+
+        checkParentNotDone()
+        checkCapsuleMatrix('/Capsule1')
+
+        # Redo: capsule still hasn't moved.
+        cmds.redo()
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1')
+
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 7, 'Require parent command fix from Maya')
+    def testParentAbsoluteScope(self):
+        """
+        Test parent -absolute to move a scope with a prim under it under an xform.
+        Since the scope is not transformable, the prim will move.
+        """
+
+        cmds.file(new=True, force=True)
+
+        # Create a scene with an xform, a scope and a capsule under the scope.
+        import mayaUsd_createStageWithNewLayer
+
+        mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        proxyShapePathStr = '|stage1|stageShape1'
+        stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
+
+        xformPrim = stage.DefinePrim('/Xform1', 'Xform')
+        self.assertIsNotNone(xformPrim)
+        scopePrim = stage.DefinePrim('/Scope1', 'Scope')
+        self.assertIsNotNone(scopePrim)
+        capsulePrim = stage.DefinePrim('/Scope1/Capsule1', 'Capsule')
+        self.assertIsNotNone(capsulePrim)
+
+        proxyShapePathSegment = mayaUtils.createUfePathSegment(
+            proxyShapePathStr)
+
+        # Translate and rotate the xform.
+        xformPath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Xform1')])
+        xformItem = ufe.Hierarchy.createItem(xformPath)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(xformItem)
+
+        cmds.move(0, -5, 0, r=True, os=True, wd=True)
+
+        xformXformable = UsdGeom.Xformable(xformPrim)
+        self.assertEqual(
+            xformXformable.GetXformOpOrderAttr().Get(), Vt.TokenArray((
+                "xformOp:translate", )))
+
+        sn.clear()
+
+        # Translate and rotate the capsule.
+        capsulePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Scope1/Capsule1')])
+        capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+        self.assertIsNotNone(capsuleItem)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(capsuleItem)
+
+        cmds.move(0, 15, 0, r=True, os=True, wd=True)
+
+        sn.clear()
+
+        # Capture the capsule world space transform to verify later.
+        capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+        capsuleWorld = capsuleT3d.inclusiveMatrix()
+        capsuleWorldPre = matrixToList(capsuleWorld)
+
+        # Scope path and item.
+        scopePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Scope1')])
+        scopeItem = ufe.Hierarchy.createItem(scopePath)
+        self.assertIsNotNone(scopeItem)
+
+        def checkParentDone():
+            # The xform has the scope as its child.
+            xformHier = ufe.Hierarchy.hierarchy(xformItem)
+            self.assertIsNotNone(xformHier)
+            xformChildren = xformHier.children()
+            self.assertEqual(len(xformChildren), 1)
+            self.assertIn('Scope1', childrenNames(xformChildren))
+
+        def checkParentNotDone():
+            # The xform has no child.
+            xformHier = ufe.Hierarchy.hierarchy(xformItem)
+            self.assertIsNotNone(xformHier)
+            xformChildren = xformHier.children()
+            self.assertEqual(len(xformChildren), 0)
+
+        def checkCapsuleMatrix(capsulePath, xpos):
+            # Confirm that the capsule has moved in world space.  Must
+            # re-create the scene item after path change.
+            capsulePath = ufe.Path(
+                [proxyShapePathSegment,
+                    usdUtils.createUfePathSegment(capsulePath)])
+            capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+            self.assertIsNotNone(capsuleItem)
+            capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+            self.assertIsNotNone(capsuleT3d)
+            capsuleWorld = capsuleT3d.inclusiveMatrix()
+            self.assertEqual(xpos, matrixToList(capsuleWorld)[13])
+            assertVectorAlmostEqual(
+                self, capsuleWorldPre[0:13], matrixToList(capsuleWorld)[0:13])
+            assertVectorAlmostEqual(
+                self, capsuleWorldPre[14:16], matrixToList(capsuleWorld)[14:16])
+
+        # The xform currently has no children, capsule has not moved.
+        checkParentNotDone()
+        checkCapsuleMatrix('/Scope1/Capsule1', 15.0)
+
+        # Parent the scope to the xform, the capsule moved due to relative mode
+        cmds.parent(ufe.PathString.string(scopePath),
+                    ufe.PathString.string(xformPath))
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1', 10.0)
+
+        # Undo: the xform no longer has a child, the capsule moved back due to relative mode.
+        cmds.undo()
+
+        checkParentNotDone()
+        checkCapsuleMatrix('/Scope1/Capsule1', 15.0)
+
+        # Redo: the capsule moved due to relative mode.
+        cmds.redo()
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1', 10.0)
+
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 7, 'Require parent command fix from Maya')
+    def testParentRelativeScope(self):
+        """
+        Test parent -relative to move a scope with a prim under it under an xform.
+        Since the command is relative, the prim will move.
+        """
+
+        cmds.file(new=True, force=True)
+
+        # Create a scene with an xform, a scope and a capsule under the scope.
+        import mayaUsd_createStageWithNewLayer
+
+        mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        proxyShapePathStr = '|stage1|stageShape1'
+        stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
+
+        xformPrim = stage.DefinePrim('/Xform1', 'Xform')
+        self.assertIsNotNone(xformPrim)
+        scopePrim = stage.DefinePrim('/Scope1', 'Scope')
+        self.assertIsNotNone(scopePrim)
+        capsulePrim = stage.DefinePrim('/Scope1/Capsule1', 'Capsule')
+        self.assertIsNotNone(capsulePrim)
+
+        proxyShapePathSegment = mayaUtils.createUfePathSegment(
+            proxyShapePathStr)
+
+        # Translate and rotate the xform.
+        xformPath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Xform1')])
+        xformItem = ufe.Hierarchy.createItem(xformPath)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(xformItem)
+
+        cmds.move(0, -5, 0, r=True, os=True, wd=True)
+
+        xformXformable = UsdGeom.Xformable(xformPrim)
+        self.assertEqual(
+            xformXformable.GetXformOpOrderAttr().Get(), Vt.TokenArray((
+                "xformOp:translate", )))
+
+        sn.clear()
+
+        # Translate and rotate the capsule.
+        capsulePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Scope1/Capsule1')])
+        capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+        self.assertIsNotNone(capsuleItem)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(capsuleItem)
+
+        cmds.move(0, 15, 0, r=True, os=True, wd=True)
+
+        sn.clear()
+
+        # Capture the capsule world space transform to verify later.
+        capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+        capsuleWorld = capsuleT3d.inclusiveMatrix()
+        capsuleWorldPre = matrixToList(capsuleWorld)
+
+        # Scope path and item.
+        scopePath = ufe.Path([proxyShapePathSegment,
+                              usdUtils.createUfePathSegment('/Scope1')])
+        scopeItem = ufe.Hierarchy.createItem(scopePath)
+        self.assertIsNotNone(scopeItem)
+
+        def checkParentDone():
+            # The xform has the scope as its child.
+            xformHier = ufe.Hierarchy.hierarchy(xformItem)
+            self.assertIsNotNone(xformHier)
+            xformChildren = xformHier.children()
+            self.assertEqual(len(xformChildren), 1)
+            self.assertIn('Scope1', childrenNames(xformChildren))
+
+        def checkParentNotDone():
+            # The xform has no child.
+            xformHier = ufe.Hierarchy.hierarchy(xformItem)
+            self.assertIsNotNone(xformHier)
+            xformChildren = xformHier.children()
+            self.assertEqual(len(xformChildren), 0)
+
+        def checkCapsuleMatrix(capsulePath, xpos):
+            # Confirm that the capsule has moved in world space.  Must
+            # re-create the scene item after path change.
+            capsulePath = ufe.Path(
+                [proxyShapePathSegment,
+                    usdUtils.createUfePathSegment(capsulePath)])
+            capsuleItem = ufe.Hierarchy.createItem(capsulePath)
+            self.assertIsNotNone(capsuleItem)
+            capsuleT3d = ufe.Transform3d.transform3d(capsuleItem)
+            self.assertIsNotNone(capsuleT3d)
+            capsuleWorld = capsuleT3d.inclusiveMatrix()
+            self.assertEqual(xpos, matrixToList(capsuleWorld)[13])
+            assertVectorAlmostEqual(
+                self, capsuleWorldPre[0:13], matrixToList(capsuleWorld)[0:13])
+            assertVectorAlmostEqual(
+                self, capsuleWorldPre[14:16], matrixToList(capsuleWorld)[14:16])
+
+        # The xform currently has no children, capsule has not moved.
+        checkParentNotDone()
+        checkCapsuleMatrix('/Scope1/Capsule1', 15.0)
+
+        # Parent the scope to the xform, the capsule moved due to relative mode
+        cmds.parent(ufe.PathString.string(scopePath),
+                    ufe.PathString.string(xformPath), relative=True)
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1', 10.0)
+
+        # Undo: the xform no longer has a child, the capsule moved back due to relative mode.
+        cmds.undo()
+
+        checkParentNotDone()
+        checkCapsuleMatrix('/Scope1/Capsule1', 15.0)
+
+        # Redo: the capsule moved due to relative mode.
+        cmds.redo()
+
+        checkParentDone()
+        checkCapsuleMatrix('/Xform1/Scope1/Capsule1', 10.0)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

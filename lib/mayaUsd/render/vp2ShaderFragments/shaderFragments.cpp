@@ -62,6 +62,10 @@ TF_DEFINE_PRIVATE_TOKENS(
     (BasisCurvesLinearFallbackShader)
     (BasisCurvesLinearHull)
 
+    (PointsFallbackCPVShader)
+    (PointsFallbackShader)
+    (PointsGeometry)
+
     (FallbackCPVShader)
     (FallbackShader)
 
@@ -78,9 +82,9 @@ TF_DEFINE_PRIVATE_TOKENS(
     (scaledDiffusePassThrough)
     (scaledSpecularPassThrough)
     (opacityToTransparency)
-    (UsdDrawModeCards)
     (usdPreviewSurfaceLightingAPI1)
     (usdPreviewSurfaceLightingAPI2)
+    (usdPreviewSurfaceLightingAPI3)
     (usdPreviewSurfaceCombiner)
 
     (UsdPrimvarColor)
@@ -98,6 +102,10 @@ TF_DEFINE_PRIVATE_TOKENS(
     // Graph:
     (UsdPreviewSurfaceLightAPI1)
     (UsdPreviewSurfaceLightAPI2)
+    (UsdPreviewSurfaceLightAPI3)
+
+    // XXX Deprecated in PXR_VERSION > 2211
+    (UsdDrawModeCards)
 );
 // clang-format on
 
@@ -133,19 +141,25 @@ static const TfTokenVector _FragmentNames = { _tokens->BasisCurvesCubicColorDoma
 
                                               _tokens->NwFaceCameraIfNAN,
 
+                                              _tokens->PointsGeometry,
+
                                               _tokens->lightingContributions,
                                               _tokens->scaledDiffusePassThrough,
                                               _tokens->scaledSpecularPassThrough,
                                               _tokens->opacityToTransparency,
+#if PXR_VERSION <= 2211
                                               _tokens->UsdDrawModeCards,
+#endif
                                               _tokens->usdPreviewSurfaceLightingAPI1,
                                               _tokens->usdPreviewSurfaceLightingAPI2,
+                                              _tokens->usdPreviewSurfaceLightingAPI3,
                                               _tokens->usdPreviewSurfaceCombiner };
 
 static const TfTokenVector _FragmentGraphNames
     = { _tokens->BasisCurvesCubicCPVShader,  _tokens->BasisCurvesCubicFallbackShader,
         _tokens->BasisCurvesLinearCPVShader, _tokens->BasisCurvesLinearFallbackShader,
-        _tokens->FallbackCPVShader,          _tokens->FallbackShader };
+        _tokens->FallbackCPVShader,          _tokens->FallbackShader,
+        _tokens->PointsFallbackCPVShader,    _tokens->PointsFallbackShader };
 
 namespace {
 //! Get the file path of the shader fragment.
@@ -311,29 +325,6 @@ MStatus HdVP2ShaderFragments::registerFragments()
         }
     }
 
-#ifdef WANT_MATERIALX_BUILD
-    {
-        const MString fragName("materialXTw");
-
-        if (!fragmentManager->hasFragment(fragName)) {
-            const std::string fragXmlFile = TfStringPrintf("%s.xml", fragName.asChar());
-            const std::string fragXmlPath = _GetResourcePath(fragXmlFile);
-
-            const MString addedName
-                = fragmentManager->addShadeFragmentFromFile(fragXmlPath.c_str(), false);
-
-            if (addedName != fragName) {
-                MGlobal::displayError(TfStringPrintf(
-                                          "Failed to register fragment '%s' from file: %s",
-                                          fragName.asChar(),
-                                          fragXmlPath.c_str())
-                                          .c_str());
-                return MS::kFailure;
-            }
-        }
-    }
-#endif
-
     // Register all fragment graphs.
     for (const TfToken& fragGraphNameToken : _FragmentGraphNames) {
         const MString fragGraphName(fragGraphNameToken.GetText());
@@ -360,7 +351,15 @@ MStatus HdVP2ShaderFragments::registerFragments()
     // Register a UsdPreviewSurface shader graph:
     {
         const MString fragGraphName(HdVP2ShaderFragmentsTokens->SurfaceFragmentGraphName.GetText());
-#ifdef MAYA_LIGHTAPI_VERSION_2
+#if MAYA_LIGHTAPI_VERSION_2 == 3
+        const bool    useV1Lighting = TfGetEnvSetting(MAYAUSD_VP2_USE_V1_LIGHT_API);
+        const MString fragGraphFileName(
+            useV1Lighting ? _tokens->UsdPreviewSurfaceLightAPI1.GetText()
+                          : _tokens->UsdPreviewSurfaceLightAPI3.GetText());
+        MString shadingInfo = (useV1Lighting ? "Using V1 Lighting API" : "Using V3 Lighting API");
+        shadingInfo += " for UsdPreviewSurface shading.";
+        MGlobal::displayInfo(shadingInfo);
+#elif MAYA_LIGHTAPI_VERSION_2 == 2
         const bool    useV1Lighting = TfGetEnvSetting(MAYAUSD_VP2_USE_V1_LIGHT_API);
         const MString fragGraphFileName(
             useV1Lighting ? _tokens->UsdPreviewSurfaceLightAPI1.GetText()
@@ -625,17 +624,6 @@ MStatus HdVP2ShaderFragments::deregisterFragments()
             return MS::kFailure;
         }
     }
-
-#ifdef WANT_MATERIALX_BUILD
-    {
-        const MString fragName("materialXTw");
-        if (!fragmentManager->removeFragment(fragName)) {
-            MGlobal::displayWarning(
-                TfStringPrintf("Failed to remove fragment: %s", fragName.asChar()).c_str());
-            return MS::kFailure;
-        }
-    }
-#endif
 
     // De-register all fragments.
     for (const TfToken& fragNameToken : _FragmentNames) {

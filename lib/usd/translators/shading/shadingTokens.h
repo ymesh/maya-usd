@@ -52,6 +52,7 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 #define TR_USD_PRIMVAR \
     (UsdPrimvarReader_float2) \
+    (displayColor) \
     (result)
 
 #define TR_USD_XFORM \
@@ -67,11 +68,15 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
 // clang-format off
 #define TR_MAYA_MATERIALS \
     (usdPreviewSurface) \
+    (lambert) \
+    (phong) \
+    (blinn) \
     (eccentricity) \
     (specularRollOff) \
     (cosinePower) \
     (roughness) \
     (color) \
+    (inColor) \
     (transparency) \
     (diffuse) \
     (incandescence) \
@@ -86,6 +91,11 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
     (outTransparencyR) \
     (outTransparencyG) \
     (outTransparencyB)
+
+#define TR_MAYA_NODES \
+    (colorCorrect) \
+    (floatCorrect) \
+    (clamp)
 
 #define TR_MAYA_STANDARD_SURFACE \
     (standardSurface) \
@@ -143,8 +153,10 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
     (colorOffset) \
     (colorSpace) \
     (defaultColor) \
+    (exposure) \
     (fileTextureName) \
     (filterType) \
+    (invert) \
     ((UDIMTag, "<UDIM>")) \
     (uvTilingMode) \
     (Raw) \
@@ -153,6 +165,8 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
 #define TR_MAYA_UV \
     (place2dTexture) \
     (coverage) \
+    (coverageU) \
+    (coverageV) \
     (translateFrame) \
     (rotateFrame) \
     (mirrorU) \
@@ -173,12 +187,16 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
     (outUV) \
     (uvCoord)
 
+#define TR_MAYA_PRIMVAR \
+    (cpvColor)
+
 // clang-format on
 
 TF_DECLARE_PUBLIC_TOKENS(
     TrMayaTokens,
     ,
-    TR_MAYA_MATERIALS TR_MAYA_STANDARD_SURFACE TR_MAYA_FILE TR_MAYA_UV);
+    TR_MAYA_MATERIALS TR_MAYA_NODES TR_MAYA_STANDARD_SURFACE TR_MAYA_FILE TR_MAYA_UV
+        TR_MAYA_PRIMVAR);
 
 #ifdef WANT_MATERIALX_TRANSLATORS
 
@@ -188,13 +206,31 @@ TF_DECLARE_PUBLIC_TOKENS(
     ((contextName, "mtlx")) \
     ((niceName, "MaterialX shading")) \
     ((exportDescription, "Exports bound shaders as a MaterialX UsdShade network.")) \
-    ((importDescription, "Search for a MaterialX UsdShade network to import."))
+    ((importDescription, "Search for a MaterialX UsdShade network to import.")) \
+    ((ConstructorPrefix, "MayaCTOR")) \
+    ((CombinePrefix, "ND_combine"))
+
 
 #define TR_MTLX_NODE_DEFS \
+    (MayaND_lambert_surfaceshader) \
+    (MayaND_phong_surfaceshader) \
+    (MayaND_blinn_surfaceshader) \
+    (MayaND_place2dTexture_vector2) \
+    (MayaND_fileTexture_float) \
+    (MayaND_fileTexture_color3) \
+    (MayaND_fileTexture_color4) \
+    (MayaND_fileTexture_vector2) \
+    (MayaND_fileTexture_vector3) \
+    (MayaND_fileTexture_vector4) \
+    (MayaND_clamp_vector3) \
+    (LdkND_FloatCorrect_float) \
+    (LdkND_ColorCorrect_color4) \
     (ND_standard_surface_surfaceshader) \
     (ND_UsdPreviewSurface_surfaceshader) \
     (ND_image_float) \
     (ND_image_vector2) \
+    (ND_image_vector3) \
+    (ND_image_vector4) \
     (ND_image_color3) \
     (ND_image_color4) \
     (ND_geompropvalue_vector2) \
@@ -254,6 +290,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (uaddressmode) \
     (vaddressmode) \
     (filtertype) \
+    (constant) \
     (clamp) \
     (periodic) \
     (mirror) \
@@ -262,6 +299,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (cubic)
 
 #define TR_MTLX_ATTRIBUTES \
+    (varnameStr) \
     (geomprop) \
     (channels) \
     (in) \

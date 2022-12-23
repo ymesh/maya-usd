@@ -39,6 +39,7 @@
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/pointBased.h>
 #include <pxr/usd/usdGeom/primvar.h>
+#include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdSkel/root.h>
 #include <pxr/usd/usdUtils/pipeline.h>
 
@@ -346,8 +347,11 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
     const UsdMayaJobExportArgs& exportArgs = _GetExportArgs();
 
     // Exporting reference object only once
-    if (usdTime.IsDefault() && exportArgs.exportReferenceObjects) {
-        UsdMayaMeshWriteUtils::exportReferenceMesh(primSchema, GetMayaObject());
+    if (usdTime.IsDefault() && exportArgs.referenceObjectMode != UsdMayaJobExportArgsTokens->none) {
+        UsdMayaMeshWriteUtils::exportReferenceMesh(
+            primSchema,
+            GetMayaObject(),
+            exportArgs.referenceObjectMode == UsdMayaJobExportArgsTokens->defaultToMesh);
     }
 
     // Write UsdSkel skeletal skinning data first, since this will
@@ -601,7 +605,7 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
 
     if (sdScheme == UsdGeomTokens->none) {
         // Polygonal mesh - export normals.
-        bool emitNormals = true; // Default to emitting normals if no tagging.
+        bool emitNormals = false; // Skip writing normals if no tagging.
         UsdMayaMeshReadUtils::getEmitNormalsTag(finalMesh, &emitNormals);
         if (emitNormals) {
             UsdMayaMeshWriteUtils::writeNormalsData(
@@ -625,7 +629,12 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
     // == Write UVSets as Vec2f Primvars
     if (exportArgs.exportMeshUVs) {
         UsdMayaMeshWriteUtils::writeUVSetsAsVec2fPrimvars(
-            finalMesh, primSchema, usdTime, _GetSparseValueWriter());
+            finalMesh,
+            primSchema,
+            usdTime,
+            _GetSparseValueWriter(),
+            exportArgs.preserveUVSetNames,
+            exportArgs.remapUVSetsTo);
     }
 
     // == Gather ColorSets
@@ -799,6 +808,14 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
             _GetSparseValueWriter());
     }
 
+#if MAYA_API_VERSION >= 20220000
+
+    if (exportArgs.exportComponentTags) {
+        UsdMayaMeshWriteUtils::exportComponentTags(primSchema, GetMayaObject());
+    }
+
+#endif
+
     return true;
 }
 
@@ -824,8 +841,8 @@ void PxrUsdTranslators_MeshWriter::cleanupPrimvars()
     // If the indexed primvar doesn't need the unassigned value (because all
     // of the indices are assigned), then we can remove the unassigned value
     // and shift all the indices down.
-    const UsdGeomMesh primSchema(GetUsdPrim());
-    for (const UsdGeomPrimvar& primvar : primSchema.GetPrimvars()) {
+    const UsdGeomPrimvarsAPI pvAPI(GetUsdPrim());
+    for (const UsdGeomPrimvar& primvar : pvAPI.GetPrimvars()) {
         if (!primvar) {
             continue;
         }

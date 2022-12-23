@@ -35,10 +35,49 @@
 #include <mayaUsd/ufe/UsdTransform3dMatrixOp.h>
 #include <mayaUsd/ufe/UsdTransform3dMayaXformStack.h>
 #include <mayaUsd/ufe/UsdTransform3dPointInstance.h>
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4025)
+#include <mayaUsd/ufe/UsdTransform3dRead.h>
+#endif
+#endif
 #include <mayaUsd/ufe/UsdUIInfoHandler.h>
 #include <mayaUsd/ufe/UsdUIUfeObserver.h>
 #endif
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#define HAVE_PATH_MAPPING
+#include <mayaUsd/ufe/MayaUIInfoHandler.h>
+#include <mayaUsd/ufe/PulledObjectHierarchyHandler.h>
+#include <mayaUsd/ufe/UsdPathMappingHandler.h>
+#endif
+#if UFE_LIGHTS_SUPPORT
+#include <mayaUsd/ufe/UsdLightHandler.h>
+#endif
+#if UFE_MATERIALS_SUPPORT
+#include <mayaUsd/ufe/UsdMaterialHandler.h>
+#endif
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4020)
+#include <mayaUsd/ufe/UsdConnectionHandler.h>
+#endif
+#if (UFE_PREVIEW_VERSION_NUM >= 4023)
+#include <mayaUsd/ufe/UsdUINodeGraphNodeHandler.h>
+#endif
+#if UFE_PREVIEW_BATCHOPS_SUPPORT
+#include <mayaUsd/ufe/UsdBatchOpsHandler.h>
+#endif
+#if (UFE_PREVIEW_VERSION_NUM >= 4001)
+#include <mayaUsd/ufe/UsdShaderNodeDefHandler.h>
+#endif
+#endif
+#if defined(UFE_V4_FEATURES_AVAILABLE) && (UFE_PREVIEW_VERSION_NUM >= 4013)
+#include <mayaUsd/ufe/ProxyShapeCameraHandler.h>
+#endif
+#if UFE_SCENE_SEGMENT_SUPPORT
+#include <mayaUsd/ufe/ProxyShapeSceneSegmentHandler.h>
+#endif
+#include <mayaUsd/utils/editRouter.h>
 
+#include <maya/MSceneMessage.h>
 #include <ufe/hierarchyHandler.h>
 #include <ufe/runTimeMgr.h>
 #ifdef UFE_V2_FEATURES_AVAILABLE
@@ -49,8 +88,19 @@
 #include <string>
 
 namespace {
-int gRegistrationCount = 0;
+
+void exitingCallback(void* /* unusedData */)
+{
+    // Maya does not unload plugins on exit.  Make sure we perform an orderly
+    // cleanup, otherwise on program exit UFE static data structures may be
+    // cleaned up when this plugin is no longer alive.
+    MayaUsd::ufe::finalize(/* exiting = */ true);
 }
+
+int gRegistrationCount = 0;
+
+MCallbackId gExitingCbId = 0;
+} // namespace
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
@@ -80,6 +130,22 @@ Ufe::HierarchyHandler::Ptr g_MayaHierarchyHandler;
 Ufe::ContextOpsHandler::Ptr g_MayaContextOpsHandler;
 #endif
 
+#if UFE_SCENE_SEGMENT_SUPPORT
+// The normal Maya scene segment handler, which we decorate for ProxyShape support.
+// Keep a reference to it to restore on finalization.
+Ufe::SceneSegmentHandler::Ptr g_MayaSceneSegmentHandler;
+
+// The normal Maya camera handler, which we decorate for ProxyShape support.
+// Keep a reference to it to restore on finalization.
+Ufe::CameraHandler::Ptr g_MayaCameraHandler;
+#endif
+
+#ifdef HAVE_PATH_MAPPING
+Ufe::PathMappingHandler::Ptr g_MayaPathMappingHandler;
+
+Ufe::UIInfoHandler::Ptr g_MayaUIInfoHandler;
+#endif
+
 // Subject singleton for observation of all USD stages.
 StagesSubject::Ptr g_StagesSubject;
 
@@ -99,21 +165,27 @@ MStatus initialize()
         return MS::kSuccess;
 
     // Replace the Maya hierarchy handler with ours.
-    g_MayaRtid = Ufe::RunTimeMgr::instance().getId(kMayaRunTimeName);
+    auto& runTimeMgr = Ufe::RunTimeMgr::instance();
+    g_MayaRtid = runTimeMgr.getId(kMayaRunTimeName);
 #if !defined(NDEBUG)
     assert(g_MayaRtid != 0);
 #endif
     if (g_MayaRtid == 0)
         return MS::kFailure;
 
-    g_MayaHierarchyHandler = Ufe::RunTimeMgr::instance().hierarchyHandler(g_MayaRtid);
+    g_MayaHierarchyHandler = runTimeMgr.hierarchyHandler(g_MayaRtid);
     auto proxyShapeHierHandler = ProxyShapeHierarchyHandler::create(g_MayaHierarchyHandler);
-    Ufe::RunTimeMgr::instance().setHierarchyHandler(g_MayaRtid, proxyShapeHierHandler);
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    auto pulledObjectHierHandler = PulledObjectHierarchyHandler::create(proxyShapeHierHandler);
+    runTimeMgr.setHierarchyHandler(g_MayaRtid, pulledObjectHierHandler);
+#else
+    runTimeMgr.setHierarchyHandler(g_MayaRtid, proxyShapeHierHandler);
+#endif
 
 #ifdef UFE_V2_FEATURES_AVAILABLE
-    g_MayaContextOpsHandler = Ufe::RunTimeMgr::instance().contextOpsHandler(g_MayaRtid);
+    g_MayaContextOpsHandler = runTimeMgr.contextOpsHandler(g_MayaRtid);
     auto proxyShapeContextOpsHandler = ProxyShapeContextOpsHandler::create(g_MayaContextOpsHandler);
-    Ufe::RunTimeMgr::instance().setContextOpsHandler(g_MayaRtid, proxyShapeContextOpsHandler);
+    runTimeMgr.setContextOpsHandler(g_MayaRtid, proxyShapeContextOpsHandler);
 #endif
 
 #ifdef UFE_V2_FEATURES_AVAILABLE
@@ -125,6 +197,40 @@ MStatus initialize()
     handlers.contextOpsHandler = UsdContextOpsHandler::create();
     handlers.uiInfoHandler = UsdUIInfoHandler::create();
     handlers.cameraHandler = UsdCameraHandler::create();
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if UFE_LIGHTS_SUPPORT
+    handlers.lightHandler = UsdLightHandler::create();
+#endif
+#if UFE_MATERIALS_SUPPORT
+    handlers.materialHandler = UsdMaterialHandler::create();
+#endif
+#if (UFE_PREVIEW_VERSION_NUM >= 4020)
+    handlers.connectionHandler = UsdConnectionHandler::create();
+#endif
+#if (UFE_PREVIEW_VERSION_NUM >= 4023)
+    handlers.uiNodeGraphNodeHandler = UsdUINodeGraphNodeHandler::create();
+#endif
+#if UFE_PREVIEW_BATCHOPS_SUPPORT
+    handlers.batchOpsHandler = UsdBatchOpsHandler::create();
+#endif
+#if (UFE_PREVIEW_VERSION_NUM >= 4001)
+    handlers.nodeDefHandler = UsdShaderNodeDefHandler::create();
+#endif
+#endif
+
+#if UFE_SCENE_SEGMENT_SUPPORT
+    // set up the SceneSegmentHandler
+    g_MayaSceneSegmentHandler = Ufe::RunTimeMgr::instance().sceneSegmentHandler(g_MayaRtid);
+    auto proxyShapeSceneSegmentHandler
+        = ProxyShapeSceneSegmentHandler::create(g_MayaSceneSegmentHandler);
+    Ufe::RunTimeMgr::instance().setSceneSegmentHandler(g_MayaRtid, proxyShapeSceneSegmentHandler);
+#endif
+#if defined(UFE_V4_FEATURES_AVAILABLE) && (UFE_PREVIEW_VERSION_NUM >= 4013)
+    // set up the ProxyShapeCameraHandler
+    g_MayaCameraHandler = Ufe::RunTimeMgr::instance().cameraHandler(g_MayaRtid);
+    auto proxyShapeCameraHandler = ProxyShapeCameraHandler::create(g_MayaCameraHandler);
+    Ufe::RunTimeMgr::instance().setCameraHandler(g_MayaRtid, proxyShapeCameraHandler);
+#endif
 
     // USD has a very flexible data model to support 3d transformations --- see
     // https://graphics.pixar.com/usd/docs/api/class_usd_geom_xformable.html
@@ -140,23 +246,47 @@ MStatus initialize()
     // - Perform operations using the USD common transform API.
     // - Perform operations using a Maya transform stack.
     // - If the object is a point instance, use the point instance handler.
-    auto fallbackHandler = MayaUsd::ufe::UsdTransform3dFallbackMayaXformStackHandler::create();
-    auto matrixHandler = MayaUsd::ufe::UsdTransform3dMatrixOpHandler::create(fallbackHandler);
-    auto commonAPIHandler = MayaUsd::ufe::UsdTransform3dCommonAPIHandler::create(matrixHandler);
-    auto mayaStackHandler
-        = MayaUsd::ufe::UsdTransform3dMayaXformStackHandler::create(commonAPIHandler);
-    auto pointInstanceHandler
-        = MayaUsd::ufe::UsdTransform3dPointInstanceHandler::create(mayaStackHandler);
+    Ufe::Transform3dHandler::Ptr lastHandler
+        = MayaUsd::ufe::UsdTransform3dFallbackMayaXformStackHandler::create();
+    lastHandler = MayaUsd::ufe::UsdTransform3dMatrixOpHandler::create(lastHandler);
+    lastHandler = MayaUsd::ufe::UsdTransform3dCommonAPIHandler::create(lastHandler);
+    lastHandler = MayaUsd::ufe::UsdTransform3dMayaXformStackHandler::create(lastHandler);
+    lastHandler = MayaUsd::ufe::UsdTransform3dPointInstanceHandler::create(lastHandler);
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4025)
+    lastHandler = MayaUsd::ufe::UsdTransform3dReadHandler::create(lastHandler);
+#endif
+#endif
+    handlers.transform3dHandler = lastHandler;
 
-    handlers.transform3dHandler = pointInstanceHandler;
-
-    g_USDRtid = Ufe::RunTimeMgr::instance().register_(kUSDRunTimeName, handlers);
+    g_USDRtid = runTimeMgr.register_(kUSDRunTimeName, handlers);
     MayaUsd::ufe::UsdUIUfeObserver::create();
+
+#ifndef UFE_V4_FEATURES_AVAILABLE
+#if UFE_LIGHTS_SUPPORT
+    runTimeMgr.setLightHandler(g_USDRtid, UsdLightHandler::create());
+#endif
+#if UFE_MATERIALS_SUPPORT
+    runTimeMgr.setMaterialHandler(g_USDRtid, UsdMaterialHandler::create());
+#endif
+#endif
+
+#ifdef HAVE_PATH_MAPPING
+    g_MayaPathMappingHandler = runTimeMgr.pathMappingHandler(g_MayaRtid);
+    auto pathMappingHndlr = UsdPathMappingHandler::create();
+    runTimeMgr.setPathMappingHandler(g_MayaRtid, pathMappingHndlr);
+
+    // Replace any existing info handler with our own.
+    g_MayaUIInfoHandler = runTimeMgr.uiInfoHandler(g_MayaRtid);
+    auto uiInfoHandler = MayaUIInfoHandler::create();
+    runTimeMgr.setUIInfoHandler(g_MayaRtid, uiInfoHandler);
+#endif
+
 #else
     auto usdHierHandler = UsdHierarchyHandler::create();
     auto usdTrans3dHandler = UsdTransform3dHandler::create();
     auto usdSceneItemOpsHandler = UsdSceneItemOpsHandler::create();
-    g_USDRtid = Ufe::RunTimeMgr::instance().register_(
+    g_USDRtid = runTimeMgr.register_(
         kUSDRunTimeName, usdHierHandler, usdTrans3dHandler, usdSceneItemOpsHandler);
 #endif
 
@@ -171,29 +301,59 @@ MStatus initialize()
     // Register for UFE string to path service using path component separator '/'
     UFE_V2(Ufe::PathString::registerPathComponentSeparator(g_USDRtid, '/');)
 
+    // Initialize edit router registry with default routers.
+    auto defaults = defaultEditRouters();
+    for (const auto& entry : defaults) {
+        registerEditRouter(entry.first, entry.second);
+    }
+
+    gExitingCbId = MSceneMessage::addCallback(MSceneMessage::kMayaExiting, exitingCallback);
+
     return MS::kSuccess;
 }
 
-MStatus finalize()
+MStatus finalize(bool exiting)
 {
+    auto& runTimeMgr = Ufe::RunTimeMgr::instance();
+
     // If more than one plugin still has us registered, do nothing.
-    if (gRegistrationCount-- > 1)
+    if (gRegistrationCount-- > 1 && !exiting)
         return MS::kSuccess;
 
     // Restore the normal Maya hierarchy handler, and unregister.
-    Ufe::RunTimeMgr::instance().setHierarchyHandler(g_MayaRtid, g_MayaHierarchyHandler);
+    runTimeMgr.setHierarchyHandler(g_MayaRtid, g_MayaHierarchyHandler);
 #ifdef UFE_V2_FEATURES_AVAILABLE
     // Restore the normal Maya context ops handler (can be empty).
     if (g_MayaContextOpsHandler)
-        Ufe::RunTimeMgr::instance().setContextOpsHandler(g_MayaRtid, g_MayaContextOpsHandler);
+        runTimeMgr.setContextOpsHandler(g_MayaRtid, g_MayaContextOpsHandler);
     g_MayaContextOpsHandler.reset();
 
     MayaUsd::ufe::UsdUIUfeObserver::destroy();
 #endif
-    Ufe::RunTimeMgr::instance().unregister(g_USDRtid);
+    runTimeMgr.unregister(g_USDRtid);
     g_MayaHierarchyHandler.reset();
 
+#if UFE_SCENE_SEGMENT_SUPPORT
+    Ufe::RunTimeMgr::instance().setSceneSegmentHandler(g_MayaRtid, g_MayaSceneSegmentHandler);
+    g_MayaSceneSegmentHandler.reset();
+
+    Ufe::RunTimeMgr::instance().setCameraHandler(g_MayaRtid, g_MayaCameraHandler);
+    g_MayaCameraHandler.reset();
+#endif
+
+#ifdef HAVE_PATH_MAPPING
+    // Remove the Maya path mapping handler that we added above.
+    runTimeMgr.setPathMappingHandler(g_MayaRtid, g_MayaPathMappingHandler);
+    g_MayaPathMappingHandler.reset();
+
+    // Remove the Maya path mapping handler that we added above.
+    runTimeMgr.setUIInfoHandler(g_MayaRtid, g_MayaUIInfoHandler);
+    g_MayaUIInfoHandler.reset();
+#endif
+
     g_StagesSubject.Reset();
+
+    MMessage::removeCallback(gExitingCbId);
 
     return MS::kSuccess;
 }

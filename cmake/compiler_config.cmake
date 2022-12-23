@@ -5,8 +5,9 @@ set(GNU_CLANG_FLAGS
     # we want to be as strict as possible
     -Wall
     $<$<BOOL:${BUILD_STRICT_MODE}>:-Werror>
+    $<$<CONFIG:DEBUG>:-fstack-check>
     # optimization
-    -msse3
+    -msse4.2
     # disable warnings
     -Wno-deprecated
     -Wno-deprecated-declarations
@@ -53,6 +54,9 @@ set(MSVC_FLAGS
     /wd4180
     # exporting STL classes
     /wd4251
+    # Set some warnings as errors (to make it similar to Linux)
+    /we4101
+    /we4189
 )
 
 set(MSVC_DEFINITIONS
@@ -102,7 +106,7 @@ function(mayaUsd_compile_config TARGET)
         if(IS_LINUX)
             target_compile_definitions(${TARGET}
                 PRIVATE
-                    _GLIBCXX_USE_CXX11_ABI=0 # USD is built with old ABI
+                    _GLIBCXX_USE_CXX11_ABI=$<IF:$<BOOL:${MAYA_LINUX_BUILT_WITH_CXX11_ABI}>,1,0>
             )
         endif()
     elseif(IS_MSVC)

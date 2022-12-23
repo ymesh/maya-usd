@@ -31,6 +31,15 @@ try:
 except ImportError:
     pass
 
+def connectUVNode(uv_node, file_node):
+    for att_name in (".coverage", ".translateFrame", ".rotateFrame",
+                    ".mirrorU", ".mirrorV", ".stagger", ".wrapU",
+                    ".wrapV", ".repeatUV", ".offset", ".rotateUV",
+                    ".noiseUV", ".vertexUvOne", ".vertexUvTwo",
+                    ".vertexUvThree", ".vertexCameraOne"):
+        cmds.connectAttr(uv_node + att_name, file_node + att_name, f=True)
+    cmds.connectAttr(uv_node + ".outUV", file_node + ".uvCoord", f=True)
+    cmds.connectAttr(uv_node + ".outUvFilterSize", file_node + ".uvFilterSize", f=True)
 
 class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
 
@@ -54,7 +63,8 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
     def testUsdPreviewSurfaceRoundtripMetallic(self):
         self.__testUsdPreviewSurfaceRoundtrip(metallic=True)
 
-    @unittest.skipUnless("mayaUtils" in globals() and mayaUtils.previewReleaseVersion() >= 126 and Usd.GetVersion() > (0, 21, 2), 'Requires MaterialX support.')
+    # Temporarily disabling since the import will be in a separate PR.
+    @unittest.skipUnless("mayaUtils" in globals() and mayaUtils.mayaMajorVersion() >= 2023 and Usd.GetVersion() > (0, 21, 2), 'Requires MaterialX support.')
     def testUsdPreviewSurfaceRoundtripMaterialX(self):
         self.__testUsdPreviewSurfaceRoundtrip(metallic=True,
                                               convertTo="MaterialX")
@@ -97,12 +107,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
                                      isColorManaged=True)
         uv_node = cmds.shadingNode("place2dTexture", asUtility=True)
 
-        for att_name in (".coverage", ".translateFrame", ".rotateFrame",
-                         ".mirrorU", ".mirrorV", ".stagger", ".wrapU",
-                         ".wrapV", ".repeatUV", ".offset", ".rotateUV",
-                         ".noiseUV", ".vertexUvOne", ".vertexUvTwo",
-                         ".vertexUvThree", ".vertexCameraOne"):
-            cmds.connectAttr(uv_node + att_name, file_node + att_name, f=True)
+        connectUVNode(uv_node, file_node)
 
         cmds.connectAttr(file_node + ".outColor",
                          material_node + ".diffuseColor", f=True)
@@ -124,7 +129,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
 
         export_options = [
             "shadingMode=useRegistry",
-            "convertMaterialsTo={}".format(convertTo),
+            "convertMaterialsTo=[{}]".format(convertTo),
             "mergeTransformAndShape=1"
         ]
 
@@ -147,46 +152,52 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
 
         # Check the new sphere is in the new shading group:
         self.assertTrue(cmds.sets(
-            "pSphere1Shape",
-            isMember=material_sg))
+            "Test:pSphere1Shape",
+            isMember="Test:"+material_sg))
+
+        # MaterialX preserves the place2dTexture name:
+        p2dName = "place2dTexture"
+        if convertTo == "MaterialX":
+            p2dName = uv_node
 
         # Check that we have no spurious "Looks" transform
-        expectedTr = set(['front', 'persp', 'side', 'top', 'pSphere1'])
+        expectedTr = set(['front', 'persp', 'side', 'top', 'Test:pSphere1'])
         allTr = set(cmds.ls(tr=True))
         self.assertEqual(allTr, expectedTr)
 
         # Check connections:
         self.assertEqual(
-            cmds.connectionInfo(material_node+".outColor", dfs=True),
-            [material_sg+".surfaceShader"])
+            cmds.connectionInfo("Test:"+material_node+".outColor", dfs=True),
+            ["Test:"+material_sg+".surfaceShader"])
         self.assertEqual(
-            cmds.connectionInfo(material_node+".diffuseColor", sfd=True),
-            file_node+".outColor")
+            cmds.connectionInfo("Test:"+material_node+".diffuseColor", sfd=True),
+            "Test:"+file_node+".outColor")
         self.assertEqual(
-            cmds.connectionInfo(file_node+".wrapU", sfd=True),
-            "place2dTexture.wrapU")
+            cmds.connectionInfo("Test:"+file_node+".wrapU", sfd=True),
+            "Test:%s.wrapU"%p2dName)
 
         # Check values:
-        self.assertAlmostEqual(cmds.getAttr(material_node+".ior"), 2)
-        self.assertAlmostEqual(cmds.getAttr(material_node+".roughness"),
+        self.assertAlmostEqual(cmds.getAttr("Test:"+material_node+".ior"), 2)
+        self.assertAlmostEqual(cmds.getAttr("Test:"+material_node+".roughness"),
                                0.25)
-        self.assertAlmostEqual(cmds.getAttr(material_node+".opacityThreshold"),
+        self.assertAlmostEqual(cmds.getAttr("Test:"+material_node+".opacityThreshold"),
                                0.5)
-        self.assertEqual(cmds.getAttr(material_node+".specularColor"),
+        self.assertEqual(cmds.getAttr("Test:"+material_node+".specularColor"),
                          [(0.125, 0.25, 0.75)])
 
-        self.assertEqual(cmds.getAttr(material_node+".useSpecularWorkflow"), int(not metallic))
+        self.assertEqual(cmds.getAttr("Test:"+material_node+".useSpecularWorkflow"), int(not metallic))
 
-        self.assertEqual(cmds.getAttr(file_node+".defaultColor"),
+        self.assertEqual(cmds.getAttr("Test:"+file_node+".defaultColor"),
                          [(0.5, 0.25, 0.125)])
-        self.assertEqual(cmds.getAttr(file_node+".colorSpace"), "ACEScg")
-        self.assertEqual(cmds.getAttr(file_node+".colorSpace"), "ACEScg")
-        imported_path = cmds.getAttr(file_node+".fileTextureName")
+        self.assertEqual(cmds.getAttr("Test:"+file_node+".colorSpace"), "ACEScg")
+        self.assertEqual(cmds.getAttr("Test:"+file_node+".colorSpace"), "ACEScg")
+        imported_path = cmds.getAttr("Test:"+file_node+".fileTextureName")
         # imported path will be absolute:
         self.assertFalse(imported_path.startswith(".."))
-        self.assertEqual(imported_path.lower(), original_path.lower())
-        self.assertEqual(cmds.getAttr("place2dTexture.wrapU"), 0)
-        self.assertEqual(cmds.getAttr("place2dTexture.wrapV"), 1)
+        self.assertEqual(os.path.normpath(imported_path.lower()),
+                         os.path.normpath(original_path.lower()))
+        self.assertEqual(cmds.getAttr("Test:%s.wrapU"%p2dName), 0)
+        self.assertEqual(cmds.getAttr("Test:%s.wrapV"%p2dName), 1)
 
         # Make sure paths are relative in the USD file. Joining the directory
         # that the USD file lives in with the texture path should point us at
@@ -283,12 +294,12 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
                     options=";".join(import_options))
 
             # Check shading group name:
-            self.assertTrue(cmds.sets("pSphere1Shape", isMember=final_sg))
+            self.assertTrue(cmds.sets("Test:pSphere1Shape", isMember="Test:"+final_sg))
 
             # Check surface name:
             self.assertEqual(
-                cmds.connectionInfo(final_surf+".outColor", dfs=True),
-                [final_sg+".surfaceShader"])
+                cmds.connectionInfo("Test:"+final_surf+".outColor", dfs=True),
+                ["Test:"+final_sg+".surfaceShader"])
 
         self.assertTrue(mark.IsClean())
 
@@ -338,7 +349,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
 
             for i in ("", "1", "2"):
                 # We expect blinn, blinn1, blinn2
-                final_surf = "%s%s" % (preferred, i)
+                final_surf = "Test:%s%s" % (preferred, i)
                 # We expect blinnSG, blinn1SG, blinn2SG
                 final_sg = final_surf + "SG"
 
@@ -348,6 +359,93 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
                     [final_sg+".surfaceShader"])
 
         self.assertTrue(mark.IsClean())
+
+    def testUVReaderMerging(self):
+        """
+        Test that we produce a minimal number of UV readers
+        """
+        cmds.file(f=True, new=True)
+
+        sphere_xform = cmds.polySphere()[0]
+
+        material_node = cmds.shadingNode("usdPreviewSurface", asShader=True,
+                                            name="ss01")
+        material_sg = cmds.sets(renderable=True, noSurfaceShader=True,
+                                empty=True, name="ss01SG")
+        cmds.connectAttr(material_node+".outColor",
+                            material_sg+".surfaceShader", force=True)
+        cmds.sets(sphere_xform, e=True, forceElement=material_sg)
+
+        # One file with UVs connected to diffuse:
+        file_node = cmds.shadingNode("file", asTexture=True,
+                                     isColorManaged=True)
+        uv_node = cmds.shadingNode("place2dTexture", asUtility=True)
+        cmds.setAttr(uv_node + ".offsetU", 0.125)
+        cmds.setAttr(uv_node + ".offsetV", 0.5)
+        connectUVNode(uv_node, file_node)
+        cmds.connectAttr(file_node + ".outColor",
+                         material_node + ".diffuseColor", f=True)
+
+        # Another file, same UVs, connected to emissiveColor
+        file_node = cmds.shadingNode("file", asTexture=True,
+                                     isColorManaged=True)
+        connectUVNode(uv_node, file_node)
+        cmds.connectAttr(file_node + ".outColor",
+                         material_node + ".emissiveColor", f=True)
+
+        # Another file, no UVs, connected to metallic
+        file_node = cmds.shadingNode("file", asTexture=True,
+                                     isColorManaged=True)
+        cmds.connectAttr(file_node + ".outColorR",
+                         material_node + ".metallic", f=True)
+
+        # Another file, no UVs, connected to roughness
+        file_node = cmds.shadingNode("file", asTexture=True,
+                                     isColorManaged=True)
+        cmds.connectAttr(file_node + ".outColorR",
+                         material_node + ".roughness", f=True)
+        cmds.setAttr(file_node + ".offsetU", 0.25)
+        cmds.setAttr(file_node + ".offsetV", 0.75)
+
+        # Export to USD:
+        usd_path = os.path.abspath('MinimalUVReader.usda')
+        cmds.usdExport(mergeTransformAndShape=True,
+            file=usd_path,
+            shadingMode='useRegistry',
+            exportDisplayColor=True)
+
+        # We expect 2 primvar readers, and 2 st transforms:
+        stage = Usd.Stage.Open(usd_path)
+        mat_path = "/pSphere1/Looks/ss01SG/"
+
+        # Here are the expected connections in the produced USD file:
+        connections = [
+            # Source node, input, destination node:
+            ("ss01", "diffuseColor", "file1"),
+            ("file1", "st", "place2dTexture1_UsdTransform2d"),
+            ("place2dTexture1_UsdTransform2d", "in", "place2dTexture1"),
+
+            ("ss01", "emissiveColor", "file2"),
+            ("file2", "st", "place2dTexture1_UsdTransform2d"), # re-used
+            # Note that the transform name is derived from place2DTexture name.
+
+            ("ss01", "metallic", "file3"),
+            ("file3", "st", "shared_TexCoordReader"), # no UV in Maya.
+
+            ("ss01", "roughness", "file4"),
+            ("file4", "st", "file4_UsdTransform2d"), # xform on file node
+            ("file4_UsdTransform2d", "in", "shared_TexCoordReader")
+            # Note that the transform name is derived from file node name.
+        ]
+        for src_name, input_name, dst_name in connections:
+            src_prim = stage.GetPrimAtPath(mat_path + src_name)
+            self.assertTrue(src_prim)
+            src_shade = UsdShade.Shader(src_prim)
+            self.assertTrue(src_shade)
+            src_input = src_shade.GetInput(input_name)
+            self.assertTrue(src_input.HasConnectedSource())
+            (connect_api, out_name, _) = src_input.GetConnectedSource()
+            self.assertEqual(connect_api.GetPath(), mat_path + dst_name)
 
     @unittest.skipUnless("mayaUtils" in globals() and mayaUtils.mayaMajorVersion() >= 2020, 'Requires standardSurface node which appeared in 2020.')
     def testOpacityRoundtrip(self):
@@ -419,10 +517,10 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         opacity_names = ["opacityR", "opacityG", "opacityB"]
         for i, val in enumerate(expected):
             if (isinstance(val, float)):
-                for v in cmds.getAttr("standardSurface8.opacity")[0]:
+                for v in cmds.getAttr("Test:standardSurface8.opacity")[0]:
                     self.assertAlmostEqual(v, val)
             else:
-                cnx = cmds.listConnections("standardSurface{}".format(i+2),
+                cnx = cmds.listConnections("Test:standardSurface{}".format(i+2),
                                            d=False, c=True, p=True)
                 self.assertEqual(len(cnx), 6)
                 for j in range(int(len(cnx)/2)):
@@ -431,7 +529,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
                     self.assertEqual(len(k), 2)
                     self.assertEqual(len(v), 2)
                     self.assertTrue(k[1] in opacity_names)
-                    self.assertEqual(v[0], "file{}".format(i+1))
+                    self.assertEqual(v[0], "Test:file{}".format(i+1))
                     self.assertEqual(v[1], port_names[val])
 
         cmds.file(f=True, new=True)

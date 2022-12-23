@@ -17,6 +17,7 @@
 #define PROXY_RENDER_DELEGATE
 
 #include <mayaUsd/base/api.h>
+#include <mayaUsd/utils/util.h>
 
 #include <pxr/imaging/hd/engine.h>
 #include <pxr/imaging/hd/selection.h>
@@ -33,12 +34,13 @@
 #include <maya/MHWGeometryUtilities.h>
 #include <maya/MMessage.h>
 #include <maya/MObject.h>
+#include <maya/MObjectArray.h>
 #include <maya/MPxSubSceneOverride.h>
 
 #include <memory>
-
 #if defined(WANT_UFE_BUILD)
 #include <ufe/observer.h>
+#include <ufe/path.h>
 #endif
 
 // Conditional compilation due to Maya API gap.
@@ -57,6 +59,11 @@
     Logged as:
     https://github.com/PixarAnimationStudios/USD/issues/1243
 */
+#endif
+
+// Use the latest MPxSubSceneOverride API
+#ifndef OPENMAYA_MPXSUBSCENEOVERRIDE_LATEST_NAMESPACE
+#define OPENMAYA_MPXSUBSCENEOVERRIDE_LATEST_NAMESPACE OPENMAYA_MAJOR_NAMESPACE
 #endif
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -108,7 +115,9 @@ enum class UsdPointInstancesPickMode
     Use MAYAUSD_DISABLE_VP2_RENDER_DELEGATE  env variable before loading USD
     plugin to switch to the legacy rendering with draw override approach.
 */
-class ProxyRenderDelegate : public MHWRender::MPxSubSceneOverride
+class ProxyRenderDelegate
+    : public Autodesk::Maya::OPENMAYA_MPXSUBSCENEOVERRIDE_LATEST_NAMESPACE::MHWRender::
+          MPxSubSceneOverride
 {
     ProxyRenderDelegate(const MObject& obj);
 
@@ -147,6 +156,12 @@ public:
         const MIntersection& intersection,
         MDagPath&            dagPath) const override;
 
+#ifdef MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT
+    MAYAUSD_CORE_PUBLIC
+    bool
+    updateUfeIdentifiers(MHWRender::MRenderItem& renderItem, MStringArray& ufeIdentifiers) override;
+#endif
+
 #if defined(USD_IMAGING_API_VERSION) && USD_IMAGING_API_VERSION >= 14
     MAYAUSD_CORE_PUBLIC
     SdfPath GetScenePrimPath(
@@ -159,13 +174,65 @@ public:
 #endif
 
     MAYAUSD_CORE_PUBLIC
+    bool SupportPerInstanceDisplayLayers(const SdfPath& rprimId) const;
+
+    MAYAUSD_CORE_PUBLIC
     void SelectionChanged();
 
+#ifdef MAYA_HAS_DISPLAY_LAYER_API
     MAYAUSD_CORE_PUBLIC
-    const MColor& GetWireframeColor() const;
+    static void DisplayLayerAdded(MObject& node, void* clientData);
 
     MAYAUSD_CORE_PUBLIC
-    const MColor& GetSelectionHighlightColor(bool lead) const;
+    static void DisplayLayerRemoved(MObject& node, void* clientData);
+
+    MAYAUSD_CORE_PUBLIC
+    void DisplayLayerMembershipChanged(const MString& memberPath);
+
+    MAYAUSD_CORE_PUBLIC
+    void DisplayLayerDirty(MFnDisplayLayer& displayLayer);
+
+    MAYAUSD_CORE_PUBLIC
+    void DisplayLayerPathChanged(const Ufe::Path& oldPath, const Ufe::Path& newPath);
+
+    MAYAUSD_CORE_PUBLIC
+    void AddDisplayLayerToCache(MObject& displayLayerObj);
+
+    MAYAUSD_CORE_PUBLIC
+    void UpdateProxyShapeDisplayLayers();
+
+    MAYAUSD_CORE_PUBLIC
+    MObject GetDisplayLayer(const SdfPath& path);
+
+    MAYAUSD_CORE_PUBLIC
+    const MObjectArray& GetProxyShapeDisplayLayers() const { return _usdStageDisplayLayers; }
+#endif
+
+    MAYAUSD_CORE_PUBLIC
+    void ColorPrefsChanged();
+
+    MAYAUSD_CORE_PUBLIC
+    MColor GetWireframeColor();
+
+    MAYAUSD_CORE_PUBLIC
+    GfVec3f GetDefaultColor(const TfToken& className);
+
+    // Returns the selection highlight color for a given HdPrim type.
+    // If className is empty, returns the lead highlight color.
+    MAYAUSD_CORE_PUBLIC
+    MColor GetSelectionHighlightColor(const TfToken& className = TfToken());
+
+    MAYAUSD_CORE_PUBLIC
+    MColor GetTemplateColor(bool active);
+
+    MAYAUSD_CORE_PUBLIC
+    MColor GetReferenceColor();
+
+    MAYAUSD_CORE_PUBLIC
+    uint64_t GetFrameCounter() const { return _frameCounter; }
+
+    MAYAUSD_CORE_PUBLIC
+    bool NeedTexturedMaterials() const { return _needTexturedMaterials; }
 
     MAYAUSD_CORE_PUBLIC
     const HdSelection::PrimSelectionState* GetLeadSelectionState(const SdfPath& path) const;
@@ -178,6 +245,22 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     bool DrawRenderTag(const TfToken& renderTag) const;
+
+    MAYAUSD_CORE_PUBLIC
+    UsdImagingDelegate* GetUsdImagingDelegate() const;
+
+    MAYAUSD_CORE_PUBLIC
+    MDagPath GetProxyShapeDagPath() const;
+
+    // Takes in a path to instanced rprim and returns a path to the correspoding UsdPrim
+    MAYAUSD_CORE_PUBLIC
+    SdfPath GetPathInPrototype(const SdfPath& id);
+
+    MAYAUSD_CORE_PUBLIC
+    void UpdateInstancingMapEntry(
+        const SdfPath& oldPathInPrototype,
+        const SdfPath& newPathInPrototype,
+        const SdfPath& rprimId);
 
 #ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
     MAYAUSD_CORE_PUBLIC
@@ -198,13 +281,29 @@ private:
     void _UpdateSceneDelegate();
     void _Execute(const MHWRender::MFrameContext& frameContext);
 
-    bool _isInitialized();
-    void _PopulateSelection();
-    void _UpdateSelectionStates();
-    void _UpdateRenderTags();
-    void _ClearRenderDelegate();
+    typedef std::pair<MColor, std::atomic<uint64_t>>  MColorCache;
+    typedef std::pair<GfVec3f, std::atomic<uint64_t>> GfVec3fCache;
+
+    bool   _isInitialized();
+    void   _PopulateSelection();
+    void   _UpdateSelectionStates();
+    void   _UpdateRenderTags();
+    void   _ClearRenderDelegate();
+    MColor _GetDisplayColor(
+        MColorCache&  colorCache,
+        const char*   colorName,
+        bool          colorCorrection,
+        const MColor& defaultColor);
+#ifdef MAYA_HAS_DISPLAY_LAYER_API
+    bool _DirtyUfeSubtree(const Ufe::Path& rootPath);
+    bool _DirtyUfeSubtree(const MString& rootStr);
+    void _DirtyUsdSubtree(const UsdPrim& prim);
+#endif
+    void _RequestRefresh();
     SdfPathVector
     _GetFilteredRprims(HdRprimCollection const& collection, TfTokenVector const& renderTags);
+
+    void ComputeCombinedDisplayStyles(const unsigned int newDisplayStyle);
 
     /*! \brief  Hold all data related to the proxy shape.
 
@@ -264,11 +363,36 @@ private:
                          //!< really need it, but there doesn't seem to be a way to get
                          //!< synchronization running without it)
     std::unique_ptr<UsdImagingDelegate> _sceneDelegate; //!< USD scene delegate
+    const MHWRender::MFrameContext*     _currentFrameContext = nullptr;
+    std::map<TfToken, uint64_t>         _combinedDisplayStyles;
+    bool                                _needTexturedMaterials = false;
+
+    // maps from a path in USD prototype to the corresponding rprim paths
+    std::multimap<SdfPath, SdfPath> _instancingMap;
 
     bool _isPopulated {
         false
     }; //!< If false, scene delegate wasn't populated yet within render index
-    bool _selectionChanged { true }; //!< Whether there is any selection change or not
+    bool _selectionChanged { true };   //!< Whether there is any selection change or not
+    bool _colorPrefsChanged { false }; //!< Whether there is any color preferences change or not
+    bool _refreshRequested { false };  //!< True when a refresh has been requested.
+
+#ifdef MAYA_HAS_DISPLAY_LAYER_API
+    using NodeHandleToCallbackIdMap = UsdMayaUtil::MObjectHandleUnorderedMap<MCallbackId>;
+
+    MCallbackId               _mayaDisplayLayerAddedCallbackId { 0 };
+    MCallbackId               _mayaDisplayLayerRemovedCallbackId { 0 };
+    MCallbackId               _mayaDisplayLayerMembersCallbackId { 0 };
+    NodeHandleToCallbackIdMap _mayaDisplayLayerDirtyCallbackIds;
+
+    // for performace reasons we need to cache display layers' info
+    bool                       _usdStageDisplayLayersDirty = false;
+    MObjectArray               _usdStageDisplayLayers;
+    std::map<SdfPath, MObject> _usdPathToDisplayLayerMap;
+#endif
+
+    std::vector<MCallbackId> _mayaColorPrefsCallbackIds;
+
 #ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
     bool _selectionModeChanged { true }; //!< Whether the global selection mode has changed
     bool _snapToPoints { false };        //!< Whether point snapping is enabled or not
@@ -276,18 +400,70 @@ private:
         false
     }; //!< Whether point snapping should snap to selected objects
 #endif
-    MColor _wireframeColor; //!< Wireframe color assigned to the proxy shape
+
+    std::mutex _mayaCommandEngineMutex;
+    uint64_t   _frameCounter { 0 };
+
+    // The name of the currently used color space
+    MString _colorTransformId;
+
+    MColorCache  _wireframeColorCache { MColor(), 0 };
+    MColorCache  _activeMeshColorCache { MColor(), 0 };
+    MColorCache  _activeCurveColorCache { MColor(), 0 };
+    MColorCache  _activePointsColorCache { MColor(), 0 };
+    MColorCache  _leadColorCache { MColor(), 0 };
+    MColorCache  _activeTemplateColorCache { MColor(), 0 };
+    MColorCache  _dormantTemplateColorCache { MColor(), 0 };
+    MColorCache  _referenceColorCache { MColor(), 0 };
+    GfVec3fCache _dormantCurveColorCache { GfVec3f(), 0 };
+    GfVec3fCache _dormantPointsColorCache { GfVec3f(), 0 };
 
     //! A collection of Rprims to prepare render data for specified reprs
     std::unique_ptr<HdRprimCollection> _defaultCollection;
 
-    //! The render tag version used the last time render tags were updated
-    unsigned int _renderTagVersion { 0 }; // initialized to 1 in HdChangeTracker, so we'll always
-                                          // have an invalid version the first update.
-#ifdef ENABLE_RENDERTAG_VISIBILITY_WORKAROUND
-    unsigned int _visibilityVersion { 0 }; // initialized to 1 in HdChangeTracker.
-#endif
-    bool _taskRenderTagsValid {
+    // Version Id values saved from the last time we queried the HdChangeTracker.
+    // These values are initialized to 1 in HdChangeTracker
+    struct HdChangeTrackerVersions
+    {
+        //! The render tag version the last time _Execute was called
+        unsigned int _renderTag { 0 };
+        //! The visibility change count the last time _Execute was called
+        unsigned int _visibility { 0 };
+        //! The combined instancer index version and instance index change count the last time
+        //! _Execute was called
+        unsigned int _instanceIndex { 0 };
+
+        void sync(const HdChangeTracker& tracker)
+        {
+            _renderTag = tracker.GetRenderTagVersion();
+            _visibility = tracker.GetVisibilityChangeCount();
+            _instanceIndex = tracker.GetInstancerIndexVersion();
+        }
+
+        bool renderTagValid(const HdChangeTracker& tracker)
+        {
+            return _renderTag == tracker.GetRenderTagVersion();
+        }
+
+        bool visibilityValid(const HdChangeTracker& tracker)
+        {
+            return _visibility == tracker.GetVisibilityChangeCount();
+        }
+
+        bool instanceIndexValid(const HdChangeTracker& tracker)
+        {
+            return _instanceIndex == tracker.GetInstancerIndexVersion();
+        }
+
+        void reset()
+        {
+            _renderTag = 0;
+            _visibility = 0;
+            _instanceIndex = 0;
+        }
+    };
+    HdChangeTrackerVersions _changeVersions;
+    bool                    _taskRenderTagsValid {
         false
     }; //!< If false the render tags on the dummy render task are not the minimum set of tags.
 

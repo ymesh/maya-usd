@@ -23,10 +23,12 @@
 
 #include <pxr/pxr.h>
 #include <pxr/usd/sdf/path.h>
+#include <pxr/usd/usd/prim.h>
 
 #include <maya/MDagPath.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MObject.h>
+#include <ufe/path.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -34,7 +36,10 @@ class UsdMayaPrimUpdater
 {
 public:
     MAYAUSD_CORE_PUBLIC
-    UsdMayaPrimUpdater(const MFnDependencyNode& depNodeFn, const SdfPath& usdPath);
+    UsdMayaPrimUpdater(
+        const UsdMayaPrimUpdaterContext& context,
+        const MFnDependencyNode&         depNodeFn,
+        const Ufe::Path&                 path);
 
     // clang errors if you use "= default" here, due to const SdfPath member
     //    see: http://open-std.org/jtc1/sc22/wg21/docs/cwg_defects.html#253
@@ -49,71 +54,87 @@ public:
         Push = 1 << 0,
         Pull = 1 << 1,
         Clear = 1 << 2,
+        AutoPull = 1 << 3,
         All = Push | Pull | Clear
     };
 
-    MAYAUSD_CORE_PUBLIC
-    virtual bool Push(UsdMayaPrimUpdaterContext* context);
+    // pushCopySpecs result code.  Prune means success, but no further
+    // traversal should take place.
+    enum class PushCopySpecs
+    {
+        Failed,
+        Continue,
+        Prune
+    };
 
+    // Copy the pushed prim from the temporary srcLayer where it has been
+    // exported by push into the destination dstLayer which is in the scene.
     MAYAUSD_CORE_PUBLIC
-    virtual bool Pull(UsdMayaPrimUpdaterContext* context);
+    virtual PushCopySpecs pushCopySpecs(
+        UsdStageRefPtr srcStage,
+        SdfLayerRefPtr srcLayer,
+        const SdfPath& srcSdfPath,
+        UsdStageRefPtr dstStage,
+        SdfLayerRefPtr dstLayer,
+        const SdfPath& dstSdfPath);
 
+    /// Once prim updater decides that it wants to be auto-pulled each time
+    /// the registered schema type is present in the stage. This method
+    /// allows further customization to the logic. The default implementation
+    /// allways returns true.
     MAYAUSD_CORE_PUBLIC
-    virtual void Clear(UsdMayaPrimUpdaterContext* context);
+    virtual bool shouldAutoEdit() const;
 
-    /// The source Maya DAG path that we are consuming.
-    ///
-    /// If this prim updater is for a Maya DG node and not a DAG node, this will
-    /// return an invalid MDagPath.
+    /// Query to determine if the prim corresponding to this updater can be
+    /// edited as Maya.  The default implementation in this class checks
+    /// whether there is an importer for the prim.
     MAYAUSD_CORE_PUBLIC
-    const MDagPath& GetDagPath() const;
+    virtual bool canEditAsMaya() const;
+
+    /// Customize the pulled prim after pull import.  Default implementation in
+    /// this class is a no-op.
+    MAYAUSD_CORE_PUBLIC
+    virtual bool editAsMaya();
+
+    /// Discard edits done in Maya.  Implementation in this class removes the
+    /// Maya node.
+    MAYAUSD_CORE_PUBLIC
+    virtual bool discardEdits();
+
+    /// Clean up Maya data model at end of push.  Implementation in this class
+    /// calls discardEdits().
+    MAYAUSD_CORE_PUBLIC
+    virtual bool pushEnd();
 
     /// The MObject for the Maya node being updated by this updater.
     MAYAUSD_CORE_PUBLIC
-    const MObject& GetMayaObject() const;
+    const MObject& getMayaObject() const;
 
     /// The path of the destination USD prim which we are updating.
     MAYAUSD_CORE_PUBLIC
-    const SdfPath& GetUsdPath() const;
+    const Ufe::Path& getUfePath() const;
 
     /// The destination USD prim which we are updating.
-    template <typename T> UsdPrim GetUsdPrim(UsdMayaPrimUpdaterContext& context) const
-    {
-        UsdPrim usdPrim;
+    MAYAUSD_CORE_PUBLIC
+    UsdPrim getUsdPrim() const;
 
-        if (!TF_VERIFY(GetDagPath().isValid())) {
-            return usdPrim;
-        }
+    MAYAUSD_CORE_PUBLIC
+    const UsdMayaPrimUpdaterContext* getContext() const { return _context; }
 
-        T primSchema = T::Define(context.GetUsdStage(), GetUsdPath());
-        if (!TF_VERIFY(
-                primSchema,
-                "Could not define given updater type at path '%s'\n",
-                GetUsdPath().GetText())) {
-            return usdPrim;
-        }
-        usdPrim = primSchema.GetPrim();
-        if (!TF_VERIFY(
-                usdPrim,
-                "Could not get UsdPrim for given updater type at path '%s'\n",
-                primSchema.GetPath().GetText())) {
-            return usdPrim;
-        }
-
-        return usdPrim;
-    }
+    MAYAUSD_CORE_PUBLIC
+    static bool isAnimated(const MDagPath& path);
 
 private:
-    /// The MDagPath for the Maya node being updated, valid only for DAG node
-    /// prim updaters.
-    const MDagPath _dagPath;
-
     /// The MObject for the Maya node being updated, valid for both DAG and DG
-    /// node prim updaters.
+    /// node prim updaters.  Can be a null object if the updater was created
+    /// only for canEditAsMaya() query purposes.
     const MObject _mayaObject;
 
-    const SdfPath                           _usdPath;
-    const UsdMayaUtil::MDagPathMap<SdfPath> _baseDagToUsdPaths;
+    /// The proxy shape and destination Sdf path if provided.
+    const Ufe::Path _path;
+
+    /// Context giving access to the manager update state
+    const UsdMayaPrimUpdaterContext* _context { nullptr };
 };
 
 using UsdMayaPrimUpdaterSharedPtr = std::shared_ptr<UsdMayaPrimUpdater>;

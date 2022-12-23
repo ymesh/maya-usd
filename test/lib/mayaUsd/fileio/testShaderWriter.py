@@ -17,14 +17,7 @@
 
 import mayaUsd.lib as mayaUsdLib
 
-from pxr import Gf
-from pxr import Sdf
-from pxr import Tf
-from pxr import Vt
-from pxr import UsdGeom
-
 from maya import cmds
-import maya.api.OpenMaya as OpenMaya
 from maya import standalone
 
 import fixturesUtils, os
@@ -32,17 +25,38 @@ import fixturesUtils, os
 import unittest
 
 class shaderWriterTest(mayaUsdLib.ShaderWriter):
+    CanExportCalled = False
+    WriteCalledCount = 0
+    PostExportCalledCount = 0
+    GetShadingAttributeNameForMayaAttrNameCalledWith = ""
+    GetShadingAttributeForMayaAttrNameCalled = False
+    NotCalled = False
+
+    @classmethod
+    def CanExport(cls, exportArgs):
+        shaderWriterTest.CanExportCalled = True
+        return mayaUsdLib.ShaderWriter.ContextSupport.Supported
+
     def Write(self, usdTime):
-         print("shaderWriterTest.Write called")
+        shaderWriterTest.WriteCalledCount += 1
 
     def PostExport(self):
-         print("shaderWriterTest.PostExport called")
-         return False
+        shaderWriterTest.PostExportCalledCount += 1
+
+    def GetShadingAttributeNameForMayaAttrName(self, mayaAttrName):
+        shaderWriterTest.GetShadingAttributeNameForMayaAttrNameCalledWith = mayaAttrName
+        return mayaAttrName
+
+    def GetShadingAttributeForMayaAttrName(self, mayaAttrName, typeName):
+        shaderWriterTest.GetShadingAttributeForMayaAttrNameCalled = True
+        # return default value so that GetShadingAttributeNameForMayaAttrName gets called
+        return mayaUsdLib.ShaderWriter.GetShadingAttributeForMayaAttrName(self, mayaAttrName, typeName)
 
 class testShaderWriter(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        fixturesUtils.setUpClass(__file__)
+        cls.inputPath = fixturesUtils.setUpClass(__file__)
+        cls.temp_dir = os.path.abspath('.')
 
     @classmethod
     def tearDownClass(cls):
@@ -52,8 +66,57 @@ class testShaderWriter(unittest.TestCase):
         cmds.file(new=True, force=True)
 
     def testSimpleShaderWriter(self):
-        mayaUsdLib.ShaderWriter.Register(shaderWriterTest, "test")
+        mayaUsdLib.ShaderWriter.Register(shaderWriterTest, "phongE")
 
+        cmds.file(f=True, new=True)
+
+        sphere_xform = cmds.polySphere()[0]
+
+        # Need a phongE, with something connected to exercise the
+        # full API. The code will survive the test writer not even
+        # creating a UsdShade node for the phongE.
+        material_node = cmds.shadingNode("phongE", asShader=True,
+                                         name="phongE42")
+
+        material_sg = cmds.sets(renderable=True, noSurfaceShader=True,
+                                empty=True, name=material_node+"SG")
+        cmds.connectAttr(material_node+".outColor",
+                         material_sg+".surfaceShader", force=True)
+        cmds.sets(sphere_xform, e=True, forceElement=material_sg)
+
+        file_node = cmds.shadingNode("file", asTexture=True,
+                                     isColorManaged=True)
+        uv_node = cmds.shadingNode("place2dTexture", asUtility=True)
+
+        for att_name in (".coverage", ".translateFrame", ".rotateFrame",
+                         ".mirrorU", ".mirrorV", ".stagger", ".wrapU",
+                         ".wrapV", ".repeatUV", ".offset", ".rotateUV",
+                         ".noiseUV", ".vertexUvOne", ".vertexUvTwo",
+                         ".vertexUvThree", ".vertexCameraOne"):
+            cmds.connectAttr(uv_node + att_name, file_node + att_name, f=True)
+        cmds.connectAttr(uv_node + ".outUV", file_node + ".uvCoord", f=True)
+        cmds.connectAttr(uv_node + ".outUvFilterSize", file_node + ".uvFilterSize", f=True)
+
+        cmds.connectAttr(file_node + ".outColor",
+                         material_node + ".color", f=True)
+
+        cmds.setAttr(file_node+".fileTextureName", "unknown.png", type="string")
+
+        # Export to USD. We select MaterialX because all the writer
+        # there are reporting "Fallback", which allows our CanExport
+        # to always win with "Supported" (also helps that the current
+        # version of the MaterialX export does not support phongE).
+        usdFilePath = os.path.join(self.temp_dir,'testShaderWriter.usda')
+        cmds.mayaUSDExport(mergeTransformAndShape=True, file=usdFilePath,
+            shadingMode='useRegistry', convertMaterialsTo=['MaterialX'],
+            materialsScopeName='Materials')
+
+        self.assertTrue(shaderWriterTest.CanExportCalled)
+        self.assertEqual(shaderWriterTest.WriteCalledCount,1)
+        self.assertEqual(shaderWriterTest.PostExportCalledCount,1)
+        self.assertTrue(shaderWriterTest.GetShadingAttributeForMayaAttrNameCalled)
+        self.assertEqual(shaderWriterTest.GetShadingAttributeNameForMayaAttrNameCalledWith, 'color')
+        self.assertFalse(shaderWriterTest.NotCalled)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

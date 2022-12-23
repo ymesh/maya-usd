@@ -153,13 +153,19 @@ global proc int usdTranslatorExport (string $parent,
         checkBox -l "Export UVs" exportUVsCheckBox;
 
         checkBox -l "Export ColorSets" exportColorSetsCheckBox;
-        checkBox -l "Export Reference Objects" exportReferenceObjectsCheckBox;
+
+        optionMenuGrp -l "Reference Object Mode:" referenceObjectModePopup;
+            menuItem -l "Do Not Export" -ann "none";
+            menuItem -l "Export by Attribute" -ann "attributeOnly";
+            menuItem -l "Default to Mesh Points" -ann "defaultToMesh";
 
         checkBox -l "Export Visibility" exportVisibilityCheckBox;
 
         checkBox -l "Strip Namespaces" stripNamespacesCheckBox;
 
         checkBox -l "Renderable Only" renderableOnlyCheckBox;
+
+        checkBox -l "Worldspace Roots" worldspaceCheckBox;
 
         textFieldGrp -l "Filtered Node Types"
             -annotation ("Do not export nodes of this type, or their children;\n" +
@@ -238,8 +244,8 @@ global proc int usdTranslatorExport (string $parent,
                     usdTranslatorExport_SetCheckbox($optionBreakDown[1], "exportCollectionBasedBindingsCheckBox");
                 } else if ($optionBreakDown[0] == "exportColorSets") {
                     usdTranslatorExport_SetCheckbox($optionBreakDown[1], "exportColorSetsCheckBox");
-                } else if ($optionBreakDown[0] == "exportReferenceObjects") {
-                    usdTranslatorExport_SetCheckbox($optionBreakDown[1], "exportReferenceObjectsCheckBox");
+                } else if ($optionBreakDown[0] == "referenceObjectMode") {
+                    usdTranslatorExport_SetOptionMenuByAnnotation($optionBreakDown[1], "referenceObjectModePopup");
                 } else if ($optionBreakDown[0] == "renderableOnly") {
                     usdTranslatorExport_SetCheckbox($optionBreakDown[1], "renderableOnlyCheckBox");
                 } else if ($optionBreakDown[0] == "filterTypes") {
@@ -270,6 +276,8 @@ global proc int usdTranslatorExport (string $parent,
                     usdTranslatorExport_SetCheckbox($optionBreakDown[1], "eulerFilterCheckBox");
                 } else if ($optionBreakDown[0] == "staticSingleSample") {
                     usdTranslatorExport_SetCheckbox($optionBreakDown[1], "staticSingleSampleCheckBox");
+                } else if ($optionBreakDown[0] == "worldspace") {
+                    usdTranslatorExport_SetCheckbox($optionBreakDown[1], "worldspaceCheckBox");
                 } else if ($optionBreakDown[0] == "startTime") {
                     int $startTime=$optionBreakDown[1];
                     intFieldGrp -e -v1 $startTime startTimeField;
@@ -302,7 +310,7 @@ global proc int usdTranslatorExport (string $parent,
         $currentOptions = usdTranslatorExport_AppendFromTextField($currentOptions, "materialCollectionsPath", "materialCollectionsPathField");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "exportCollectionBasedBindings", "exportCollectionBasedBindingsCheckBox");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "exportColorSets", "exportColorSetsCheckBox");
-        $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "exportReferenceObjects", "exportReferenceObjectsCheckBox");
+        $currentOptions = usdTranslatorExport_AppendFromPopup($currentOptions, "referenceObjectMode", "referenceObjectModePopup");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "renderableOnly", "renderableOnlyCheckBox");
         $currentOptions = usdTranslatorExport_AppendFromTextField($currentOptions, "filterTypes", "filterTypesTextField");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "defaultCameras", "defaultCamerasCheckBox");
@@ -318,6 +326,7 @@ global proc int usdTranslatorExport (string $parent,
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "animation", "animationCheckBox");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "eulerFilter", "eulerFilterCheckBox");
         $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "staticSingleSample", "staticSingleSampleCheckBox");
+        $currentOptions = usdTranslatorExport_AppendFromCheckbox($currentOptions, "worldspace", "worldspaceCheckBox");
         $currentOptions = usdTranslatorExport_AppendFromIntField($currentOptions, "startTime", "startTimeField");
         $currentOptions = usdTranslatorExport_AppendFromIntField($currentOptions, "endTime", "endTimeField");
         $currentOptions = usdTranslatorExport_AppendFromFloatField($currentOptions, "frameStride", "frameStrideField");

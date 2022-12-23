@@ -70,20 +70,48 @@ void UsdUIUfeObserver::destroy()
 
 void UsdUIUfeObserver::operator()(const Ufe::Notification& notification)
 {
-    if (auto ac = dynamic_cast<const Ufe::AttributeValueChanged*>(&notification)) {
-        if (ac->name() == UsdGeomTokens->xformOpOrder) {
+    // Note: exceptions must not escape from this function, as the caller has no try
+    //       block and would crash Maya.
+    try {
+        Ufe::Path pathToRefresh;
+        if (auto ac = dynamic_cast<const Ufe::AttributeValueChanged*>(&notification)) {
+            if (ac->name() == UsdGeomTokens->xformOpOrder) {
+                pathToRefresh = ac->path();
+            }
+        }
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4024)
+        else if (auto aa = dynamic_cast<const Ufe::AttributeAdded*>(&notification)) {
+            pathToRefresh = aa->path();
+        } else if (auto ar = dynamic_cast<const Ufe::AttributeRemoved*>(&notification)) {
+            pathToRefresh = ar->path();
+        }
+#endif
+#endif
+
+        if (!pathToRefresh.empty()) {
             static const MString mainObjListCmd(
                 "if (`channelBox -exists mainChannelBox`) channelBox -q -mainObjectList "
                 "mainChannelBox;");
             MStringArray paths;
             if (MGlobal::executeCommand(mainObjListCmd, paths) && (paths.length() > 0)) {
-                auto ufePath = Ufe::PathString::path(paths[0].asChar());
-                if (ufePath.startsWith(ac->path())) {
+                // Skip any non-absolute Maya paths (we know non-Maya ufe paths will always
+                // start with |
+                MString firstPath = paths[0];
+                if (firstPath.substringW(0, 0) != "|")
+                    return;
+
+                auto ufePath = Ufe::PathString::path(firstPath.asChar());
+                if (ufePath.startsWith(pathToRefresh)) {
                     static const MString updateCBCmd("channelBox -e -update mainChannelBox;");
                     MGlobal::executeCommand(updateCBCmd);
                 }
             }
         }
+    } catch (const std::exception& ex) {
+        // Note: do not let the exception out, it would crash Maya.
+        TF_WARN(
+            "Exception during UFE notification about attribute changes in mayaUsd: %s", ex.what());
     }
 }
 

@@ -26,18 +26,49 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 class SdfPath;
 
-/// Exports Maya cameras to UsdGeomCamera.
+/// Pull & Push support for MayaReference
 class PxrUsdTranslators_MayaReferenceUpdater : public UsdMayaPrimUpdater
 {
 public:
     PxrUsdTranslators_MayaReferenceUpdater(
-        const MFnDependencyNode& depNodeFn,
-        const SdfPath&           usdPath);
+        const UsdMayaPrimUpdaterContext& context,
+        const MFnDependencyNode&         depNodeFn,
+        const Ufe::Path&                 path);
 
-    bool Pull(UsdMayaPrimUpdaterContext* context) override;
-    void Clear(UsdMayaPrimUpdaterContext* context) override;
+    // Behavior of discardEdits() is still T.B.D.  PPT, 6-Dec-2021.
+    MAYAUSD_CORE_PUBLIC
+    bool discardEdits() override;
+
+    // Unload the Maya reference.
+    MAYAUSD_CORE_PUBLIC
+    bool pushEnd() override;
+
+    /// Only auto-pull when Maya Reference path is set and it is explicitly requested via an
+    /// attribute on a prim
+    MAYAUSD_CORE_PUBLIC
+    bool shouldAutoEdit() const override;
+
+    /// Query to determine if the prim corresponding to this updater can be
+    /// edited as Maya.  The implementation in this class returns true.
+    MAYAUSD_CORE_PUBLIC
+    bool canEditAsMaya() const override;
+
+    /// Customize the pulled prim after pull import.  Pull import of the Maya
+    /// reference prim produces a loaded Maya reference, and a Maya transform
+    /// node that is a transformable stand-in for the Maya reference prim in
+    /// the Dag hierarchy.
+    MAYAUSD_CORE_PUBLIC
+    bool editAsMaya() override;
 
 protected:
+    MAYAUSD_CORE_PUBLIC
+    PushCopySpecs pushCopySpecs(
+        UsdStageRefPtr srcStage,
+        SdfLayerRefPtr srcLayer,
+        const SdfPath& srcSdfPath,
+        UsdStageRefPtr dtsStage,
+        SdfLayerRefPtr dstLayer,
+        const SdfPath& dstSdfPath) override;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

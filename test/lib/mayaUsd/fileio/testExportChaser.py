@@ -17,14 +17,9 @@
 
 import mayaUsd.lib as mayaUsdLib
 
-from pxr import Gf
-from pxr import Sdf
-from pxr import Tf
-from pxr import Vt
 from pxr import Usd
 
 from maya import cmds
-import maya.api.OpenMaya as OpenMaya
 from maya import standalone
 
 import fixturesUtils, os
@@ -36,6 +31,13 @@ class exportChaserTest(mayaUsdLib.ExportChaser):
     ExportFrameCalled = False
     PostExportCalled = False
     NotCalled = False
+    ChaserNames = set()
+    ChaserArgs = {}
+
+    def __init__(self, factoryContext, *args, **kwargs):
+        super(exportChaserTest, self).__init__(factoryContext, *args, **kwargs)
+        exportChaserTest.ChaserNames = factoryContext.GetJobArgs().chaserNames
+        exportChaserTest.ChaserArgs = factoryContext.GetJobArgs().allChaserArgs['test']
 
     def ExportDefault(self):
         exportChaserTest.ExportDefaultCalled = True
@@ -53,6 +55,7 @@ class testExportChaser(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         fixturesUtils.setUpClass(__file__)
+        cls.temp_dir = os.path.abspath('.')
 
     @classmethod
     def tearDownClass(cls):
@@ -65,17 +68,22 @@ class testExportChaser(unittest.TestCase):
         mayaUsdLib.ExportChaser.Register(exportChaserTest, "test")
         cmds.polySphere(r = 3.5, name='apple')
 
-        usdFilePath = os.path.join(os.environ.get('MAYA_APP_DIR'),'testExportChaser.usda')
+        usdFilePath = os.path.join(self.temp_dir,'testExportChaser.usda')
         cmds.usdExport(mergeTransformAndShape=True,
             file=usdFilePath,
             chaser=['test'],
+            chaserArgs=[
+                ('test', 'foo', 'tball'),
+                ('test', 'bar', 'ometer'),
+            ],
             shadingMode='none')
 
         self.assertTrue(exportChaserTest.ExportDefaultCalled)
         self.assertTrue(exportChaserTest.ExportFrameCalled)
         self.assertTrue(exportChaserTest.PostExportCalled)
         self.assertFalse(exportChaserTest.NotCalled)
-
+        self.assertTrue('test' in exportChaserTest.ChaserNames)
+        self.assertEqual(exportChaserTest.ChaserArgs,{'bar': 'ometer', 'foo': 'tball'})
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

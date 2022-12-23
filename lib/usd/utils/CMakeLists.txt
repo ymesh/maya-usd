@@ -8,7 +8,16 @@ add_library(${TARGET_NAME} SHARED)
 target_sources(${TARGET_NAME}
     PRIVATE
         DebugCodes.cpp
+        DiffAttributes.cpp
         DiffCore.cpp
+        DiffDictionaries.cpp
+        DiffLists.cpp
+        DiffMetadatas.cpp
+        DiffPrims.cpp
+        DiffRelationships.cpp
+        DiffValues.cpp
+        MergePrims.cpp
+        MergePrimsOptions.cpp
         util.cpp
 )
 
@@ -43,6 +52,7 @@ target_link_libraries(${TARGET_NAME}
         gf
         usd
         sdf
+        usdGeom
 )
 
 # -----------------------------------------------------------------------------
@@ -53,6 +63,9 @@ set(HEADERS
     Api.h
     DebugCodes.h
     DiffCore.h
+    DiffPrims.h
+    MergePrims.h
+    MergePrimsOptions.h
     ForwardDeclares.h
     SIMD.h
     util.h

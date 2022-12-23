@@ -16,6 +16,7 @@
 #include "readUtil.h"
 
 #include <mayaUsd/fileio/utils/adaptor.h>
+#include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/colorSpace.h>
 #include <mayaUsd/utils/converter.h>
 #include <mayaUsd/utils/util.h>
@@ -75,7 +76,7 @@ MObject UsdMayaReadUtil::FindOrCreateMayaAttr(
     const std::string&      attrName,
     const std::string&      attrNiceName)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic attribute find or creation");
     return FindOrCreateMayaAttr(typeName, variability, depNode, attrName, attrNiceName, modifier);
 }
 
@@ -355,6 +356,12 @@ MObject UsdMayaReadUtil::FindOrCreateMayaAttr(
     } else if (type.IsA<int>()) {
         return _FindOrCreateMayaNumericAttr(
             attrName, attrNiceName, MFnNumericData::kInt, keyable, usedAsColor, depNode, modifier);
+    } else if (type.IsA<unsigned int>()) {
+        return _FindOrCreateMayaNumericAttr(
+            attrName, attrNiceName, MFnNumericData::kInt, keyable, usedAsColor, depNode, modifier);
+    } else if (type.IsA<unsigned char>()) {
+        return _FindOrCreateMayaNumericAttr(
+            attrName, attrNiceName, MFnNumericData::kByte, keyable, usedAsColor, depNode, modifier);
     } else if (type.IsA<GfVec2i>()) {
         return _FindOrCreateMayaNumericAttr(
             attrName, attrNiceName, MFnNumericData::k2Int, keyable, usedAsColor, depNode, modifier);
@@ -480,7 +487,7 @@ bool UsdMayaReadUtil::SetMayaAttr(
     const VtValue& newValue,
     const bool     unlinearizeColors)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic Maya attribute modification");
     return SetMayaAttr(attrPlug, newValue, modifier, unlinearizeColors);
 }
 
@@ -662,10 +669,19 @@ bool UsdMayaReadUtil::SetMayaAttr(
             modifier.newPlugValueBool(attrPlug, b);
             ok = true;
         }
+    } else if (newValue.IsHolding<unsigned char>()) {
+        if (Converter::hasNumericType(attrPlug, MFnNumericData::kByte)) {
+            unsigned char b = newValue.Get<unsigned char>();
+            modifier.newPlugValueBool(attrPlug, b);
+            ok = true;
+        }
     } else if (
-        newValue.IsHolding<int>() || newValue.IsHolding<float>() || newValue.IsHolding<double>()) {
+        newValue.IsHolding<int>() || newValue.IsHolding<unsigned int>()
+        || newValue.IsHolding<float>() || newValue.IsHolding<double>()) {
         if (Converter::hasNumericType(attrPlug, MFnNumericData::kInt)) {
-            int i = VtValue::Cast<int>(newValue).Get<int>();
+            int i = newValue.IsHolding<unsigned int>()
+                ? int(VtValue::Cast<unsigned int>(newValue).Get<unsigned int>())
+                : VtValue::Cast<int>(newValue).Get<int>();
             modifier.newPlugValueInt(attrPlug, i);
             ok = true;
         } else if (Converter::hasNumericType(attrPlug, MFnNumericData::kFloat)) {
@@ -676,8 +692,12 @@ bool UsdMayaReadUtil::SetMayaAttr(
             double d = VtValue::Cast<double>(newValue).Get<double>();
             modifier.newPlugValueDouble(attrPlug, d);
             ok = true;
-        } else if (newValue.IsHolding<int>() && Converter::hasEnumType(attrPlug)) {
-            int i = VtValue::Cast<int>(newValue).Get<int>();
+        } else if (
+            (newValue.IsHolding<int>() || newValue.IsHolding<unsigned int>())
+            && Converter::hasEnumType(attrPlug)) {
+            int i = newValue.IsHolding<unsigned int>()
+                ? int(VtValue::Cast<unsigned int>(newValue).Get<unsigned int>())
+                : VtValue::Cast<int>(newValue).Get<int>();
             modifier.newPlugValueInt(attrPlug, i);
             ok = true;
         }
@@ -721,23 +741,33 @@ bool UsdMayaReadUtil::SetMayaAttr(
             ok = true;
         }
     } else if (newValue.IsHolding<GfVec2d>()) {
+        GfVec2d        v = newValue.Get<GfVec2d>();
+        MFnNumericData data;
         if (Converter::hasNumericType(attrPlug, MFnNumericData::k2Double)) {
-            GfVec2d        v = newValue.Get<GfVec2d>();
-            MFnNumericData data;
-            MObject        dataObj = data.create(MFnNumericData::k2Double);
+            MObject dataObj = data.create(MFnNumericData::k2Double);
             data.setData2Double(v[0], v[1]);
+            modifier.newPlugValue(attrPlug, dataObj);
+            ok = true;
+        } else if (Converter::hasNumericType(attrPlug, MFnNumericData::k2Float)) {
+            MObject dataObj = data.create(MFnNumericData::k2Float);
+            data.setData2Float(v[0], v[1]);
             modifier.newPlugValue(attrPlug, dataObj);
             ok = true;
         }
     } else if (newValue.IsHolding<GfVec3d>()) {
+        GfVec3d v = newValue.Get<GfVec3d>();
+        if (unlinearizeColors) {
+            v = _ConvertVec(attrPlug, v);
+        }
+        MFnNumericData data;
         if (Converter::hasNumericType(attrPlug, MFnNumericData::k3Double)) {
-            GfVec3d v = newValue.Get<GfVec3d>();
-            if (unlinearizeColors) {
-                v = _ConvertVec(attrPlug, v);
-            }
-            MFnNumericData data;
-            MObject        dataObj = data.create(MFnNumericData::k3Double);
+            MObject dataObj = data.create(MFnNumericData::k3Double);
             data.setData3Double(v[0], v[1], v[2]);
+            modifier.newPlugValue(attrPlug, dataObj);
+            ok = true;
+        } else if (Converter::hasNumericType(attrPlug, MFnNumericData::k3Float)) {
+            MObject dataObj = data.create(MFnNumericData::k3Float);
+            data.setData3Float(v[0], v[1], v[2]);
             modifier.newPlugValue(attrPlug, dataObj);
             ok = true;
         }
@@ -788,7 +818,7 @@ bool UsdMayaReadUtil::SetMayaAttr(
 
 void UsdMayaReadUtil::SetMayaAttrKeyableState(MPlug& attrPlug, const SdfVariability variability)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic Maya attribute keyable state");
     SetMayaAttrKeyableState(attrPlug, variability, modifier);
 }
 
@@ -846,18 +876,51 @@ bool UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(
         if (includeAPINames.count(schemaName) == 0) {
             continue;
         }
-        if (UsdMayaAdaptor::SchemaAdaptor schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
-            for (const TfToken& attrName : schemaAdaptor.GetAttributeNames()) {
+        if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
+            for (const TfToken& attrName : schemaAdaptor->GetAttributeNames()) {
                 if (UsdAttribute attr = prim.GetAttribute(attrName)) {
                     VtValue               value;
                     constexpr UsdTimeCode t = UsdTimeCode::EarliestTime();
                     if (attr.HasAuthoredValue() && attr.Get(&value, t)) {
-                        schemaAdaptor.CreateAttribute(attrName).Set(value);
+                        schemaAdaptor->CreateAttribute(attrName).Set(value);
                     }
                 }
             }
         }
     }
+    return true;
+}
+
+bool UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(
+    const UsdMayaPrimReaderArgs& args,
+    UsdMayaPrimReaderContext&    context)
+{
+    const UsdPrim& usdPrim = args.GetUsdPrim();
+
+    UsdMayaAdaptor adaptor(args, context);
+    if (!adaptor) {
+        return false;
+    }
+
+    for (const TfToken& schemaName : usdPrim.GetAppliedSchemas()) {
+        if (args.GetIncludeAPINames().count(schemaName) == 0) {
+            continue;
+        }
+        if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
+            if (schemaAdaptor->CopyFromPrim(usdPrim, args, context)) {
+                continue;
+            }
+            for (const TfToken& attrName : schemaAdaptor->GetAttributeNames()) {
+                if (UsdAttribute attr = usdPrim.GetAttribute(attrName)) {
+                    if (attr.HasAuthoredValue()) {
+                        UsdMayaAttributeAdaptor mayaAttr = schemaAdaptor->CreateAttribute(attrName);
+                        mayaAttr.Set(attr, args, context);
+                    }
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -875,13 +938,12 @@ size_t UsdMayaReadUtil::ReadSchemaAttributesFromPrim(
     }
 
     size_t count = 0;
-    if (UsdMayaAdaptor::SchemaAdaptor schemaAdaptor
-        = adaptor.GetSchemaOrInheritedSchema(schemaType)) {
+    if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.GetSchemaOrInheritedSchema(schemaType)) {
         for (const TfToken& attrName : attributeNames) {
             if (UsdAttribute attr = prim.GetAttribute(attrName)) {
                 VtValue value;
                 if (attr.HasAuthoredValue() && attr.Get(&value, usdTime)) {
-                    if (schemaAdaptor.CreateAttribute(attrName).Set(value)) {
+                    if (schemaAdaptor->CreateAttribute(attrName).Set(value)) {
                         count++;
                     }
                 }

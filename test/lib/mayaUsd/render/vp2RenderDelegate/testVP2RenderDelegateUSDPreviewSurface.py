@@ -103,10 +103,17 @@ class testVP2RenderDelegateUSDPreviewSurface(imageUtils.ImageDiffingTestCase):
         panel = mayaUtils.activeModelPanel()
         cmds.modelEditor(panel, edit=True, lights=False, displayLights="all")
 
-        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) == 2:
+        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) >= 2:
             self.assertSnapshotClose("testMetallicResponseLightAPI2.png")
         else:
             self.assertSnapshotClose("testMetallicResponseLightAPI1.png")
+
+        # Flat shading requires V3 lighting API:
+        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) >= 3:
+            panel = mayaUtils.activeModelPanel()
+            cmds.modelEditor(panel, edit=True, displayLights="flat")
+            self.assertSnapshotClose("testMetallicResponseLightAPI3_flat.png")
+            cmds.modelEditor(panel, edit=True, displayLights="default")
 
     def testShadowsAndSSAO(self):
         cmds.file(force=True, new=True)
@@ -122,7 +129,7 @@ class testVP2RenderDelegateUSDPreviewSurface(imageUtils.ImageDiffingTestCase):
         white_transform = cmds.listRelatives(white_light, parent=True)[0]
         cmds.xform(white_transform, ro=(-35, 0, 0), ws=True)
 
-        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) == 2:
+        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) >= 2:
             light_api = "V2"
         else:
             light_api = "V1"
@@ -152,6 +159,9 @@ class testVP2RenderDelegateUSDPreviewSurface(imageUtils.ImageDiffingTestCase):
 
         testFile = testUtils.getTestScene("UsdPreviewSurface", "UsdTransform2dTest.usda")
         mayaUtils.createProxyFromFile(testFile)
+
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, edit=True, displayTextures=True)
 
         self.assertSnapshotClose('UsdTransform2dTest.png')
 
@@ -187,7 +197,7 @@ class testVP2RenderDelegateUSDPreviewSurface(imageUtils.ImageDiffingTestCase):
         panel = mayaUtils.activeModelPanel()
         cmds.modelEditor(panel, edit=True, lights=False, displayLights="all")
 
-        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) == 2:
+        if int(os.getenv("MAYA_LIGHTAPI_VERSION")) >= 2:
             light_api = "V2"
         else:
             light_api = "V1"
@@ -204,7 +214,34 @@ class testVP2RenderDelegateUSDPreviewSurface(imageUtils.ImageDiffingTestCase):
         testFile = testUtils.getTestScene("UsdPreviewSurface", "TestFallbackColor.usda")
         mayaUtils.createProxyFromFile(testFile)
 
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, edit=True, displayTextures=True)
+
         self.assertSnapshotClose('TestFallbackColor.png')
+
+    def testImportDisplayColor(self):
+        """Tests that the import of the USD preview surface containing a connected displayColor
+        primvar reader shader node is imported with vertex colours for textured display"""
+        cmds.file(force=True, new=True)
+        mayaUtils.loadPlugin("mayaUsdPlugin")
+
+        # Turn on textured display and focus in on the subject
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, e=1, displayTextures=1)
+        cmds.dolly("persp", abs=True, d=3.2)
+
+        # Import the USD file
+        testFile = testUtils.getTestScene("UsdPreviewSurface", "DisplayColorCube.usda")
+        options = ["shadingMode=[[useRegistry,UsdPreviewSurface]]",
+                   "primPath=/",
+                   "preferredMaterial=none"]
+        cmds.file(testFile, i=True, type="USD Import",
+                  ignoreVersion=True, ra=True, mergeNamespacesOnClash=False,
+                  namespace="Test", pr=True, importTimeRange="combine",
+                  options=";".join(options))
+
+        # Snapshot and assert similarity
+        self.assertSnapshotClose('DisplayColorCube.png')
 
 
 if __name__ == '__main__':

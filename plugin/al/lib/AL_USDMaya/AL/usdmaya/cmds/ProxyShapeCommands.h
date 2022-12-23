@@ -60,6 +60,10 @@ public:
     /// \param  args the valid argument data base
     /// \return the stage from the proxy shape specified in the selected command arguments
     UsdStageRefPtr getShapeNodeStage(const MArgDatabase& args);
+
+protected:
+    /// utility func to create the arg database
+    MArgDatabase makeDatabase(const MArgList& args);
 };
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -203,69 +207,6 @@ public:
 private:
     bool    isUndoable() const override;
     MStatus doIt(const MArgList& args) override;
-    MStatus redoIt() override;
-};
-
-//----------------------------------------------------------------------------------------------------------------------
-/// \brief  ProxyShapeSelect
-/// \ingroup commands
-//----------------------------------------------------------------------------------------------------------------------
-class ProxyShapeSelect : public ProxyShapeCommandBase
-{
-    nodes::SelectionUndoHelper* m_helper;
-
-public:
-    ProxyShapeSelect()
-        : m_helper(0)
-    {
-    }
-    ~ProxyShapeSelect() { delete m_helper; }
-    AL_MAYA_DECLARE_COMMAND();
-
-private:
-    bool    isUndoable() const override;
-    MStatus doIt(const MArgList& args) override;
-    MStatus undoIt() override;
-    MStatus redoIt() override;
-    MStatus _redoIt(bool isInternal);
-};
-
-//----------------------------------------------------------------------------------------------------------------------
-/// \brief  ProxyShapeSelect
-/// \ingroup commands
-//----------------------------------------------------------------------------------------------------------------------
-class ProxyShapePostSelect : public ProxyShapeCommandBase
-{
-    nodes::ProxyShape* m_proxy;
-
-public:
-    ~ProxyShapePostSelect() { }
-    AL_MAYA_DECLARE_COMMAND();
-
-private:
-    bool    isUndoable() const override;
-    MStatus doIt(const MArgList& args) override;
-    MStatus undoIt() override;
-    MStatus redoIt() override;
-};
-
-//----------------------------------------------------------------------------------------------------------------------
-/// \brief  InternalProxyShapeSelect
-/// \ingroup commands
-//----------------------------------------------------------------------------------------------------------------------
-class InternalProxyShapeSelect : public ProxyShapeCommandBase
-{
-    nodes::ProxyShape*   m_proxy;
-    nodes::SelectionList m_previous;
-    nodes::SelectionList m_new;
-
-public:
-    AL_MAYA_DECLARE_COMMAND();
-
-private:
-    bool    isUndoable() const override;
-    MStatus doIt(const MArgList& args) override;
-    MStatus undoIt() override;
     MStatus redoIt() override;
 };
 

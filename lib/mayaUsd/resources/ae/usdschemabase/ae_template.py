@@ -21,36 +21,25 @@ import maya.cmds as cmds
 import mayaUsd.ufe as mayaUsdUfe
 import mayaUsd.lib as mayaUsdLib
 import maya.internal.common.ufe_ae.template as ufeAeTemplate
-from maya.common.ui import LayoutManager
+
+try:
+    # This helper class was only added recently to Maya.
+    import maya.internal.ufeSupport.attributes as attributes
+    hasAEPopupMenu = 'AEPopupMenu' in dir(attributes)
+except:
+    hasAEPopupMenu = False
+
+from maya.common.ui import LayoutManager, ParentManager
 from maya.common.ui import setClipboardData
 from maya.OpenMaya import MGlobal
 
 # We manually import all the classes which have a 'GetSchemaAttributeNames'
 # method so we have access to it and the 'pythonClass' method.
-from pxr import Usd, UsdGeom, UsdLux, UsdRender, UsdRi, UsdShade, UsdSkel, UsdUI, UsdVol, Kind, Tf
+from pxr import Usd, UsdGeom, UsdLux, UsdRender, UsdRi, UsdShade, UsdSkel, UsdUI, UsdVol, Kind, Tf, Sdr
 
 nameTxt = 'nameTxt'
 attrValueFld = 'attrValueFld'
 attrTypeFld = 'attrTypeFld'
-
-def getPrettyName(name):
-    # Put a space in the name when preceded by a capital letter.
-    # Exceptions: Number followed by capital
-    #             Multiple capital letters together
-    prettyName = str(name[0])
-    nbChars = len(name)
-    for i in range(1, nbChars):
-        if name[i].isupper() and not name[i-1].isdigit():
-            if (i < (nbChars-1)) and not name[i+1].isupper():
-                prettyName += ' '
-            prettyName += name[i]
-        elif name[i] == '_':
-            continue
-        else:
-            prettyName += name[i]
-
-    # Make each word start with an uppercase.
-    return prettyName.title()
 
 # Helper class to push/pop the Attribute Editor Template. This makes
 # sure that controls are aligned properly.
@@ -75,9 +64,36 @@ class UfeAttributesObserver(ufe.Observer):
         ufe.Attributes.removeObserver(self)
 
     def __call__(self, notification):
+        refreshEditor = False
         if isinstance(notification, ufe.AttributeValueChanged):
             if notification.name() == UsdGeom.Tokens.xformOpOrder:
-                mel.eval("evalDeferred -low \"refreshEditorTemplates\";")
+                refreshEditor = True
+        if hasattr(ufe, "AttributeAdded") and isinstance(notification, ufe.AttributeAdded):
+            refreshEditor = True
+        if hasattr(ufe, "AttributeRemoved") and isinstance(notification, ufe.AttributeRemoved):
+            refreshEditor = True
+        if refreshEditor:
+            mel.eval("evalDeferred -low \"refreshEditorTemplates\";")
+
+
+    def onCreate(self, *args):
+        ufe.Attributes.addObserver(self._item, self)
+
+    def onReplace(self, *args):
+        # Nothing needed here since we don't create any UI.
+        pass
+
+class UfeConnectionChangedObserver(ufe.Observer):
+    def __init__(self, item):
+        super(UfeConnectionChangedObserver, self).__init__()
+        self._item = item
+
+    def __del__(self):
+        ufe.Attributes.removeObserver(self)
+
+    def __call__(self, notification):
+        if hasattr(ufe, "AttributeConnectionChanged") and isinstance(notification, ufe.AttributeConnectionChanged):
+            mel.eval("evalDeferred -low \"refreshEditorTemplates\";")
 
     def onCreate(self, *args):
         ufe.Attributes.addObserver(self._item, self)
@@ -157,7 +173,7 @@ class MetaDataCustomControl(object):
             for k in allMetadata:
                 # All extra metadata is for display purposes only - it is not editable, but we
                 # allow keyboard focus so you copy the value.
-                mdLabel = getPrettyName(k) if self.useNiceName else k
+                mdLabel = mayaUsdLib.Util.prettifyName(k) if self.useNiceName else k
                 self.extraMetadata[k] = cmds.textFieldGrp(label=mdLabel, editable=False, enableKeyboardFocus=True)
 
         # Update all metadata values.
@@ -209,7 +225,34 @@ class MetaDataCustomControl(object):
 # Custom control for all array attribute.
 class ArrayCustomControl(object):
 
-    def __init__(self, prim, attrName, useNiceName):
+    if hasAEPopupMenu:
+        class ArrayAEPopup(attributes.AEPopupMenu):
+            '''Override the attribute AEPopupMenu so we can add extra menu items.
+            '''
+            def __init__(self, uiControl, ufeAttr, hasValue, values):
+                self.hasValue = hasValue
+                self.values = values
+                super(ArrayCustomControl.ArrayAEPopup, self).__init__(uiControl, ufeAttr)
+
+            def _copyAttributeValue(self):
+                setClipboardData(str(self.values))
+
+            def _printToScriptEditor(self):
+                MGlobal.displayInfo(str(self.values))
+
+            COPY_ACTION  = ('Copy Attribute Value', _copyAttributeValue, [])
+            PRINT_ACTION = ('Print to Script Editor', _printToScriptEditor, [])
+
+            HAS_VALUE_MENU = [COPY_ACTION, PRINT_ACTION]
+
+            def _buildMenu(self, addItemCmd):
+                super(ArrayCustomControl.ArrayAEPopup, self)._buildMenu(addItemCmd)
+                if self.hasValue:
+                    cmds.menuItem(divider=True, parent=self.popupMenu)
+                    self._buildFromActions(self.HAS_VALUE_MENU, addItemCmd)
+
+    def __init__(self, ufeAttr, prim, attrName, useNiceName):
+        self.ufeAttr = ufeAttr
         self.prim = prim
         self.attrName = attrName
         self.useNiceName = useNiceName
@@ -227,7 +270,7 @@ class ArrayCustomControl(object):
             typeNameStr = str(typeName.scalarType)
             typeNameStr += ("[" + str(len(values)) + "]") if hasValue else "[]"
 
-            attrLabel = getPrettyName(self.attrName) if self.useNiceName else self.attrName
+            attrLabel = mayaUsdLib.Util.prettifyName(self.attrName) if self.useNiceName else self.attrName
             singleWidgetWidth = mel.eval('global int $gAttributeEditorTemplateSingleWidgetWidth; $gAttributeEditorTemplateSingleWidgetWidth += 0')
             with AEUITemplate():
                 # See comment in ConnectionsCustomControl below for why nc=5.
@@ -236,15 +279,42 @@ class ArrayCustomControl(object):
                     cmds.text(nameTxt, al='right', label=attrLabel, annotation=attr.GetDocumentation())
                     cmds.textField(attrTypeFld, editable=False, text=typeNameStr, font='obliqueLabelFont', width=singleWidgetWidth*1.5)
 
+                if hasAEPopupMenu:
+                    pMenu = self.ArrayAEPopup(rl, self.ufeAttr, hasValue, values)
+                    self.updateUi(self.ufeAttr, rl)
+                    self.attachCallbacks(self.ufeAttr, rl, None)
+                else:
                     if hasValue:
                         cmds.popupMenu()
                         cmds.menuItem( label="Copy Attribute Value",   command=lambda *args: setClipboardData(str(values)) )
                         cmds.menuItem( label="Print to Script Editor", command=lambda *args: MGlobal.displayInfo(str(values)) )
+
         else:
             cmds.error(self.attrName + " must be an array!")
 
     def onReplace(self, *args):
         pass
+
+    # Only used when hasAEPopupMenu is True.
+    def updateUi(self, attr, uiControlName):
+        if not hasAEPopupMenu:
+            return
+
+        with ParentManager(uiControlName):
+            bgClr = attributes.getAttributeColorRGB(self.ufeAttr)
+            if bgClr:
+                isLocked = attributes.isAttributeLocked(self.ufeAttr)
+                cmds.textField(attrTypeFld, edit=True, backgroundColor=bgClr)
+
+    # Only used when hasAEPopupMenu is True.
+    def attachCallbacks(self, ufeAttr, uiControl, changedCommand):
+        if not hasAEPopupMenu:
+            return
+
+        # Create change callback for UFE locked/unlock synchronization.
+        cb = attributes.createChangeCb(self.updateUi, ufeAttr, uiControl)
+        cmds.textField(attrTypeFld, edit=True, parent=uiControl, changeCommand=cb)
+
 
 def showEditorForUSDPrim(usdPrimPathStr):
     # Simple helper to open the AE on input prim.
@@ -262,7 +332,15 @@ class ConnectionsCustomControl(object):
     def onCreate(self, *args):
         frontPath = self.path.popSegment()
         attr = self.prim.GetAttribute(self.attrName)
-        attrLabel = getPrettyName(self.attrName) if self.useNiceName else self.attrName
+        attrLabel = self.attrName
+        if self.useNiceName:
+            ufeItem = ufe.SceneItem(self.path)
+            ufeAttrS = ufe.Attributes.attributes(ufeItem)
+            ufeAttr = ufeAttrS.attribute(self.attrName)
+            attrLabel = str(ufeAttr.getMetadata("uiname"))
+
+            if not attrLabel:
+                attrLabel = mayaUsdLib.Util.prettifyName(self.attrName)
         attrType = attr.GetMetadata('typeName')
 
         singleWidgetWidth = mel.eval('global int $gAttributeEditorTemplateSingleWidgetWidth; $gAttributeEditorTemplateSingleWidgetWidth += 0')
@@ -324,6 +402,22 @@ class NoticeListener(object):
                 if hasattr(ctrl, 'refresh'):
                     ctrl.refresh()
 
+def connectionsCustomControlCreator(aeTemplate, c):
+    if aeTemplate.attributeHasConnections(c):
+        return ConnectionsCustomControl(aeTemplate.item, aeTemplate.prim, c, aeTemplate.useNiceName)
+    else:
+        return None
+
+def arrayCustomControlCreator(aeTemplate, c):
+    if aeTemplate.isArrayAttribute(c):
+        ufeAttr = aeTemplate.attrS.attribute(c)
+        return ArrayCustomControl(ufeAttr, aeTemplate.prim, c, aeTemplate.useNiceName)
+    else:
+        return None
+
+def defaultControlCreator(aeTemplate, c):
+    cmds.editorTemplate(addControl=[c])
+    return None
 
 # SchemaBase template class for categorization of the attributes.
 # We no longer use the base class ufeAeTemplate.Template as we want to control
@@ -369,17 +463,20 @@ class AETemplate(object):
             except:
                 pass
 
+    _controlCreators = [connectionsCustomControlCreator, arrayCustomControlCreator, defaultControlCreator]
+
+    @staticmethod
+    def prependControlCreator(controlCreator):
+        AETemplate._controlCreators.insert(0, controlCreator)
+
     def addControls(self, controls):
         for c in controls:
             if c not in self.suppressedAttrs:
-                if self.attributeHasConnections(c):
-                    connectionsCustomControl = ConnectionsCustomControl(self.item, self.prim, c, self.useNiceName)
-                    self.defineCustom(connectionsCustomControl, c)
-                elif self.isArrayAttribute(c):
-                    arrayCustomControl = ArrayCustomControl(self.prim, c, self.useNiceName)
-                    self.defineCustom(arrayCustomControl, c)
-                else:
-                    cmds.editorTemplate(addControl=[c])
+                for controlCreator in AETemplate._controlCreators:
+                    createdControl = controlCreator(self, c)
+                    if createdControl:
+                        self.defineCustom(createdControl, c)
+                        break
                 self.addedAttrs.append(c)
 
     def suppress(self, control):
@@ -434,7 +531,7 @@ class AETemplate(object):
                 schemaTypeName = schemaTypeName.replace(p, r, 1)
                 break
 
-        schemaTypeName = getPrettyName(schemaTypeName)
+        schemaTypeName = mayaUsdLib.Util.prettifyName(schemaTypeName)
 
         # if the schema name ends with "api", replace it with
         # "API" and make sure to only replace the last occurence.
@@ -443,6 +540,49 @@ class AETemplate(object):
             schemaTypeName = " API".join(schemaTypeName.rsplit("api", 1))
 
         return schemaTypeName
+
+    def createShaderAttributesSection(self):
+        """Use Sdr node information to populate the shader section"""
+        shader = UsdShade.Shader(self.prim)
+        nodeId = shader.GetIdAttr().Get()
+        if not nodeId:
+            return
+        nodeDef = Sdr.Registry().GetShaderNodeByIdentifier(nodeId)
+        if not nodeDef:
+            return
+        # Add a custom control to monitor for connection changed.
+        cnxObs = UfeConnectionChangedObserver(self.item)
+        self.defineCustom(cnxObs)
+        label = nodeDef.GetLabel()
+        if not label:
+            label = nodeDef.GetFamily()
+        # Hide all outputs:
+        for name in nodeDef.GetOutputNames():
+            self.suppress(UsdShade.Utils.GetFullName(name, UsdShade.AttributeType.Output))
+        with ufeAeTemplate.Layout(self, "Shader: " + mayaUsdLib.Util.prettifyName(label)):
+            pages = nodeDef.GetPages()
+            if len(pages) == 1 and not pages[0]:
+                pages = []
+            if pages:
+                for page in pages:
+                    collapse = False
+                    pageLabel = page
+                    if not page:
+                        pageLabel = 'Unused Shader Attributes'
+                        collapse = True
+                    attrsToAdd = []
+                    for name in nodeDef.GetPropertyNamesForPage(page):
+                        if nodeDef.GetInput(name):
+                            name = UsdShade.Utils.GetFullName(name, UsdShade.AttributeType.Input)
+                            attrsToAdd.append(name)
+                    if attrsToAdd:
+                        with ufeAeTemplate.Layout(self, mayaUsdLib.Util.prettifyName(pageLabel), collapse):
+                            self.addControls(attrsToAdd)
+            else:
+                attrsToAdd = []
+                for name in nodeDef.GetInputNames():
+                    attrsToAdd.append(UsdShade.Utils.GetFullName(name, UsdShade.AttributeType.Input))
+                self.addControls(attrsToAdd)
 
     def createTransformAttributesSection(self, sectionName, attrsToAdd):
         # Get the xformOp order and add those attributes (in order)
@@ -496,7 +636,8 @@ class AETemplate(object):
     def createAppliedSchemasSection(self):
         # USD version 0.21.2 is required because of
         # Usd.SchemaRegistry().GetPropertyNamespacePrefix()
-        if Usd.GetVersion() < (0, 21, 2):
+        usdVer = Usd.GetVersion()
+        if usdVer < (0, 21, 2):
             return
 
         showAppliedSchemasSection = False
@@ -514,7 +655,7 @@ class AETemplate(object):
         schemaAttrsDict = {}
         appliedSchemas = self.prim.GetAppliedSchemas()
         for schema in appliedSchemas:
-            if Usd.GetVersion() > (0, 21, 5):
+            if usdVer > (0, 21, 5):
                 typeAndInstance = Usd.SchemaRegistry().GetTypeNameAndInstance(schema)
             else:
                 typeAndInstance = Usd.SchemaRegistry().GetTypeAndInstance(schema)
@@ -529,9 +670,12 @@ class AETemplate(object):
                     attrList = schemaType.pythonClass.GetSchemaAttributeNames(False, instanceName)
                     # build the real attr name
                     # By example, collection:lightLink:includeRoot
-                    namespace = Usd.SchemaRegistry().GetPropertyNamespacePrefix(typeName)
-                    prefix = namespace + ":" + instanceName + ":"
-                    attrList = [prefix + i for i in attrList]
+                    # In 0.22.3 USD will now use the fully namespaced name in the schema definition,
+                    # so it does not need to be assembled.
+                    if usdVer < (0, 22, 3):
+                        namespace = Usd.SchemaRegistry().GetPropertyNamespacePrefix(typeName)
+                        prefix = namespace + ":" + instanceName + ":"
+                        attrList = [prefix + i for i in attrList]
 
                     if typeName in schemaAttrsDict:
                         schemaAttrsDict[typeName] += attrList
@@ -571,9 +715,12 @@ class AETemplate(object):
             sectionName = self.sectionNameFromSchema(schemaTypeName)
             if schemaType.pythonClass:
                 attrsToAdd = schemaType.pythonClass.GetSchemaAttributeNames(False)
-
+                if schemaTypeName == 'UsdShadeShader' and hasattr(ufe, "NodeDef"):
+                    # Shader attributes are special, but we requires Ufe knowledge of NodeDef to
+                    # show unauthored attributes.
+                    self.createShaderAttributesSection()
                 # We have a special case when building the Xformable section.
-                if schemaTypeName == 'UsdGeomXformable':
+                elif schemaTypeName == 'UsdGeomXformable':
                     self.createTransformAttributesSection(sectionName, attrsToAdd)
                 else:
                     sectionsToCollapse = ['Curves', 'Point Based', 'Geometric Prim', 'Boundable',

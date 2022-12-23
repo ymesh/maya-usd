@@ -1,5 +1,3 @@
-set(TARGET_NAME MAYAUSD_TEST)
-
 # Unit test scripts.
 set(TEST_SCRIPT_FILES
     testMayaUsdConverter.py
@@ -19,14 +17,7 @@ endif()
 # Interactive Unit test scripts.
 set(INTERACTIVE_TEST_SCRIPT_FILES
     testMayaUsdInteractiveLayerEditorCommands.py
-)
-
-# copy tests to ${CMAKE_CURRENT_BINARY_DIR} and run them from there
-add_custom_target(${TARGET_NAME} ALL)
-
-mayaUsd_copyFiles(${TARGET_NAME}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    FILES ${TEST_SCRIPT_FILES} ${INTERACTIVE_TEST_SCRIPT_FILES}
+    testMayaUsdInteractiveMaterialsScopeName.py
 )
 
 foreach(script ${TEST_SCRIPT_FILES})
@@ -59,15 +50,26 @@ endforeach()
 
 #
 # -----------------------------------------------------------------------------
+# Special interactive test to be able to start Maya with test configurations.
+# Can be started with VS Code but won't be part of test suites.
+# -----------------------------------------------------------------------------
+set(target _Interactive_Maya)
+add_test(
+    NAME "${target}"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMAND ${MAYA_EXECUTABLE}
+)
+
+set_property(TEST ${target} APPEND PROPERTY DISABLED True)
+set_property(TEST ${target} APPEND PROPERTY LABELS Debugging)
+set_property(TEST ${target} APPEND PROPERTY ENVIRONMENT "MAYA_MODULE_PATH=${CMAKE_INSTALL_PREFIX}")
+
+#
+# -----------------------------------------------------------------------------
 # Special case for plug tests
 # -----------------------------------------------------------------------------
 set(TEST_PLUG_FILES
     testMayaUsdPlugVersionCheck.py
-)
-
-mayaUsd_copyFiles(${TARGET_NAME}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    FILES ${TEST_PLUG_FILES}
 )
 
 foreach(script ${TEST_PLUG_FILES})

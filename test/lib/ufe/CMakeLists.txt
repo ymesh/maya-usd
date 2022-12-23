@@ -1,13 +1,11 @@
-set(TARGET_NAME UFE_TEST)
-
 # unit test scripts.  Note that testTRSBase.py is not a test case, but rather
 # a module providing a base class for other tests.
 set(TEST_SCRIPT_FILES
-    testDeleteCmd.py
     testMatrices.py
     testMayaPickwalk.py
     testPythonWrappers.py
     testSelection.py
+    testSelectionByArray.py
     testUfePythonImport.py
     testAttributeBlock.py
     testBlockedLayerEdit.py
@@ -16,6 +14,8 @@ set(TEST_SCRIPT_FILES
 set(TEST_SUPPORT_FILES
     testTRSBase.py
 )
+
+set(INTERACTIVE_TEST_SCRIPT_FILES "")
 
 if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
     list(APPEND TEST_SCRIPT_FILES
@@ -39,7 +39,13 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
         testTransform3dChainOfResponsibility.py
         testTransform3dTranslate.py
         testUIInfoHandler.py
+        testVisibilityCmd.py
         testObservableScene.py
+    )
+
+    list(APPEND INTERACTIVE_TEST_SCRIPT_FILES
+        testPixelMoveCmd.py
+        testUIIcons.py
     )
 endif()
 
@@ -49,6 +55,50 @@ if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
     )
 endif()
 
+if (UFE_SCENE_SEGMENT_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testSceneSegment.py
+    )
+endif()
+
+if (v4_BatchOps IN_LIST UFE_PREVIEW_FEATURES)
+    list(APPEND TEST_SCRIPT_FILES
+        testBatchOpsHandler.py
+    )
+endif()
+
+if(CMAKE_UFE_V4_FEATURES_AVAILABLE)
+    if (${UFE_PREVIEW_VERSION_NUM} GREATER_EQUAL 4020)
+        list(APPEND TEST_SCRIPT_FILES
+            testAttributeInfo.py
+            testConnections.py
+        )
+    endif()
+
+    if (${UFE_PREVIEW_VERSION_NUM} GREATER_EQUAL 4023)
+        list(APPEND TEST_SCRIPT_FILES
+            testUINodeGraphNode.py
+        )
+    endif()
+
+    if(CMAKE_WANT_MATERIALX_BUILD)
+        list(APPEND TEST_SCRIPT_FILES
+            testShaderNodeDef.py
+        )
+    endif()
+endif()
+
+if (UFE_LIGHTS_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testLight.py
+    )
+endif()
+
+if (UFE_MATERIALS_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testMaterial.py
+    )
+endif()
 if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20220100)
     list(APPEND TEST_SCRIPT_FILES
         testCamera.py
@@ -61,15 +111,22 @@ if(MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT)
     )
 endif()
 
-# copy ufe tests to ${CMAKE_CURRENT_BINARY_DIR} and run them from there
-add_custom_target(${TARGET_NAME} ALL)
+if(MAYA_ENABLE_NEW_PRIM_DELETE)
+    list(APPEND TEST_SCRIPT_FILES
+        testDeleteCmd.py
+    )
+else()
+    list(APPEND TEST_SCRIPT_FILES
+        testLegacyDeleteCmd.py
+    )
+endif()
 
-# copy all the resources and python scripts to build directory
-mayaUsd_copyDirectory(${TARGET_NAME}
-    SOURCE ${CMAKE_CURRENT_SOURCE_DIR}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    EXCLUDE "*.txt"
-)
+if (MAYA_HAS_DISPLAY_LAYER_API)
+    list(APPEND TEST_SCRIPT_FILES
+        testDisplayLayer.py
+        )
+endif()
+
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})
@@ -77,9 +134,23 @@ foreach(script ${TEST_SCRIPT_FILES})
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         PYTHON_MODULE ${target}
         ENV
-            "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/ufeTestPlugins"
+            "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_SOURCE_DIR}/ufeTestPlugins"
             "UFE_PREVIEW_VERSION_NUM=${UFE_PREVIEW_VERSION_NUM}"
             "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
+            "USD_HAS_COLOR4_SDR_SUPPORT=${USD_HAS_COLOR4_SDR_SUPPORT}"
+            "USD_HAS_MX_METADATA_SUPPORT=${USD_HAS_MX_METADATA_SUPPORT}"
+    )
+
+    # Add a ctest label to these tests for easy filtering.
+    set_property(TEST ${target} APPEND PROPERTY LABELS ufe)
+endforeach()
+
+foreach(script ${INTERACTIVE_TEST_SCRIPT_FILES})
+    mayaUsd_get_unittest_target(target ${script})
+    mayaUsd_add_test(${target}
+        INTERACTIVE
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        PYTHON_SCRIPT ${script}
     )
 
     # Add a ctest label to these tests for easy filtering.

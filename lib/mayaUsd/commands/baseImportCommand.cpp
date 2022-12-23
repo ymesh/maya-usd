@@ -18,6 +18,7 @@
 
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/jobs/readJob.h>
+#include <mayaUsd/undo/OpUndoItemMuting.h>
 #include <mayaUsd/utils/util.h>
 
 #include <pxr/pxr.h>
@@ -40,7 +41,7 @@ MSyntax MayaUSDImportCommand::createSyntax()
     MSyntax syntax;
 
     // These flags correspond to entries in
-    // UsdMayaJobImportArgs::GetDefaultDictionary.
+    // UsdMayaJobImportArgs::GetGuideDictionary.
     syntax.addFlag(
         kShadingModeFlag,
         UsdMayaJobImportArgsTokens->shadingMode.GetText(),
@@ -69,6 +70,9 @@ MSyntax MayaUSDImportCommand::createSyntax()
         kApiSchemaFlag, UsdMayaJobImportArgsTokens->apiSchema.GetText(), MSyntax::kString);
     syntax.makeFlagMultiUse(kApiSchemaFlag);
     syntax.addFlag(
+        kJobContextFlag, UsdMayaJobImportArgsTokens->jobContext.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kJobContextFlag);
+    syntax.addFlag(
         kExcludePrimvarFlag,
         UsdMayaJobImportArgsTokens->excludePrimvar.GetText(),
         MSyntax::kString);
@@ -81,7 +85,7 @@ MSyntax MayaUSDImportCommand::createSyntax()
     // Import chasers
     syntax.addFlag(
         kImportChaserFlag, UsdMayaJobImportArgsTokens->chaser.GetText(), MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobImportArgsTokens->chaser.GetText());
+    syntax.makeFlagMultiUse(kImportChaserFlag);
 
     syntax.addFlag(
         kImportChaserArgsFlag,
@@ -89,7 +93,7 @@ MSyntax MayaUSDImportCommand::createSyntax()
         MSyntax::kString,
         MSyntax::kString,
         MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobImportArgsTokens->chaserArgs.GetText());
+    syntax.makeFlagMultiUse(kImportChaserArgsFlag);
 
     // These are additional flags under our control.
     syntax.addFlag(kFileFlag, kFileFlagLong, MSyntax::kString);
@@ -97,8 +101,15 @@ MSyntax MayaUSDImportCommand::createSyntax()
     syntax.addFlag(kReadAnimDataFlag, kReadAnimDataFlagLong, MSyntax::kBoolean);
     syntax.addFlag(kFrameRangeFlag, kFrameRangeFlagLong, MSyntax::kDouble, MSyntax::kDouble);
     syntax.addFlag(kPrimPathFlag, kPrimPathFlagLong, MSyntax::kString);
-    syntax.addFlag(kVariantFlag, kVariantFlagLong, MSyntax::kString, MSyntax::kString);
-    syntax.makeFlagMultiUse(kVariantFlag);
+    syntax.addFlag(kRootVariantFlag, kRootVariantFlagLong, MSyntax::kString, MSyntax::kString);
+    syntax.makeFlagMultiUse(kRootVariantFlag);
+    syntax.addFlag(
+        kPrimVariantFlag,
+        kPrimVariantFlagLong,
+        MSyntax::kString,
+        MSyntax::kString,
+        MSyntax::kString);
+    syntax.makeFlagMultiUse(kPrimVariantFlag);
 
     syntax.addFlag(kVerboseFlag, kVerboseFlagLong, MSyntax::kNoArg);
 
@@ -122,6 +133,10 @@ std::unique_ptr<UsdMaya_ReadJob> MayaUSDImportCommand::initializeReadJob(
 /* virtual */
 MStatus MayaUSDImportCommand::doIt(const MArgList& args)
 {
+    // The import process has its own undo/redo recording.
+    // See: UsdMaya_ReadJob::Undo() and Redo().
+    OpUndoItemMuting undoInfoMuting;
+
     MStatus status;
 
     MArgDatabase argData(syntax(), args, &status);
@@ -133,7 +148,7 @@ MStatus MayaUSDImportCommand::doIt(const MArgList& args)
 
     // Get dictionary values.
     const VtDictionary userArgs = UsdMayaUtil::GetDictionaryFromArgDatabase(
-        argData, UsdMayaJobImportArgs::GetDefaultDictionary());
+        argData, UsdMayaJobImportArgs::GetGuideDictionary());
 
     std::string mFileName;
     if (argData.isFlagSet(kFileFlag)) {
@@ -168,16 +183,28 @@ MStatus MayaUSDImportCommand::doIt(const MArgList& args)
         mPrimPath = UsdMayaUtil::convert(tmpVal);
     }
 
-    // Add variant (variantSet, variant).  Multi-use
-    SdfVariantSelectionMap mVariants;
-    unsigned int           nbFlags = argData.numberOfFlagUses(kVariantFlag);
+    // Add root prim variant (variantSet, variant).  Multi-use
+    SdfVariantSelectionMap rootVariants;
+    unsigned int           nbFlags = argData.numberOfFlagUses(kRootVariantFlag);
     for (unsigned int i = 0; i < nbFlags; ++i) {
         MArgList tmpArgList;
-        status = argData.getFlagArgumentList(kVariantFlag, i, tmpArgList);
+        status = argData.getFlagArgumentList(kRootVariantFlag, i, tmpArgList);
         // Get the value
         MString tmpKey = tmpArgList.asString(0, &status);
         MString tmpVal = tmpArgList.asString(1, &status);
-        mVariants.emplace(tmpKey.asChar(), tmpVal.asChar());
+        rootVariants.emplace(tmpKey.asChar(), tmpVal.asChar());
+    }
+
+    // Add prim variant (prim path, variant set, variant selection). Multi-use
+    ImportData::PrimVariantSelections primVariants;
+    nbFlags = argData.numberOfFlagUses(kPrimVariantFlag);
+    for (unsigned int i = 0; i < nbFlags; ++i) {
+        MArgList tmpArgList;
+        status = argData.getFlagArgumentList(kPrimVariantFlag, i, tmpArgList);
+        PXR_NS::SdfPath primPath { tmpArgList.asString(0, &status).asChar() };
+        std::string     variantName { tmpArgList.asString(1, &status).asChar() };
+        std::string     variantSel { tmpArgList.asString(2, &status).asChar() };
+        primVariants[primPath].emplace(variantName, variantSel);
     }
 
     bool readAnimData = false;
@@ -210,7 +237,8 @@ MStatus MayaUSDImportCommand::doIt(const MArgList& args)
         timeInterval);
 
     MayaUsd::ImportData importData(mFileName);
-    importData.setRootVariantSelections(std::move(mVariants));
+    importData.setRootVariantSelections(std::move(rootVariants));
+    importData.setPrimVariantSelections(std::move(primVariants));
     importData.setRootPrimPath(mPrimPath);
 
     _readJob = initializeReadJob(importData, jobArgs);

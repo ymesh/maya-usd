@@ -22,6 +22,7 @@
 #include <pxr/imaging/hd/geomSubset.h>
 #include <pxr/imaging/hd/mesh.h>
 #include <pxr/pxr.h>
+#include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/timeCode.h>
 
 #include <maya/MBoundingBox.h>
@@ -46,6 +47,8 @@ public:
         MString _renderItemName;
         //! Pointer of the render item for fast access. No ownership is held.
         MHWRender::MRenderItem* _renderItem { nullptr };
+        //! If the render item is shared, this will store the shared counter
+        std::shared_ptr<size_t> _sharedRenderItemCounter;
 
         //! The geom subset this render item represents. _geomSubset.id is StdPath::EmptyPath() if
         //! there is no geom subset.
@@ -53,10 +56,17 @@ public:
 
         //! Render item index buffer - use when updating data
         std::unique_ptr<MHWRender::MIndexBuffer> _indexBuffer;
+        bool                                     _indexBufferValid { false };
         //! Bounding box of the render item.
         MBoundingBox _boundingBox;
         //! World matrix of the render item.
         MMatrix _worldMatrix;
+
+        //! Instance transforms for the render item
+        std::shared_ptr<MMatrixArray> _instanceTransforms;
+
+        //! Instance colors for the render item
+        std::shared_ptr<MFloatArray> _instanceColors;
 
         //! Shader instance assigned to the render item. No ownership is held.
         MHWRender::MShaderInstance* _shader { nullptr };
@@ -155,13 +165,9 @@ public:
      */
     MHWRender::MRenderItem* GetRenderItem() const { return GetRenderItemData()._renderItem; }
 
-    /*! \brief  Set pointer of the associated render item
+    /*! \brief Shares a single render item between the source and the destination draw items
      */
-    void SetRenderItem(MHWRender::MRenderItem* item)
-    {
-        TF_VERIFY(_renderItems.size() == 0);
-        AddRenderItem(item);
-    }
+    void ShareRenderItem(HdVP2DrawItem& sourceDrawItem);
 
     /*! \brief  Set a usage to the render item
      */
@@ -190,6 +196,8 @@ public:
     /*! \brief  Get the dirty bits of the draw items.
      */
     HdDirtyBits GetDirtyBits() const { return GetRenderItemData().GetDirtyBits(); }
+
+    static SdfPath RenderItemToPrimPath(const MHWRender::MRenderItem& item);
 
 private:
     /*

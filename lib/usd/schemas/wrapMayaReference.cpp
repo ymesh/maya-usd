@@ -23,7 +23,10 @@
 #include <pxr/usd/usd/pyConversions.h>
 #include <pxr/usd/usd/schemaBase.h>
 
-#include <boost/python.hpp>
+#include <boost/python/class.hpp>
+#include <boost/python/def.hpp>
+#include <boost/python/operators.hpp>
+#include <boost/python/self.hpp>
 
 #include <string>
 
@@ -50,6 +53,19 @@ _CreateMayaNamespaceAttr(MayaUsd_SchemasMayaReference& self, object defaultVal, 
 {
     return self.CreateMayaNamespaceAttr(
         UsdPythonToSdfType(defaultVal, SdfValueTypeNames->String), writeSparsely);
+}
+
+static UsdAttribute
+_CreateMayaAutoEditAttr(MayaUsd_SchemasMayaReference& self, object defaultVal, bool writeSparsely)
+{
+    return self.CreateMayaAutoEditAttr(
+        UsdPythonToSdfType(defaultVal, SdfValueTypeNames->Bool), writeSparsely);
+}
+
+static std::string _Repr(const MayaUsd_SchemasMayaReference& self)
+{
+    std::string primRepr = TfPyRepr(self.GetPrim());
+    return TfStringPrintf("MayaUsd_Schemas.MayaReference(%s)", primRepr.c_str());
 }
 
 } // anonymous namespace
@@ -97,7 +113,13 @@ void wrapMayaUsd_SchemasMayaReference()
             &_CreateMayaNamespaceAttr,
             (arg("defaultValue") = object(), arg("writeSparsely") = false))
 
-        ;
+        .def("GetMayaAutoEditAttr", &This::GetMayaAutoEditAttr)
+        .def(
+            "CreateMayaAutoEditAttr",
+            &_CreateMayaAutoEditAttr,
+            (arg("defaultValue") = object(), arg("writeSparsely") = false))
+
+        .def("__repr__", ::_Repr);
 
     _CustomWrapCode(cls);
 }

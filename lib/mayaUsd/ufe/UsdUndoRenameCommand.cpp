@@ -19,8 +19,10 @@
 #include "private/Utils.h"
 
 #include <mayaUsd/ufe/Utils.h>
+#include <mayaUsd/utils/loadRules.h>
 #include <mayaUsdUtils/util.h>
 
+#include <pxr/base/tf/stringUtils.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/usd/sdf/changeBlock.h>
 #include <pxr/usd/sdf/copyUtils.h>
@@ -62,30 +64,38 @@ namespace ufe {
 UsdUndoRenameCommand::UsdUndoRenameCommand(
     const UsdSceneItem::Ptr&  srcItem,
     const Ufe::PathComponent& newName)
+#if (UFE_PREVIEW_VERSION_NUM >= 4041)
+    : Ufe::SceneItemResultUndoableCommand()
+#else
     : Ufe::UndoableCommand()
+#endif
     , _ufeSrcItem(srcItem)
     , _ufeDstItem(nullptr)
     , _stage(_ufeSrcItem->prim().GetStage())
 {
-    const UsdPrim& prim = _stage->GetPrimAtPath(_ufeSrcItem->prim().GetPath());
+    const UsdPrim prim = _stage->GetPrimAtPath(_ufeSrcItem->prim().GetPath());
 
     ufe::applyCommandRestriction(prim, "rename");
 
-    // handle unique name for _newName
-    _newName = uniqueChildName(prim.GetParent(), newName.string());
-
-    // names are not allowed to start to digit numbers
-    if (std::isdigit(_newName.at(0))) {
-        _newName = prim.GetName();
+    // Handle trailing #: convert it to a number which will be increased as needed.
+    // Increasing the number to make it unique is handled in the function uniqueChildName
+    // below.
+    //
+    // Converting the # must be done before calling TfMakeValidIdentifier as it would
+    // convert it to a an underscore ('_').
+    std::string newNameStr = newName.string();
+    if (newNameStr.size() > 0 && newNameStr.back() == '#') {
+        newNameStr.back() = '1';
     }
 
-    // all special characters are replaced with `_`
-    const std::string specialChars { "~!@#$%^&*()-=+,.?`':{}|<>[]/ " };
-    std::replace_if(
-        _newName.begin(),
-        _newName.end(),
-        [&](auto c) { return std::string::npos != specialChars.find(c); },
-        '_');
+    // handle unique name for _newName If the name has not changed,
+    // the command does nothing and the destination item is the same
+    // as the source item.
+    const std::string validNewName = TfMakeValidIdentifier(newNameStr);
+    if (validNewName != prim.GetName())
+        _newName = uniqueChildName(prim.GetParent(), validNewName);
+    else
+        _ufeDstItem = srcItem;
 }
 
 UsdUndoRenameCommand::~UsdUndoRenameCommand() { }
@@ -100,6 +110,11 @@ UsdSceneItem::Ptr UsdUndoRenameCommand::renamedItem() const { return _ufeDstItem
 
 bool UsdUndoRenameCommand::renameRedo()
 {
+    // If the new name is the same as the current name, do nothing.
+    // This is the same behavior as the Maya rename command for Maya nodes.
+    if (_newName.empty())
+        return true;
+
     // get the stage's default prim path
     auto defaultPrimPath = _stage->GetDefaultPrim().GetPath();
 
@@ -118,6 +133,16 @@ bool UsdUndoRenameCommand::renameRedo()
             prim, SdfPath(ufeSiblingPath.getSegments()[1].string()));
         if (!status) {
             return false;
+        }
+
+        // Make sure the load state of the renamed prim will be preserved.
+        // We copy all rules that applied to it specifically and remove the rules
+        // that applied to it specifically.
+        {
+            auto fromPath = SdfPath(_ufeSrcItem->path().getSegments()[1].string());
+            auto destPath = SdfPath(ufeSiblingPath.getSegments()[1].string());
+            duplicateLoadRules(*_stage, fromPath, destPath);
+            removeRulesForPath(*_stage, fromPath);
         }
 
         // set the new name
@@ -144,6 +169,11 @@ bool UsdUndoRenameCommand::renameRedo()
 
 bool UsdUndoRenameCommand::renameUndo()
 {
+    // If the new name is the same as the current name, do nothing.
+    // This is the same behavior as the Maya rename command for Maya nodes.
+    if (_newName.empty())
+        return true;
+
     // get the stage's default prim path
     auto defaultPrimPath = _stage->GetDefaultPrim().GetPath();
 
@@ -163,6 +193,16 @@ bool UsdUndoRenameCommand::renameUndo()
             prim, SdfPath(ufeSiblingPath.getSegments()[1].string()));
         if (!status) {
             return false;
+        }
+
+        // Make sure the load state of the renamed prim will be preserved.
+        // We copy all rules that applied to it specifically and remove the rules
+        // that applied to it specifically.
+        {
+            auto fromPath = SdfPath(_ufeDstItem->path().getSegments()[1].string());
+            auto destPath = SdfPath(ufeSiblingPath.getSegments()[1].string());
+            duplicateLoadRules(*_stage, fromPath, destPath);
+            removeRulesForPath(*_stage, fromPath);
         }
 
         auto primSpec = MayaUsdUtils::getPrimSpecAtEditTarget(prim);

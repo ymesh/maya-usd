@@ -19,6 +19,7 @@
 import fixturesUtils
 import mayaUtils
 import testUtils
+from testUtils import assertVectorAlmostEqual
 import ufeUtils
 import usdUtils
 
@@ -26,12 +27,11 @@ import mayaUsd.ufe
 
 from pxr import Kind, Usd, UsdGeom, Vt
 
-from maya import cmds
+from maya import cmds, mel
 from maya import standalone
 
 import ufe
 
-import os
 import unittest
 
 def createStage():
@@ -130,8 +130,7 @@ class GroupCmdTestCase(unittest.TestCase):
         self.assertEqual("ballset.usda", layer.GetDisplayName())
         stage.SetEditTarget(layer)
 
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') > '3000'):
-
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
             globalSn = ufe.GlobalSelection.get()
             globalSn.append(ball5Item)
             globalSn.append(ball3Item)
@@ -155,12 +154,18 @@ class GroupCmdTestCase(unittest.TestCase):
         groupPath = ufe.Path([mayaPathSegment, usdUtils.createUfePathSegment("/Ball_set/Props/newGroup1")])
         self.assertEqual(globalSelection.front(), ufe.Hierarchy.createItem(groupPath))
 
+        # Group object (a.k.a parent) will be added to selection list. This behavior matches the native Maya group command.
+        globalSelection = ufe.GlobalSelection.get()
+
+        groupPath = ufe.Path([mayaPathSegment, usdUtils.createUfePathSegment("/Ball_set/Props/newGroup1")])
+        self.assertEqual(globalSelection.front(), ufe.Hierarchy.createItem(groupPath))
+
         parentChildrenPost = parentHierarchy.children()
         self.assertEqual(len(parentChildrenPost), 5)
 
         # The command will now append a number 1 at the end to match the naming
         # convention in Maya.
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') > '3000'):
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
             newGroupPath = parentPath + ufe.PathComponent(groupName)
         else:
             newGroupPath = parentPath + ufe.PathComponent("newGroup1")
@@ -177,13 +182,13 @@ class GroupCmdTestCase(unittest.TestCase):
         self.assertTrue(ball5Path not in childPaths)
         self.assertTrue(ball3Path not in childPaths)
         
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') > '3000'):
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
             cmds.undo()
         else:
             groupCmd.undo()
 
-        # gloabl selection should not be empty after undo.
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') > '3004'):
+        # global selection should not be empty after undo.
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
             self.assertEqual(len(globalSelection), 2)
         else:
             self.assertEqual(len(globalSelection), 1)
@@ -196,7 +201,7 @@ class GroupCmdTestCase(unittest.TestCase):
         self.assertTrue(ball5Path in childPathsUndo)
         self.assertTrue(ball3Path in childPathsUndo)
 
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') > '3000'):
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
             cmds.redo()
         else:
             groupCmd.redo()
@@ -362,14 +367,14 @@ class GroupCmdTestCase(unittest.TestCase):
             stage.GetPrimAtPath("/Ball_set/Props/Ball_6"),
             stage.GetPrimAtPath("/Sphere1")])
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '3005', 'testGroupAbsolute is only available in UFE preview version 0.3.5 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'testGroupAbsolute is only available in UFE v3 or greater.')
     def testGroupAbsolute(self):
         '''Verify -absolute flag.'''
 
         cmds.file(new=True, force=True)
 
          # create a stage
-        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage();
+        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage()
 
         # create a sphere generator
         sphereGen = SphereGenerator(1, contextOp, proxyShapePathStr)
@@ -399,13 +404,13 @@ class GroupCmdTestCase(unittest.TestCase):
                 "xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale")))
 
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '3005', 'testGroupRelative is only available in UFE preview version 0.3.5 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'testGroupRelative is only available in UFE v3 or greater.')
     def testGroupRelative(self):
         '''Verify -relative flag.'''
         cmds.file(new=True, force=True)
 
          # create a stage
-        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage();
+        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage()
 
         # create a sphere generator
         sphereGen = SphereGenerator(1, contextOp, proxyShapePathStr)
@@ -434,13 +439,13 @@ class GroupCmdTestCase(unittest.TestCase):
         self.assertFalse(newspherePrim.HasAttribute('xformOp:rotateXYZ'))
         self.assertFalse(newspherePrim.HasAttribute('xformOp:scale'))
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '3005', 'testGroupWorld is only available in UFE preview version 0.3.5 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'testGroupWorld is only available in UFE v3 or greater.')
     def testGroupWorld(self):
         '''Verify -world flag.'''
         cmds.file(new=True, force=True)
 
          # create a stage
-        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage();
+        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage()
 
         # create a sphere generator
         sphereGen = SphereGenerator(3, contextOp, proxyShapePathStr)
@@ -477,13 +482,13 @@ class GroupCmdTestCase(unittest.TestCase):
             stage.GetPrimAtPath("/group2/Sphere2"),
             stage.GetPrimAtPath("/group2/Sphere3")])
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '3005', 'testGroupUndoRedo is only available in UFE preview version 0.3.5 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'testGroupUndoRedo is only available in UFE v3 or greater.')
     def testGroupUndoRedo(self):
         '''Verify grouping after multiple undo/redo.'''
         cmds.file(new=True, force=True)
 
          # create a stage
-        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage();
+        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage()
 
         # create a sphere generator
         sphereGen = SphereGenerator(3, contextOp, proxyShapePathStr)
@@ -522,7 +527,116 @@ class GroupCmdTestCase(unittest.TestCase):
             stage.GetPrimAtPath("/group1/Sphere2"),
             stage.GetPrimAtPath("/group1/Sphere3")])
 
-    @unittest.skipIf(mayaUtils.previewReleaseVersion() < 128, 'Test requires fix in Maya Preview Release 128 or greater.')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'testGroupUndoRedo is only available in UFE v3 or greater.')
+    def testGroupPreserveLoadRules(self):
+        '''Verify load rules are preserved when grouping.'''
+        cmds.file(new=True, force=True)
+
+         # create a stage
+        (stage, proxyShapePathStr, proxyShapeItem, contextOp) = createStage()
+
+        # create a sphere generator
+        sphereGen = SphereGenerator(3, contextOp, proxyShapePathStr)
+
+        sphere1Path = sphereGen.createSphere()
+        sphere1Prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(sphere1Path))
+
+        sphere2Path = sphereGen.createSphere()
+        sphere2Prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(sphere2Path))
+
+        sphere3Path = sphereGen.createSphere()
+        sphere3Prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(sphere3Path))
+
+        # Setup the load rules:
+        #     /Sphere1 is unloaded
+        #     /Sphere2 is loaded
+        loadRules = stage.GetLoadRules()
+        loadRules.AddRule('/Sphere1', loadRules.NoneRule)
+        loadRules.AddRule('/Sphere2', loadRules.AllRule)
+        stage.SetLoadRules(loadRules)
+
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath('/Sphere1'))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath('/Sphere2'))
+
+        # group Sphere1, Sphere2, and Sphere3
+        groupName = cmds.group(ufe.PathString.string(sphere1Path),
+                               ufe.PathString.string(sphere2Path),
+                               ufe.PathString.string(sphere3Path))
+
+        # verify that groupItem has 3 children
+        groupItem = ufe.GlobalSelection.get().front()
+        groupHierarchy = ufe.Hierarchy.hierarchy(groupItem)
+        self.assertEqual(len(groupHierarchy.children()), 3)
+
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath('/group1/Sphere1'))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath('/group1/Sphere2'))
+
+        cmds.undo()
+
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath('/Sphere1'))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath('/Sphere2'))
+
+        cmds.redo()
+
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath('/group1/Sphere1'))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath('/group1/Sphere2'))
+
+    def testGroupLiftedRestrictions(self):
+        '''
+        Test that we can create a group in a stronger layer even though
+        the prim has been authored in a weaker layer.
+
+            1. Create a stage with a new layer.
+            2. Add a sub-layer.
+            3. Set the edit target to the new sub-layer.
+            4. Create an xform under the proxyShape node.
+            5. Set editTarget to the top layer.
+            6. Add a new prim under the xform, using the group command.
+            7. Previously this would have been denied, now we have lifted the restriction.
+        '''
+        cmds.file(new=True, force=True)
+
+        # 1. Create a stage with a new layer.
+        # 2. Add a sub-layer.
+        psPathStr, psPath, psItem, layers = usdUtils.createLayeredStage(2)
+
+        topLayer = layers[1]
+        subLayer = layers[2]
+
+        # 3. Set the edit target to the new sub-layer.
+        # 4. Create an xform under the proxyShape node.
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+        stage.SetEditTarget(subLayer)
+        stage.DefinePrim('/A', 'Xform')
+
+        psPathSegment = psPath.segments[0]
+        aPath = ufe.Path([psPathSegment, usdUtils.createUfePathSegment('/A')])
+        aItem = ufe.Hierarchy.createItem(aPath)
+
+        # 5. Set editTarget to the top layer.
+        stage.SetEditTarget(topLayer)
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+
+        # 6. Add a new prim under the xform, using the group command.
+        #    Note: we use an explicit create-group command because it is the only command
+        #          accessible from Python but the command as exposed by Maya requires a selection
+        #          so we create the command directly here to avoid that requirement.
+        aHier = ufe.Hierarchy.hierarchy(aItem)
+        if ufeUtils.ufeFeatureSetVersion() >= 3:
+            aHier.createGroup(ufe.PathComponent("newGroup"))
+        else:
+            aHier.createGroup(sn, ufe.PathComponent("newGroup"))
+        groupPath = aPath + ufe.PathComponent('newGroup1')
+        groupItem = ufe.Hierarchy.createItem(groupPath)
+
+        # 7. Verify the group creation succeeded.
+        aHier = ufe.Hierarchy.hierarchy(aItem)
+        self.assertTrue(aHier.hasChildren())
+        aChildren = aHier.children()
+        self.assertIn(groupItem, aChildren)
+
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testGroupHierarchy(self):
         '''Grouping a node and a descendant.'''
         # MAYA-112957: when grouping a node and its descendant, with the node
@@ -640,6 +754,184 @@ class GroupCmdTestCase(unittest.TestCase):
 
         children = hierarchyAfter()
         checkAfter(*children)
+
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
+    def testGroupHierarchyWithRenaming(self):
+        '''Grouping a node and a descendant when all descendants share the same name'''
+        # MAYA-113532: when grouping a node and its descendant sharing the same name, we need to
+        # detect the name conflicts and rename as we reparent into the group.
+
+        cmds.file(new=True, force=True)
+        import mayaUsd_createStageWithNewLayer
+
+        # Create the following hierarchy:
+        #
+        # ps
+        #  |_ A
+        #      |_ A
+        #          |_ A
+        #              |_ A
+        #                  |_ A
+        #
+        # And group them all at the same level, which implies renaming.
+
+        psPathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+        stage.DefinePrim('/A', 'Xform')
+        stage.DefinePrim('/A/B', 'Cube')
+        stage.DefinePrim('/A/A', 'Xform')
+        stage.DefinePrim('/A/A/C', 'Cone')
+        stage.DefinePrim('/A/A/A', 'Xform')
+        stage.DefinePrim('/A/A/A/D', 'Sphere')
+        stage.DefinePrim('/A/A/A/A', 'Xform')
+        stage.DefinePrim('/A/A/A/A/E', 'Capsule')
+        stage.DefinePrim('/A/A/A/A/A', 'Xform')
+        stage.DefinePrim('/A/A/A/A/A/F', 'Cylinder')
+
+        psPath = ufe.PathString.path(psPathStr)
+        psPathSegment = psPath.segments[0]
+        ps = ufe.Hierarchy.createItem(psPath)
+        psHier = ufe.Hierarchy.hierarchy(ps)
+        groupPath = ufe.Path([psPathSegment, usdUtils.createUfePathSegment('/group1')])
+
+        def hierarchyBefore():
+            retVal = []
+            aPath = ufe.Path([psPathSegment, usdUtils.createUfePathSegment('/A')])
+            retVal.append(ufe.Hierarchy.createItem(aPath))
+            for i in range(4):
+                aPath = aPath + ufe.PathComponent('A')
+                retVal.append(ufe.Hierarchy.createItem(aPath))
+            return retVal
+
+        a, aa, aaa, aaaa, aaaaa = hierarchyBefore()
+
+        def checkBefore():
+            # We care about 2 things:
+            #  - All Xforms are named A
+            #  - The non-xform stay in the right order:
+            order = [("B", "Cube"), ("C", "Cone"), ("D", "Sphere"), ("E", "Capsule"), ("F", "Cylinder")]
+            psChildren = psHier.children()
+            self.assertEqual(len(psChildren), 1)
+            a = psChildren[0]
+            for gprimName, gprimTypeName in order:
+                aHier = ufe.Hierarchy.hierarchy(a)
+                aChildren = aHier.children()
+                if gprimName == "F":
+                    self.assertEqual(len(aChildren), 1)
+                else:
+                    self.assertEqual(len(aChildren), 2)
+                for child in aChildren:
+                    prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(child.path()))
+                    if child.nodeName() == "A":
+                        self.assertEqual(prim.GetTypeName(), "Xform")
+                        a = child
+                    else:
+                        self.assertEqual(child.nodeName(), gprimName)
+                        self.assertEqual(prim.GetTypeName(), gprimTypeName)
+
+        def checkAfter():
+            # We care about 2 things:
+            #  - Group has 5 Xform children. Don't care about names: they will be unique.
+            #  - Each child has a one of the non-xform prims.
+            members = set([("B", "Cube"), ("C", "Cone"), ("D", "Sphere"), ("E", "Capsule"), ("F", "Cylinder")])
+            group = ufe.Hierarchy.createItem(groupPath)
+            groupHier = ufe.Hierarchy.hierarchy(group)
+            groupChildren = groupHier.children()
+            self.assertEqual(len(groupChildren), 5)
+            foundMembers = set()
+            for child in groupChildren:
+                prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(child.path()))
+                self.assertEqual(prim.GetTypeName(), "Xform")
+                childHier = ufe.Hierarchy.hierarchy(child)
+                childChildren = childHier.children()
+                self.assertEqual(len(childChildren), 1)
+                member = childChildren[0]
+                prim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(member.path()))
+                foundMembers.add((member.nodeName(), prim.GetTypeName()))
+            self.assertEqual(members, foundMembers)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        # We randomize the order a bit to make sure previously moved items do
+        # not affect the next one.
+        sn.append(a)
+        sn.append(aaa)
+        sn.append(aa)
+        sn.append(aaaaa)
+        sn.append(aaaa)
+
+        cmds.group()
+        checkAfter()
+        cmds.undo()
+        checkBefore()
+        cmds.redo()
+        checkAfter()
+
+    def runTestGroupPivotOptions(self, doGroupCmd, expectPivot):
+        '''Test group under parent with preserve position.'''
+
+        # Maya menu invokes doGroup MEL script, we'll do the same.
+        # 
+        # doGroup 0 1 0: group under parent, preserve position, group pivot
+        #                center.
+        # doGroup 0 1 1: group under parent, preserve position, group pivot
+        #                origin.
+        #
+        # Compare against Maya object behavior.
+
+        cmds.file(new=True, force=True)
+
+        sphere, _ = cmds.polySphere()
+        v = [5, 0, 0]
+        cmds.move(*v)
+        # doGroup has no return value.  It creates group1 and selects it.
+        mel.eval(doGroupCmd)
+
+        # group transform is the identity.
+        groupMayaXform = cmds.xform(q=True, matrix=True)
+        rpMaya = cmds.xform(q=True, rotatePivot=True)
+        spMaya = cmds.xform(q=True, scalePivot=True)
+        identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0]
+
+        assertVectorAlmostEqual(self, groupMayaXform, identity)
+        assertVectorAlmostEqual(self, expectPivot, rpMaya, 6)
+        assertVectorAlmostEqual(self, expectPivot, spMaya, 6)
+
+        # Do the same with USD.
+        import mayaUsd_createStageWithNewLayer
+        mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        psPathStr = '|stage1|stageShape1'
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+        xform = stage.DefinePrim('/Xform1', 'Xform')
+        
+        cmds.select(psPathStr + ',/Xform1', r=True)
+        cmds.move(*v)
+
+        mel.eval(doGroupCmd)
+        groupPath = psPathStr + ',/group1'
+        groupItem = ufeUtils.createItem(groupPath)
+        t3d = ufe.Transform3d.transform3d(groupItem)
+
+        rpUsd = t3d.rotatePivot()
+        spUsd = t3d.scalePivot()
+        # Flatten out UFE matrices for comparison.
+        groupUsdXform = [y for x in t3d.matrix().matrix for y in x]
+        
+        assertVectorAlmostEqual(self, groupUsdXform, identity)
+        assertVectorAlmostEqual(self, expectPivot, rpUsd.vector, 6)
+        assertVectorAlmostEqual(self, expectPivot, spUsd.vector, 6)
+
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 5, 'Requires Maya xform command fix.')
+    def testGroupPivotCenter(self):
+        # With group pivot center the group pivot is on the grouped object.
+        self.runTestGroupPivotOptions("doGroup 0 1 0", [5, 0, 0])
+
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 5, 'Requires Maya xform command fix.')
+    def testGroupPivotOrigin(self):
+        # With group pivot origin the group pivot is at the origin.
+        self.runTestGroupPivotOptions("doGroup 0 1 1", [0, 0, 0])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

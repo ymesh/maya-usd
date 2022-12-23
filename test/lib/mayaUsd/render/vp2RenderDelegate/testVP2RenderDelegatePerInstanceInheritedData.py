@@ -26,6 +26,7 @@ from mayaUsd import lib as mayaUsdLib
 from mayaUsd import ufe as mayaUsdUfe
 
 from maya import cmds
+import maya.mel
 import maya.api.OpenMayaRender as omr
 
 from pxr import Usd
@@ -33,7 +34,6 @@ from pxr import Usd
 import ufe
 
 import os
-
 
 class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestCase):
     """
@@ -43,9 +43,9 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
 
     @classmethod
     def setUpClass(cls):
-        # The test USD data is authored Z-up, so make sure Maya is configured
+        # The baselines assume Y-up, so make sure Maya is configured
         # that way too.
-        # cmds.upAxis(axis='z')
+        cmds.upAxis(axis='y')
 
         inputPath = fixturesUtils.setUpClass(__file__,
             initializeStandalone=False, loadPlugin=False)
@@ -55,15 +55,19 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
 
         cls._testDir = os.path.abspath('.')
 
+        cls._imageVersion = None
+        if maya.mel.eval("defaultShaderName") != "standardSurface1":
+            cls._imageVersion = 'lambertDefaultMaterial'
+
     @classmethod
     def tearDownClass(cls):
         panel = mayaUtils.activeModelPanel()
         cmds.modelEditor(panel, edit=True, useDefaultMaterial=False)
 
-    def assertSnapshotClose(self, imageName, usdVersion=None):
+    def assertSnapshotClose(self, imageName, version=None):
         paths = []
-        if (usdVersion):
-            paths = [usdVersion, imageName]
+        if (version):
+            paths = [version, imageName]
         else:
             paths = [imageName]
         
@@ -72,17 +76,17 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
         imageUtils.snapshot(snapshotImage, width=960, height=540)
         return self.assertImagesClose(baselineImage, snapshotImage)
 
-    def _StartTest(self, testName):
+    def _StartTest(self, testName, version=None):
         cmds.file(force=True, new=True)
         mayaUtils.loadPlugin("mayaUsdPlugin")
         panel = mayaUtils.activeModelPanel()
-        cmds.modelEditor(panel, edit=True, useDefaultMaterial=False)
+        cmds.modelEditor(panel, edit=True, useDefaultMaterial=False, displayTextures=True)
         self._testName = testName
         testFile = testUtils.getTestScene("instances", self._testName + ".usda")
         mayaUtils.createProxyFromFile(testFile)
         globalSelection = ufe.GlobalSelection.get()
         globalSelection.clear()
-        self.assertSnapshotClose('%s_unselected.png' % self._testName)
+        self.assertSnapshotClose('%s_unselected.png' % self._testName, version)
 
     def testPerInstanceInheritedData(self):
         self._StartTest('perInstanceInheritedData')
@@ -94,7 +98,6 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
             return
 
         # Hide and show some instances to make sure it updates correctly
-        # These should start working correctly when MAYA-110508 is fixed
         stage = mayaUsdUfe.getStage("|stage|stageShape")
         ball_03_vis = stage.GetPrimAtPath('/root/group/ball_03').GetAttribute('visibility')
         ball_04_vis = stage.GetPrimAtPath('/root/group/ball_04').GetAttribute('visibility')
@@ -121,7 +124,6 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
             imageVersion = 'pre-21_08'
 
         # Modify the purpose of some instances to make sure they are shown and hidden properly
-        # The selection highlight of the instances is incorrect until MAYA-111508 is fixed by Pixar.
         ball_03_purpose = stage.GetPrimAtPath('/root/group/ball_03').GetAttribute('purpose')
         ball_04_purpose = stage.GetPrimAtPath('/root/group/ball_04').GetAttribute('purpose')
 
@@ -140,23 +142,31 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
     def testPerInstanceInheritedDataPartialOverride(self):
         self._StartTest('inheritedDisplayColor_pxrSurface')
 
-    def testPerInstanceInheriedDataBasisCurves(self):
-        self._StartTest('basisCurveInstance')
+    def testPerInstanceInheritedDataBasisCurves(self):
+        self._StartTest('basisCurveInstance', self._imageVersion)
         cmds.select("|stage|stageShape,/instanced_2")
-        self.assertSnapshotClose('%s_selected.png' % self._testName)
+        self.assertSnapshotClose('%s_selected.png' % self._testName, self._imageVersion)
 
     @unittest.skipUnless("SkipWhenDefaultMaterialActive" in dir(omr.MRenderItem), "Requires new SDK API")
     def testInstanceDefaultMaterial(self):
         self._StartTest('defaultMaterialBillboards')
+
+        # The color and specular roughness of the default standard surface changed, set
+        # them back to the old default value so the tests keep on working correctly.
+        if maya.mel.eval("defaultShaderName") == "standardSurface1":
+            color = (0.8, 0.8, 0.8)
+            cmds.setAttr("standardSurface1.baseColor", type='float3', *color)
+            cmds.setAttr("standardSurface1.specularRoughness", 0.4)
+
         cmds.select("|stage|stageShape,/root/group/billboard_03",
                     "|stage|stageShape,/root/group/flatquad_03")
         self.assertSnapshotClose('%s_selected.png' % self._testName)
         panel = mayaUtils.activeModelPanel()
         cmds.modelEditor(panel, edit=True, useDefaultMaterial=True)
-        self.assertSnapshotClose('%s_default.png' % self._testName)
+        self.assertSnapshotClose('%s_default.png' % self._testName, self._imageVersion)
         cmds.select("|stage|stageShape,/root/group/billboard_04",
                     "|stage|stageShape,/root/group/flatquad_04")
-        self.assertSnapshotClose('%s_defaultSelected.png' % self._testName)
+        self.assertSnapshotClose('%s_defaultSelected.png' % self._testName, self._imageVersion)
         cmds.modelEditor(panel, edit=True, useDefaultMaterial=False)
         self.assertSnapshotClose('%s_notDefault.png' % self._testName)
 

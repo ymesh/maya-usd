@@ -17,14 +17,13 @@
 
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/jobs/writeJob.h>
-#include <mayaUsd/fileio/shading/shadingModeRegistry.h>
-#include <mayaUsd/fileio/utils/writeUtil.h>
 
 #include <maya/MFileObject.h>
 #include <maya/MGlobal.h>
 #include <maya/MSelectionList.h>
 #include <maya/MString.h>
 
+#include <mutex>
 #include <string>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -44,107 +43,7 @@ MStatus UsdMayaExportTranslator::writer(
     MPxFileTranslator::FileAccessMode mode)
 {
 
-    std::string  fileName(file.fullName().asChar());
-    VtDictionary userArgs;
-    bool         exportAnimation = false;
-    GfInterval   timeInterval(1.0, 1.0);
-    double       frameStride = 1.0;
-    bool         append = false;
-
-    // Get the options
-    if (optionsString.length() > 0) {
-        MStringArray optionList;
-        MStringArray theOption;
-        optionsString.split(';', optionList);
-        for (int i = 0; i < (int)optionList.length(); ++i) {
-            theOption.clear();
-            optionList[i].split('=', theOption);
-            if (theOption.length() != 2) {
-                // We allow an empty string to be passed to exportRoots. We must process it here.
-                if (theOption.length() == 1
-                    && theOption[0] == UsdMayaJobExportArgsTokens->exportRoots.GetText()) {
-                    std::vector<VtValue> userArgVals;
-                    userArgVals.push_back(VtValue(""));
-                    userArgs[UsdMayaJobExportArgsTokens->exportRoots] = userArgVals;
-                }
-                continue;
-            }
-
-            std::string argName(theOption[0].asChar());
-            if (argName == "animation") {
-                exportAnimation = (theOption[1].asInt() != 0);
-            } else if (argName == "startTime") {
-                timeInterval.SetMin(theOption[1].asDouble());
-            } else if (argName == "endTime") {
-                timeInterval.SetMax(theOption[1].asDouble());
-            } else if (argName == "frameStride") {
-                frameStride = theOption[1].asDouble();
-            } else if (argName == "filterTypes") {
-                std::vector<VtValue> userArgVals;
-                MStringArray         filteredTypes;
-                theOption[1].split(',', filteredTypes);
-                unsigned int nbTypes = filteredTypes.length();
-                for (unsigned int idxType = 0; idxType < nbTypes; ++idxType) {
-                    const std::string filteredType = filteredTypes[idxType].asChar();
-                    userArgVals.emplace_back(filteredType);
-                }
-                userArgs[UsdMayaJobExportArgsTokens->filterTypes] = userArgVals;
-            } else if (argName == UsdMayaJobExportArgsTokens->exportRoots.GetText()) {
-                MStringArray exportRootStrings;
-                theOption[1].split(',', exportRootStrings);
-
-                std::vector<VtValue> userArgVals;
-
-                unsigned int nbRoots = exportRootStrings.length();
-                for (unsigned int idxRoot = 0; idxRoot < nbRoots; ++idxRoot) {
-                    const std::string exportRootPath = exportRootStrings[idxRoot].asChar();
-
-                    if (!exportRootPath.empty()) {
-                        MDagPath rootDagPath;
-                        UsdMayaUtil::GetDagPathByName(exportRootPath, rootDagPath);
-                        if (!rootDagPath.isValid()) {
-                            MGlobal::displayError(
-                                MString("Invalid dag path provided for export root: ")
-                                + exportRootStrings[idxRoot]);
-                            return MS::kFailure;
-                        }
-                        userArgVals.push_back(VtValue(exportRootPath));
-                    } else {
-                        userArgVals.push_back(VtValue(""));
-                    }
-                }
-                userArgs[argName] = userArgVals;
-            } else {
-                if (argName == "shadingMode") {
-                    TfToken shadingMode(theOption[1].asChar());
-                    if (!shadingMode.IsEmpty()
-                        && UsdMayaShadingModeRegistry::GetInstance().GetExporter(shadingMode)
-                            == nullptr
-                        && shadingMode != UsdMayaShadingModeTokens->none) {
-
-                        MGlobal::displayError(
-                            TfStringPrintf("No shadingMode '%s' found.", shadingMode.GetText())
-                                .c_str());
-                        return MS::kFailure;
-                    }
-                }
-                userArgs[argName] = UsdMayaUtil::ParseArgumentValue(
-                    argName, theOption[1].asChar(), UsdMayaJobExportArgs::GetDefaultDictionary());
-            }
-        }
-    }
-
-    // Now resync start and end frame based on export time interval.
-    if (exportAnimation) {
-        if (timeInterval.IsEmpty()) {
-            // If the user accidentally set start > end, resync to the closed
-            // interval with the single start point.
-            timeInterval = GfInterval(timeInterval.GetMin());
-        }
-    } else {
-        // No animation, so empty interval.
-        timeInterval = GfInterval();
-    }
+    std::string fileName(file.fullName().asChar());
 
     MSelectionList objSelList;
     if (mode == MPxFileTranslator::kExportActiveAccessMode) {
@@ -169,10 +68,17 @@ MStatus UsdMayaExportTranslator::writer(
         return MS::kSuccess;
     }
 
-    const std::vector<double> timeSamples
-        = UsdMayaWriteUtil::GetTimeSamples(timeInterval, std::set<double>(), frameStride);
-    UsdMayaJobExportArgs jobArgs
-        = UsdMayaJobExportArgs::CreateFromDictionary(userArgs, dagPaths, timeSamples);
+    VtDictionary userArgs;
+    MStatus      status
+        = UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(optionsString, &userArgs);
+    if (status != MS::kSuccess)
+        return status;
+
+    std::vector<double> timeSamples;
+    UsdMayaJobExportArgs::GetDictionaryTimeSamples(userArgs, timeSamples);
+
+    auto jobArgs = UsdMayaJobExportArgs::CreateFromDictionary(userArgs, dagPaths, timeSamples);
+    bool append = false;
 
     UsdMaya_WriteJob writeJob(jobArgs);
     if (!writeJob.Write(fileName, append)) {

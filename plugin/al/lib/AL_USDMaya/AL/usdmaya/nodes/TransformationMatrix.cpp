@@ -28,6 +28,8 @@
 #include <maya/MProfiler.h>
 #include <maya/MViewport2Renderer.h>
 
+#define AL_USDMAYA_XFORM_COMP_EPSILON 1e-7
+
 namespace {
 const int _transformationMatrixProfilerCategory = MProfiler::addCategory(
 #if MAYA_API_VERSION >= 20190000
@@ -48,6 +50,17 @@ namespace {
 using AL::usdmaya::utils::UsdDataType;
 
 //----------------------------------------------------------------------------------------------------------------------
+UsdTimeCode getTimeCodeForOp(const UsdGeomXformOp& op, const UsdTimeCode& time)
+{
+    // Return the current time code if xform op has samples, return default time code otherwise
+    // This function could be made as an option in proxy node
+    if (op.GetNumTimeSamples()) {
+        return time;
+    }
+    return UsdTimeCode::Default();
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 bool hasEmptyDefaultValue(const UsdGeomXformOp& op, UsdTimeCode time)
 {
     SdfPropertySpecHandleVector propSpecs = op.GetAttr().GetPropertyStack(time);
@@ -59,6 +72,31 @@ bool hasEmptyDefaultValue(const UsdGeomXformOp& op, UsdTimeCode time)
     }
     return false;
 }
+
+//----------------------------------------------------------------------------------------------------------------------
+inline bool isClose(float x, float y) { return GfIsClose(x, y, AL_USDMAYA_XFORM_COMP_EPSILON); }
+
+//----------------------------------------------------------------------------------------------------------------------
+inline bool isClose(double x, double y) { return GfIsClose(x, y, AL_USDMAYA_XFORM_COMP_EPSILON); }
+
+//----------------------------------------------------------------------------------------------------------------------
+template <typename T> inline bool isClose(const T& x, const T& y)
+{
+    return GfIsClose(x, y, AL_USDMAYA_XFORM_COMP_EPSILON);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+template <> inline bool isClose(const GfVec3h& x, const GfVec3h& y)
+{
+    return GfIsClose(x, y, AL_USDMAYA_XFORM_COMP_EPSILON);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+template <> inline bool isClose(const GfHalf& x, const GfHalf& y)
+{
+    return GfIsClose(x, y, AL_USDMAYA_XFORM_COMP_EPSILON);
+}
+
 } // namespace
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -281,37 +319,37 @@ bool TransformationMatrix::pushVector(
     switch (attr_type) {
     case UsdDataType::kVec3d: {
         GfVec3d value(result.x, result.y, result.z);
-        GfVec3d oldValue;
+        GfVec3d oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue) {
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue)) {
+            op.Set(value, getTimeCodeForOp(op, timeCode));
         }
     } break;
 
     case UsdDataType::kVec3f: {
         GfVec3f value(result.x, result.y, result.z);
-        GfVec3f oldValue;
+        GfVec3f oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue) {
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue)) {
+            op.Set(value, getTimeCodeForOp(op, timeCode));
         }
     } break;
 
     case UsdDataType::kVec3h: {
         GfVec3h value(result.x, result.y, result.z);
-        GfVec3h oldValue;
+        GfVec3h oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue) {
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue)) {
+            op.Set(value, getTimeCodeForOp(op, timeCode));
         }
     } break;
 
     case UsdDataType::kVec3i: {
         GfVec3i value(result.x, result.y, result.z);
-        GfVec3i oldValue;
+        GfVec3i oldValue { 0, 0, 0 };
         op.Get(&oldValue, timeCode);
         if (value != oldValue) {
-            op.Set(value, timeCode);
+            op.Set(value, getTimeCodeForOp(op, timeCode));
         }
     } break;
 
@@ -363,9 +401,10 @@ bool TransformationMatrix::pushShear(
             0.0,
             1.0);
         GfMatrix4d oldValue;
+        oldValue.SetIdentity();
         op.Get(&oldValue, timeCode);
-        if (m != oldValue)
-            op.Set(m, timeCode);
+        if (!isClose(m, oldValue))
+            op.Set(m, getTimeCodeForOp(op, timeCode));
     } break;
 
     default: return false;
@@ -516,9 +555,10 @@ bool TransformationMatrix::pushMatrix(
     case UsdDataType::kMatrix4d: {
         const GfMatrix4d& value = *(const GfMatrix4d*)(&result);
         GfMatrix4d        oldValue;
+        oldValue.SetIdentity();
         op.Get(&oldValue, timeCode);
-        if (value != oldValue) {
-            const bool retValue = op.Set<GfMatrix4d>(value, timeCode);
+        if (!isClose(value, oldValue)) {
+            const bool retValue = op.Set<GfMatrix4d>(value, getTimeCodeForOp(op, timeCode));
             if (!retValue) {
                 return false;
             }
@@ -586,34 +626,34 @@ bool TransformationMatrix::pushPoint(const MPoint& result, UsdGeomXformOp& op, U
     switch (attr_type) {
     case UsdDataType::kVec3d: {
         GfVec3d value(result.x, result.y, result.z);
-        GfVec3d oldValue;
+        GfVec3d oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue)
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue))
+            op.Set(value, getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kVec3f: {
         GfVec3f value(result.x, result.y, result.z);
-        GfVec3f oldValue;
+        GfVec3f oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue)
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue))
+            op.Set(value, getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kVec3h: {
         GfVec3h value(result.x, result.y, result.z);
-        GfVec3h oldValue;
+        GfVec3h oldValue { 0.f, 0.f, 0.f };
         op.Get(&oldValue, timeCode);
-        if (value != oldValue)
-            op.Set(value, timeCode);
+        if (!isClose(value, oldValue))
+            op.Set(value, getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kVec3i: {
         GfVec3i value(result.x, result.y, result.z);
-        GfVec3i oldValue;
+        GfVec3i oldValue { 0, 0, 0 };
         op.Get(&oldValue, timeCode);
         if (value != oldValue)
-            op.Set(value, timeCode);
+            op.Set(value, getTimeCodeForOp(op, timeCode));
     } break;
 
     default: return false;
@@ -683,31 +723,31 @@ void TransformationMatrix::pushDouble(const double value, UsdGeomXformOp& op, Us
     UsdDataType attr_type = AL::usdmaya::utils::getAttributeType(op.GetTypeName());
     switch (attr_type) {
     case UsdDataType::kHalf: {
-        GfHalf oldValue;
+        GfHalf oldValue { 0.f };
         op.Get(&oldValue);
-        if (oldValue != GfHalf(value))
-            op.Set(GfHalf(value), timeCode);
+        if (!isClose(oldValue, GfHalf(value)))
+            op.Set(GfHalf(value), getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kFloat: {
-        float oldValue;
+        float oldValue { 0.f };
         op.Get(&oldValue);
-        if (oldValue != float(value))
-            op.Set(float(value), timeCode);
+        if (!isClose(oldValue, float(value)))
+            op.Set(float(value), getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kDouble: {
-        double oldValue;
+        double oldValue { 0.f };
         op.Get(&oldValue);
-        if (oldValue != double(value))
-            op.Set(double(value), timeCode);
+        if (!isClose(oldValue, value))
+            op.Set(double(value), getTimeCodeForOp(op, timeCode));
     } break;
 
     case UsdDataType::kInt: {
-        int32_t oldValue;
+        int32_t oldValue { 0 };
         op.Get(&oldValue);
         if (oldValue != int32_t(value))
-            op.Set(int32_t(value), timeCode);
+            op.Set(int32_t(value), getTimeCodeForOp(op, timeCode));
     } break;
 
     default: break;
@@ -1198,8 +1238,10 @@ void TransformationMatrix::updateToTime(const UsdTimeCode& time)
                     if (op.GetNumTimeSamples() >= 1) {
                         m_flags |= kAnimatedMatrix;
                         GfMatrix4d matrix;
+                        matrix.SetIdentity();
                         op.Get<GfMatrix4d>(&matrix, getTimeCode());
-                        double T[3], S[3];
+                        double T[3] {};
+                        double S[3] {};
                         AL::usdmaya::utils::matrixToSRT(matrix, S, m_rotationFromUsd, T);
                         m_scaleFromUsd.x = S[0];
                         m_scaleFromUsd.y = S[1];
@@ -1883,7 +1925,14 @@ void TransformationMatrix::pushRotateToPrim()
             internal_readRotation(tempRotate, op);
 
             // only write back if data has changed significantly
-            if (!tempRotate.isEquivalent(MPxTransformationMatrix::rotationValue)) {
+            // Note: the rotation values are converted to quaternion form to avoid
+            //       checking in Euler space, twisted values e.g.:
+            //       (180, -2.31718, 180) == (0, 182.317, 0)
+            //       are in fact the same although their raw values look different.
+            //       Also notice that we lower the tolerance for comparison since
+            //       the values are converted from Euler.
+            if (!tempRotate.asQuaternion().isEquivalent(
+                    MPxTransformationMatrix::rotationValue.asQuaternion(), 1e-5)) {
                 internal_pushRotation(MPxTransformationMatrix::rotationValue, op);
                 m_rotationFromUsd = MPxTransformationMatrix::rotationValue;
                 m_rotationTweak = MEulerRotation(0, 0, 0);
@@ -2288,7 +2337,8 @@ void TransformationMatrix::enableReadAnimatedValues(bool enabled)
 //----------------------------------------------------------------------------------------------------------------------
 void TransformationMatrix::enablePushToPrim(bool enabled)
 {
-    TF_DEBUG(ALUSDMAYA_TRANSFORM_MATRIX).Msg("TransformationMatrix::enablePushToPrim\n");
+    TF_DEBUG(ALUSDMAYA_TRANSFORM_MATRIX)
+        .Msg("TransformationMatrix::enablePushToPrim %d\n", enabled);
     if (enabled)
         m_flags |= kPushToPrimEnabled;
     else

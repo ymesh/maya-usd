@@ -16,30 +16,137 @@
 //
 #include "primUpdater.h"
 
-#include <maya/MFnDagNode.h>
-#include <maya/MStatus.h>
-#include <maya/MString.h>
+#include <mayaUsd/fileio/jobs/jobArgs.h>
+#include <mayaUsd/fileio/jobs/readJob.h>
+#include <mayaUsd/fileio/jobs/writeJob.h>
+#include <mayaUsd/fileio/primReaderRegistry.h>
+#include <mayaUsd/fileio/utils/writeUtil.h>
+#include <mayaUsd/nodes/proxyShapeBase.h>
+#include <mayaUsd/ufe/Utils.h>
+#include <mayaUsd/undo/OpUndoItems.h>
+#include <mayaUsd/utils/traverseLayer.h>
+#include <mayaUsdUtils/MergePrims.h>
+
+#include <pxr/usd/sdf/copyUtils.h>
+#include <pxr/usd/sdf/path.h>
+
+#include <maya/MAnimUtil.h>
+#include <maya/MGlobal.h>
+#include <maya/MItDag.h>
+#include <ufe/hierarchy.h>
+#include <ufe/path.h>
+#include <ufe/pathString.h>
+
+#include <string>
+
+namespace MAYAUSD_NS_DEF {
+namespace ufe {
+
+//------------------------------------------------------------------------------
+// Global variables
+//------------------------------------------------------------------------------
+extern Ufe::Rtid g_MayaRtid;
+
+} // namespace ufe
+} // namespace MAYAUSD_NS_DEF
+
+using namespace MAYAUSD_NS_DEF;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-UsdMayaPrimUpdater::UsdMayaPrimUpdater(const MFnDependencyNode& depNodeFn, const SdfPath& usdPath)
-    : _dagPath(UsdMayaUtil::getDagPath(depNodeFn))
-    , _mayaObject(depNodeFn.object())
-    , _usdPath(usdPath)
-    , _baseDagToUsdPaths(UsdMayaUtil::getDagPathMap(depNodeFn, usdPath))
+UsdMayaPrimUpdater::UsdMayaPrimUpdater(
+    const UsdMayaPrimUpdaterContext& context,
+    const MFnDependencyNode&         depNodeFn,
+    const Ufe::Path&                 path)
+    : _mayaObject(depNodeFn.object())
+    , _path(path)
+    , _context(&context)
 {
 }
 
-bool UsdMayaPrimUpdater::Push(UsdMayaPrimUpdaterContext* context) { return false; }
+bool UsdMayaPrimUpdater::shouldAutoEdit() const { return true; }
 
-bool UsdMayaPrimUpdater::Pull(UsdMayaPrimUpdaterContext* context) { return false; }
+bool UsdMayaPrimUpdater::canEditAsMaya() const
+{
+    // To be editable as Maya data we must ensure that there is an importer (to
+    // Maya).  As of 17-Nov-2021 it is not possible to determine how the
+    // prim will round-trip back through export, so we do not check for
+    // exporter (to USD) capability.
+    auto prim = MayaUsd::ufe::ufePathToPrim(_path);
+    TF_AXIOM(prim);
+    return (UsdMayaPrimReaderRegistry::Find(prim.GetTypeName()) != nullptr);
+}
 
-void UsdMayaPrimUpdater::Clear(UsdMayaPrimUpdaterContext* context) { }
+bool UsdMayaPrimUpdater::editAsMaya() { return true; }
 
-const MDagPath& UsdMayaPrimUpdater::GetDagPath() const { return _dagPath; }
+bool UsdMayaPrimUpdater::discardEdits()
+{
+    MObject objectToDelete = getMayaObject();
+    if (objectToDelete.isNull())
+        return true;
 
-const MObject& UsdMayaPrimUpdater::GetMayaObject() const { return _mayaObject; }
+    // Nodes that are from a referenced file cannot be deleted
+    // as they live in a different file. They will go away once
+    // the reference is unloaded. Don't try to delete them here.
+    MFnDependencyNode depNode(objectToDelete);
+    if (!depNode.isFromReferencedFile()) {
+        MStatus status = NodeDeletionUndoItem::deleteNode(
+            "Discard edits delete individual pulled node", depNode.absoluteName(), objectToDelete);
 
-const SdfPath& UsdMayaPrimUpdater::GetUsdPath() const { return _usdPath; }
+        if (status != MS::kSuccess) {
+            TF_WARN("Discard edits: cannot delete node.");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool UsdMayaPrimUpdater::pushEnd()
+{
+    // Nothing. We rely on the PrimUpdaterManager to delete the nodes in the correct order.
+    return true;
+}
+
+UsdMayaPrimUpdater::PushCopySpecs UsdMayaPrimUpdater::pushCopySpecs(
+    UsdStageRefPtr srcStage,
+    SdfLayerRefPtr srcLayer,
+    const SdfPath& srcSdfPath,
+    UsdStageRefPtr dstStage,
+    SdfLayerRefPtr dstLayer,
+    const SdfPath& dstSdfPath)
+{
+    MayaUsdUtils::MergePrimsOptions options;
+    return MayaUsdUtils::mergePrims(
+               srcStage, srcLayer, srcSdfPath, dstStage, dstLayer, dstSdfPath, options)
+        ? PushCopySpecs::Continue
+        : PushCopySpecs::Failed;
+}
+
+const MObject& UsdMayaPrimUpdater::getMayaObject() const { return _mayaObject; }
+
+const Ufe::Path& UsdMayaPrimUpdater::getUfePath() const { return _path; }
+
+UsdPrim UsdMayaPrimUpdater::getUsdPrim() const { return MayaUsd::ufe::ufePathToPrim(_path); }
+
+/* static */
+bool UsdMayaPrimUpdater::isAnimated(const MDagPath& path)
+{
+    if (!MAnimUtil::isAnimated(path, true)) {
+        MItDag dagIt(MItDag::kDepthFirst);
+        dagIt.reset(path);
+        for (; !dagIt.isDone(); dagIt.next()) {
+            MDagPath dagPath;
+            dagIt.getPath(dagPath);
+
+            if (MAnimUtil::isAnimated(dagPath, true))
+                return true;
+        }
+    } else {
+        return true;
+    }
+
+    return false;
+}
 
 PXR_NAMESPACE_CLOSE_SCOPE

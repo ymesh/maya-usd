@@ -36,6 +36,7 @@ Each base command class is documented in the following sections.
 | `-file`                       | `-f`       | string         | none                              | Name of the USD being loaded |
 | `-frameRange`                 | `-fr`      | float float    | none                              | The frame range of animations to import |
 | `-importInstances`            | `-ii`      | bool           | true                              | Import USD instanced geometries as Maya instanced shapes. Will flatten the scene otherwise. |
+| `-jobContext`                 | `-jc`      | string (multi) | none                              | Specifies an additional import context to handle. These usually contains extra schemas, primitives, and materials that are to be imported for a specific task, a target renderer for example. |
 | `-metadata`                   | `-md`      | string (multi) | `hidden`, `instanceable`, `kind`  | Imports the given USD metadata fields as Maya custom attributes (e.g. `USD_hidden`, `USD_kind`, etc.) if they're authored on the USD prim. The metadata will properly round-trip if you re-export back to USD. |
 | `-parent`                     | `-p`       | string         | none                              | Name of the Maya scope that will be the parent of the imported data. |
 | `-primPath`                   | `-pp`      | string         | none (defaultPrim)                | Name of the USD scope where traversing will being. The prim at the specified primPath (including the prim) will be imported. Specifying the pseudo-root (`/`) means you want to import everything in the file. If the passed prim path is empty, it will first try to import the defaultPrim for the rootLayer if it exists. Otherwise, it will behave as if the pseudo-root was passed in. |
@@ -113,26 +114,31 @@ their own purposes, similar to the Alembic export chaser example.
 
 | Long flag                        | Short flag | Type             | Default             | Description |
 | -------------------------------- | ---------- | ---------------- | ------------------- | ----------- |
+| `-apiSchema`                     | `-api`     | string (multi)   | none                | Exports the given API schema. Requires registering schema exporters for the API. |
 | `-append`                        | `-a`       | bool             | false               | Appends into an existing USD file |
 | `-chaser`                        | `-chr`     | string(multi)    | none                | Specify the export chasers to execute as part of the export. See "Export Chasers" below. |
 | `-chaserArgs`                    | `-cha`     | string[3](multi) | none                | Pass argument names and values to export chasers. Each argument to `-chaserArgs` should be a triple of the form: (`<chaser name>`, `<argument name>`, `<argument value>`). See "Export Chasers" below. |
-| `-convertMaterialsTo`            | `-cmt`     | string           | `UsdPreviewSurface` | Selects how to convert materials on export. The default value `UsdPreviewSurface` will export to a UsdPreviewSurface shading network. A plugin mechanism allows more conversions to be registered. Use the `mayaUSDListShadingModesCommand` command to explore the possible options. |
+| `-convertMaterialsTo`            | `-cmt`     | string(multi)    | `UsdPreviewSurface` | Selects how to convert materials on export. The default value `UsdPreviewSurface` will export to a UsdPreviewSurface shading network. A plugin mechanism allows more conversions to be registered. Use the `mayaUSDListShadingModesCommand` command to explore the possible options. |
+| `-remapUVSetsTo`                 | `-ruv`     | string[2](multi)    | none                | Specify UV sets by name to rename on export. Each argument should be a pair of the form: (`<from set name>`, `<to set name>`). This option takes priority over `-preserveUVSetNames` for any specified UV set. |
 | `-compatibility`                 | `-com`     | string           | none                | Specifies a compatibility profile when exporting the USD file. The compatibility profile may limit features in the exported USD file so that it is compatible with the limitations or requirements of third-party applications. Currently, there are only two profiles: `none` - Standard export with no compatibility options, `appleArKit` - Ensures that exported usdz packages are compatible with Apple's implementation (as of ARKit 2/iOS 12/macOS Mojave). Packages referencing multiple layers will be flattened into a single layer, and the first layer will have the extension `.usdc`. This compatibility profile only applies when exporting usdz packages; if you enable this profile and don't specify a file extension in the `-file` flag, the `.usdz` extension will be used instead. |
 | `-defaultCameras`                | `-dc`      | noarg            | false               | Export the four Maya default cameras |
-| `-defaultMeshScheme`             | `-dms`     | string           | `catmullClark`      | Sets the default subdivision scheme for exported Maya meshes, if the `USD_subdivisionScheme` attribute is not present on the Mesh. Valid values are: `none`, `catmullClark`, `loop`, `bilinear` |
+| `-defaultMeshScheme`             | `-dms`     | string           | `catmullClark`      | Sets the default subdivision scheme for exported Maya meshes, if the `USD_ATTR_subdivisionScheme` attribute is not present on the Mesh. Valid values are: `none`, `catmullClark`, `loop`, `bilinear` |
 | `-exportDisplayColor`            | `-dsp`     | bool             | false               | Export display color |
+| `-exportDistanceUnit`            | `-edu`     | bool             | true                | Export the Maya distance unit to USD for the stage under its `metersPerUnit` attribute |
+| `-jobContext`                    | `-jc`      | string (multi)   | none                | Specifies an additional export context to handle. These usually contains extra schemas, primitives, and materials that are to be exported for a specific task, a target renderer for example. |
 | `-defaultUSDFormat`              | `-duf`     | string           | `usdc`              | The exported USD file format, can be `usdc` for binary format or `usda` for ASCII format. |
 | `-exportBlendShapes`             | `-ebs`     | bool             | false               | Enable or disable export of blend shapes |
 | `-exportCollectionBasedBindings` | `-cbb`     | bool             | false               | Enable or disable export of collection-based material assigments. If this option is enabled, export of material collections (`-mcs`) is also enabled, which causes collections representing sets of geometry with the same material binding to be exported. Materials are bound to the created collections on the prim at `materialCollectionsPath` (specfied via the `-mcp` option). Direct (or per-gprim) bindings are not authored when collection-based bindings are enabled. |
 | `-exportColorSets`               | `-cls`     | bool             | true                | Enable or disable the export of color sets |
 | `-exportInstances`               | `-ein`     | bool             | true                | Enable or disable the export of instances |
-| `-exportReferenceObjects`        | `-ero`     | bool             | false               | Whether to export reference objects for meshes. The reference object's points are exported as a primvar on the mesh object; the primvar name is determined by querying `UsdUtilsGetPrefName()`, which defaults to `pref`. |
+| `-referenceObjectMode`           | `-rom`     | string           | `none`              | Determines how to export reference objects for meshes. The reference object's points are exported as a primvar on the mesh object; the primvar name is determined by querying `UsdUtilsGetPrefName()`, which defaults to `pref`. Valid values are: `none` - No reference objects are exported, `attributeOnly` - Only meshes set with a valid "referenceObject" attached will be exported, `defaultToMesh` - Meshes with no "referenceObject" attached will export their own points |
 | `-exportRefsAsInstanceable`      | `-eri`     | bool             | false               | Will cause all references created by USD reference assembly nodes or explicitly tagged reference nodes to be set to be instanceable (`UsdPrim::SetInstanceable(true)`). |
 | `-exportRoots`                   | `-ert`     | string           | none                | Multi-flag that allows export of any DAG subtree without including parents |
 | `-exportSkels`                   | `-skl`     | string           | none                | Determines how to export skeletons. Valid values are: `none` - No skeleton are exported, `auto` - All skeletons will be exported, SkelRoots may be created, `explicit` - only those under SkelRoots |
 | `-exportSkin`                    | `-skn`     | string           | none                | Determines how to export skinClusters via the UsdSkel schema. On any mesh where skin bindings are exported, the geometry data is the pre-deformation data. On any mesh where skin bindings are not exported, the geometry data is the final (post-deformation) data. Valid values are: `none` - No skinClusters are exported, `auto` - All skinClusters will be exported for non-root prims. The exporter errors on skinClusters on any root prims. The rootmost prim containing any skinned mesh will automatically be promoted into a SkelRoot, e.g. if `</Model/Mesh>` has skinning, then `</Model>` will be promoted to a SkelRoot, `explicit` - Only skinClusters under explicitly-tagged SkelRoot prims will be exported. The exporter errors if there are nested SkelRoots. To explicitly tag a prim as a SkelRoot, specify a `USD_typeName`attribute on a Maya node. |
 | `-exportUVs`                     | `-uvs`     | bool             | true                | Enable or disable the export of UV sets |
 | `-exportVisibility`              | `-vis`     | bool             | true                | Export any state and animation on Maya `visibility` attributes |
+| `-exportComponentTags`           | `-tag`     | bool             | true                | Export component tags |
 | `-exportMaterialCollections`     | `-mcs`     | bool             | false               | Create collections representing sets of Maya geometry with the same material binding. These collections are created in the `material:` namespace on the prim at the specified `materialCollectionsPath` (see export option `-mcp`). These collections are encoded using the UsdCollectionAPI schema and are authored compactly using the API `UsdUtilsCreateCollections()`. |
 | `-eulerFilter`                   | `-ef`      | bool             | false               | Exports the euler angle filtering that was performed in Maya |
 | `-filterTypes`                   | `-ft`      | string (multi)   | none                | Maya type names to exclude when exporting. If a type is excluded, all inherited types are also excluded, e.g. excluding `surfaceShape` will exclude `mesh` as well. When a node is excluded based on its type name, its subtree hierarchy will be pruned from the export, and its descendants will not be exported. |
@@ -142,20 +148,23 @@ their own purposes, similar to the Alembic export chaser example.
 | `-frameStride`                   | `-fst`     | double           | `1.0`               | Specifies the increment between frames during animation export, e.g. a stride of `0.5` will give you twice as many time samples, whereas a stride of `2.0` will only give you time samples every other frame. The frame stride is computed before the frame samples are taken into account. **Note**: Depending on the frame stride, the last frame of the frame range may be skipped. For example, if your frame range is `[1.0, 3.0]` but you specify a stride of `0.3`, then the time samples in your USD file will be `1.0, 1.3, 1.6, 1.9, 2.2, 2.5, 2.8`, skipping the last frame time (`3.0`). |
 | `-ignoreWarnings`                | `-ign`     | bool             | false               | Ignore warnings, do not fail to export due to warnings |
 | `-kind`                          | `-k`       | string           | none                | Specifies the required USD kind for *root prims* in the scene. (Does not affect kind for non-root prims.) If this flag is non-empty, then the specified kind will be set on any root prims in the scene without a `USD_kind` attribute (see the "Maya Custom Attributes" table below). Furthermore, if there are any root prims in the scene that do have a `USD_kind` attribute, then their `USD_kind` values will be validated to ensure they are derived from the kind specified by the `-kind` flag. For example, if the `-kind` flag is set to `group` and a root prim has `USD_kind=assembly`, then this is allowed because `assembly` derives from `group`. However, if the root prim has `USD_kind=subcomponent` instead, then `MayaUSDExportCommand` would stop with an error, since `subcomponent` does not derive from `group`. The validation behavior understands custom kinds that are registered using the USD kind registry, in addition to the built-in kinds. |
+| `-disableModelKindProcessor`     | `-dmk`     | bool             | false               | Disables the tagging of prim kinds based on the ModelKindProcessor. |
 | `-materialCollectionsPath`       | `-mcp`     | string           | none                | Path to the prim where material collections must be exported. |
 | `-melPerFrameCallback`           | `-mfc`     | string           | none                | Mel function called after each frame is exported |
 | `-melPostCallback`               | `-mpc`     | string           | none                | Mel function called when the export is done |
 | `-materialsScopeName`            | `-msn`     | string           | `Looks`             | Materials Scope Name |
 | `-mergeTransformAndShape`        | `-mt`      | bool             | true                | Combine Maya transform and shape into a single USD prim that has transform and geometry, for all "geometric primitives" (gprims). This results in smaller and faster scenes. Gprims will be "unpacked" back into transform and shape nodes when imported into Maya from USD. |
 | `-normalizeNurbs`                | `-nnu`     | bool             | false               | When setm the UV coordinates of nurbs are normalized to be between zero and one. |
+| `-preserveUVSetNames`            | `-puv`     | bool             | false               | Refrain from renaming UV sets additional to "map1" to "st1", "st2", etc. This option is overridden for any UV set specified in `-remapUVSetsTo`. |
 | `-pythonPerFrameCallback`        | `-pfc`     | string           | none                | Python function called after each frame is exported |
 | `-pythonPostCallback`            | `-ppc`     | string           | none                | Python function called when the export is done |
 | `-parentScope`                   | `-psc`     | string           | none                | Name of the USD scope that is the parent of the exported data |
 | `-renderableOnly`                | `-ro`      | noarg            |                     | When set, only renderable prims are exported to USD. |
 | `-renderLayerMode`               | `-rlm`     | string           | defaultLayer        | Specify which render layer(s) to use during export. Valid values are: `defaultLayer`: Makes the default render layer the current render layer before exporting, then switches back after. No layer switching is done if the default render layer is already the current render layer, `currentLayer`: The current render layer is used for export and no layer switching is done, `modelingVariant`: Generates a variant in the `modelingVariant` variantSet for each render layer in the scene. The default render layer is made the default variant selection. |
-| `-shadingMode`                   | `-shd`     | string           | `displayColor`      | Set the shading schema to use. Valid values are: `none`: export no shading data to the USD, `displayColor`: unless there is a colorset named `displayColor` on a Mesh, export the diffuse color of its bound shader as `displayColor` primvar on the USD Mesh, `pxrRis`: export the authored Maya shading networks, applying the same translations applied by RenderMan for Maya to the shader types, `useRegistry`: Use a registry based to export the Maya shading network to an equivalent UsdShade network. |
+| `-shadingMode`                   | `-shd`     | string           | `useRegistry`      | Set the shading schema to use. Valid values are: `none`: export no shading data to the USD, `displayColor`: unless there is a colorset named `displayColor` on a Mesh, export the diffuse color of its bound shader as `displayColor` primvar on the USD Mesh, `pxrRis`: export the authored Maya shading networks, applying the same translations applied by RenderMan for Maya to the shader types, `useRegistry`: Use a registry based to export the Maya shading network to an equivalent UsdShade network. |
 | `-selection`                     | `-sl`      | noarg            | false               | When set, only selected nodes (and their descendants) will be exported |
 | `-stripNamespaces`               | `-sn`      | bool             | false               | Remove namespaces during export. By default, namespaces are exported to the USD file in the following format: nameSpaceExample_pPlatonic1 |
+| `-worldspace`                    | `-wsp`     | bool             | false               | Export all root prim using their full worldspace transform instead of their local transform
 | `-staticSingleSample`            | `-sss`     | bool             | false               | Converts animated values with a single time sample to be static instead |
 | `-geomSidedness`                   | `-gs`     | string           | derived                | Determines how geometry sidedness is defined. Valid values are: `derived` - Value is taken from the shapes doubleSided attribute, `single` - Export single sided, `double` - Export double sided |
 
@@ -400,22 +409,30 @@ wanted the default flags mentioned above:
 
 ```javascript
 {
-    "UsdMaya": {
-        "mayaUSDExport": {
-            "exportMaterialCollections": true,
-            "chaser": "alembic",
-            "chaserArgs": [
-                ["alembic", "primvarprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"],
-                ["alembic", "attrprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"]
-            ]
+  "Plugins": [
+    {
+      "Info": {
+        "UsdMaya": {
+            "UsdExport": {
+              "exportMaterialCollections": true,
+              "chaser": ["alembic"],
+              "chaserArgs": [
+                  ["alembic", "primvarprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"],
+                  ["alembic", "attrprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"]
+              ]
+          }
         }
+      },
+      "Name": "MySiteSpecificConfigPlugin",
+      "Type": "resource"
     }
+  ]
 }
 ```
 
 This also works for the `MayaUSDImportCommand` base command, for example
 in the `mayaUSDImport` command and the "File > Import" menu item; use
-the `mayaUSDImport` key in the `plugInfo.json` file to configure your
+the `UsdImport` key in the `plugInfo.json` file to configure your
 site-specific defaults.
 
 
@@ -428,6 +445,7 @@ names and annotations for various elements passed to the other commands.
 
 | Long flag              | Short flag | Type           | Description |
 | ---------------------- | ---------- | -------------- | ----------- |
+| `-useRegistryOnly`     | `-ur`      | noarg          | Modifier to limit all following options to useRegistry modes only |
 | `-export`              | `-ex`      | noarg          | Retrieve the list of export shading mode nice names. |
 | `-exportOptions`       | `-eo`      | string         | Retrieve the names necessary to be passed to the `shadingMode` and `convertMaterialsTo` flags of the export command. |
 | `-exportAnnotation`    | `-ea`      | string         | Retrieve the description of the export shading mode option |
@@ -436,6 +454,22 @@ names and annotations for various elements passed to the other commands.
 | `-import`              | `-im`      | noarg          | Retrieve the list of import shading mode nice names. |
 | `-importOptions`       | `-io`      | string         | Retrieve the a pair of names that completely define a shading mode, as used by the import `shadingMode` option |
 | `-importAnnotation`    | `-ia`      | string         | Retrieve the description of the import shading mode option |
+
+## `mayaUSDListJobContexts`
+
+The purpose of this command is to find the names and annotations for registered import and export job contexts.
+
+### Command Flags
+
+| Long flag              | Short flag | Type           | Description |
+| ---------------------- | ---------- | -------------- | ----------- |
+| `-export`              | `-ex`      | noarg          | Retrieve the list of export job context nice names. |
+| `-exportAnnotation`    | `-ea`      | string         | Retrieve the description of the export job context option nice name passed as parameter. |
+| `-exportArguments`     | `-eg`      | string         | Retrieve the export arguments affected by the export job context nice name passed as parameter |
+| `-import`              | `-im`      | noarg          | Retrieve the list of import job context nice names. |
+| `-importAnnotation`    | `-ia`      | string         | Retrieve the description of the import job context option nice name passed as parameter. |
+| `-importArguments`     | `-ig`      | string         | Retrieve the import arguments affected by the import job context nice name passed as parameter |
+| `-jobContext`          | `-jc`      | string         | Retrieve the job context name associated with a nice name. |
 
 
 ## `EditTargetCommand`

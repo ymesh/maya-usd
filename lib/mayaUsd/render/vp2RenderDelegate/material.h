@@ -24,6 +24,7 @@
 
 #include <maya/MShaderManager.h>
 
+#include <chrono>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -61,9 +62,21 @@ struct HdVP2TextureInfo
     bool                  _isColorSpaceSRGB { false }; //!< Whether sRGB linearization is needed
 };
 
+using HdVP2TextureInfoSharedPtr = std::shared_ptr<HdVP2TextureInfo>;
+using HdVP2TextureInfoWeakPtr = std::weak_ptr<HdVP2TextureInfo>;
+
 /*! \brief  An unordered string-indexed map to cache texture information.
+
+    Maya has a global internal texture map but we can't rely on it here, because we miss out
+    on the extra information we store, such as _isColorSpaceSRGB. In HdVP2GlobalTextureMap we
+    have that additional information.
+
+    In order to correctly delete textures when they are no longer in use the global texture map
+    holds only a weak_ptr to the HdVP2TextureInfo. The individual materials hold shared_ptrs to
+    the textures they are using, so that when no materials are using a texture it'll be deleted.
  */
-using HdVP2TextureMap = std::unordered_map<std::string, HdVP2TextureInfo>;
+using HdVP2LocalTextureMap = std::unordered_map<std::string, HdVP2TextureInfoSharedPtr>;
+using HdVP2GlobalTextureMap = std::unordered_map<std::string, HdVP2TextureInfoWeakPtr>;
 
 /*! \brief  A VP2-specific implementation for a Hydra material prim.
     \class  HdVP2Material
@@ -76,7 +89,7 @@ public:
     HdVP2Material(HdVP2RenderDelegate*, const SdfPath&);
 
     //! Destructor.
-    ~HdVP2Material() override = default;
+    ~HdVP2Material() override;
 
     void Sync(HdSceneDelegate*, HdRenderParam*, HdDirtyBits*) override;
 
@@ -87,61 +100,109 @@ public:
 #endif
 
     //! Get the surface shader instance.
-    MHWRender::MShaderInstance* GetSurfaceShader() const { return _surfaceShader.get(); }
+    MHWRender::MShaderInstance* GetSurfaceShader(const TfToken& reprToken) const;
+    MHWRender::MShaderInstance* GetPointShader(const TfToken& reprToken) const;
 
     //! Get primvar tokens required by this material.
-    const TfTokenVector& GetRequiredPrimvars() const { return _requiredPrimvars; }
+    const TfTokenVector& GetRequiredPrimvars(const TfToken& reprToken) const;
 
-#ifdef HDVP2_MATERIAL_CONSOLIDATION_UPDATE_WORKAROUND
+    void EnqueueLoadTextures();
+    void ClearPendingTasks();
+
     //! The specified Rprim starts listening to changes on this material.
     void SubscribeForMaterialUpdates(const SdfPath& rprimId);
 
     //! The specified Rprim stops listening to changes on this material.
     void UnsubscribeFromMaterialUpdates(const SdfPath& rprimId);
-#endif
+
+    class TextureLoadingTask;
+    friend class TextureLoadingTask;
+
+    static void OnMayaExit();
 
 private:
-    void _ApplyVP2Fixes(HdMaterialNetwork& outNet, const HdMaterialNetwork& inNet);
-#ifdef WANT_MATERIALX_BUILD
-    void _ApplyMtlxVP2Fixes(HdMaterialNetwork2& outNet, const HdMaterialNetwork2& inNet);
-    MHWRender::MShaderInstance* _CreateMaterialXShaderInstance(
-        SdfPath const&            materialId,
-        HdMaterialNetwork2 const& hdNetworkMap);
-#endif
-    MHWRender::MShaderInstance* _CreateShaderInstance(const HdMaterialNetwork& mat);
-    void                        _UpdateShaderInstance(const HdMaterialNetwork& mat);
-    const HdVP2TextureInfo& _AcquireTexture(const std::string& path, const HdMaterialNode& node);
+    class CompiledNetwork
+    {
+    public:
+        CompiledNetwork(HdVP2Material* m)
+            : _owner(m)
+        {
+        }
 
-#ifdef HDVP2_MATERIAL_CONSOLIDATION_UPDATE_WORKAROUND
+        void Sync(HdSceneDelegate*, const HdMaterialNetworkMap&);
+
+        MHWRender::MShaderInstance* GetSurfaceShader() const { return _surfaceShader.get(); }
+        MHWRender::MShaderInstance* GetPointShader() const;
+        const TfTokenVector&        GetRequiredPrimvars() const { return _requiredPrimvars; }
+
+    private:
+        HdVP2Material* _owner;
+        TfToken _surfaceNetworkToken; //!< Generated token to uniquely identify a material network
+        SdfPath _surfaceShaderId;     //!< Path of the surface shader
+        HdVP2ShaderUniquePtr         _surfaceShader;    //!< VP2 surface shader instance
+        mutable HdVP2ShaderUniquePtr _pointShader;      //!< VP2 point shader instance, if needed
+        TfTokenVector                _requiredPrimvars; //!< primvars required by this network
+        std::unordered_map<SdfPath, SdfPath, SdfPath::Hash>
+            _nodePathMap; //!< Mapping from authored node paths to VP2-specific simplified pathes
+#ifdef WANT_MATERIALX_BUILD
+        // MaterialX-only at the moment, but will be used for UsdPreviewSurface when the upgrade to
+        // HdMaterialNetwork2 is complete.
+        size_t _topoHash = 0;
+
+        void _ApplyMtlxVP2Fixes(HdMaterialNetwork2& outNet, const HdMaterialNetwork2& inNet);
+        MHWRender::MShaderInstance* _CreateMaterialXShaderInstance(
+            SdfPath const&            materialId,
+            HdMaterialNetwork2 const& hdNetworkMap);
+#endif
+        void _ApplyVP2Fixes(HdMaterialNetwork& outNet, const HdMaterialNetwork& inNet);
+        MHWRender::MShaderInstance* _CreateShaderInstance(const HdMaterialNetwork& mat);
+        void _UpdateShaderInstance(HdSceneDelegate* sceneDelegate, const HdMaterialNetwork& mat);
+    };
+
+    enum NetworkConfig
+    {
+        kFull = 0,
+        kUntextured,
+
+        kNumNetworkConfigs
+    };
+
+    const HdVP2TextureInfo& _AcquireTexture(
+        HdSceneDelegate*      sceneDelegate,
+        const std::string&    path,
+        const HdMaterialNode& node);
+    void _UpdateLoadedTexture(
+        HdSceneDelegate*     sceneDelegate,
+        const std::string&   path,
+        MHWRender::MTexture* texture,
+        bool                 isColorSpaceSRGB,
+        const MFloatArray&   uvScaleOffset);
+
     //! Trigger sync on all Rprims which are listening to changes on this material.
     void _MaterialChanged(HdSceneDelegate* sceneDelegate);
-#endif
+
+    static void _ScheduleRefresh();
+
+    NetworkConfig _GetCompiledConfig(const TfToken& reprToken) const;
+
+    static std::mutex                            _refreshMutex;
+    static std::chrono::steady_clock::time_point _startTime;
+    static std::atomic_size_t                    _runningTasksCounter;
 
     HdVP2RenderDelegate* const
         _renderDelegate; //!< VP2 render delegate for which this material was created
 
-    std::unordered_map<SdfPath, SdfPath, SdfPath::Hash>
-        _nodePathMap; //!< Mapping from authored node paths to VP2-specific simplified pathes
+    CompiledNetwork              _compiledNetworks[kNumNetworkConfigs];
+    static HdVP2GlobalTextureMap _globalTextureMap; //!< Texture in use by all materials in MayaUSD
+    HdVP2LocalTextureMap         _localTextureMap;  //!< Textures used by this material
 
-    TfToken _surfaceNetworkToken; //!< Generated token to uniquely identify a material network
+    std::unordered_map<std::string, TextureLoadingTask*> _textureLoadingTasks;
 
-    HdVP2ShaderUniquePtr _surfaceShader;    //!< VP2 surface shader instance
-    SdfPath              _surfaceShaderId;  //!< Path of the surface shader
-    HdVP2TextureMap      _textureMap;       //!< Textures used by this material
-    TfTokenVector        _requiredPrimvars; //!< primvars required by this material
-#ifdef HDVP2_MATERIAL_CONSOLIDATION_UPDATE_WORKAROUND
     //! Mutex protecting concurrent access to the Rprim set
     std::mutex _materialSubscriptionsMutex;
 
     //! The set of Rprims listening to changes on this material
     std::set<SdfPath> _materialSubscriptions;
-#endif
-
-#ifdef WANT_MATERIALX_BUILD
-    // MaterialX-only at the moment, but will be used for UsdPreviewSurface when the upgrade to
-    // HdMaterialNetwork2 is complete.
-    size_t _topoHash = 0;
-#endif
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

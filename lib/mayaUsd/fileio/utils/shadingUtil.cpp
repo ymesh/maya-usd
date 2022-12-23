@@ -22,6 +22,8 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/pxr.h>
 #include <pxr/usd/sdf/valueTypeName.h>
+#include <pxr/usd/sdr/registry.h>
+#include <pxr/usd/sdr/shaderNode.h>
 #include <pxr/usd/usdShade/input.h>
 #include <pxr/usd/usdShade/material.h>
 #include <pxr/usd/usdShade/output.h>
@@ -147,49 +149,84 @@ UsdShadeOutput UsdMayaShadingUtil::CreateShaderOutputAndConnectMaterial(
         return UsdShadeOutput();
     }
 
-    UsdShadeOutput shaderOutput = shader.CreateOutput(terminalName, materialOutput.GetTypeName());
+    // Make sure the shading node has a registered output by that name.
+    SdrRegistry& registry = SdrRegistry::GetInstance();
+    TfToken      nodeID;
+    shader.GetIdAttr().Get(&nodeID);
+    TfToken               outputName = terminalName;
+    SdrShaderNodeConstPtr shaderNodeDef = registry.GetShaderNodeByIdentifier(nodeID);
+    if (shaderNodeDef) {
+        const NdrTokenVec& outputNames = shaderNodeDef->GetOutputNames();
+        if (std::find(outputNames.cbegin(), outputNames.cend(), terminalName) == outputNames.cend()
+            && outputNames.size() == 1) {
+            outputName = outputNames.front();
+        }
+    }
+    UsdShadeOutput shaderOutput = shader.CreateOutput(outputName, materialOutput.GetTypeName());
 
-    materialOutput.ConnectToSource(shaderOutput);
+    UsdPrim parentPrim = shader.GetPrim().GetParent();
+    if (parentPrim == material.GetPrim()) {
+        materialOutput.ConnectToSource(shaderOutput);
+    } else {
+        // If the surface is inside a multi-material node graph, then we must create an intermediate
+        // output on the NodeGraph
+        UsdShadeNodeGraph parentNodeGraph(parentPrim);
+        UsdShadeOutput    parentOutput
+            = parentNodeGraph.CreateOutput(terminalName, materialOutput.GetTypeName());
+        parentOutput.ConnectToSource(shaderOutput);
+        materialOutput.ConnectToSource(parentOutput);
+    }
 
     return shaderOutput;
 }
 
-MObject UsdMayaShadingUtil::CreatePlace2dTextureAndConnectTexture(MObject textureNode)
+void UsdMayaShadingUtil::ConnectPlace2dTexture(MObject textureNode, MObject uvNode)
 {
     MStatus           status;
-    MObject           uvObj;
-    MFnDependencyNode uvDepFn;
-    MFnDependencyNode depFn(textureNode);
+    MFnDependencyNode uvDepFn(uvNode, &status);
+    MFnDependencyNode depFn(textureNode, &status);
+    {
+        MPlug filePlug = depFn.findPlug(_tokens->uvCoord.GetText(), true, &status);
+        if (!filePlug.isDestination()) {
+            MPlug uvPlug = uvDepFn.findPlug(_tokens->outUV.GetText(), true, &status);
+            UsdMayaUtil::Connect(uvPlug, filePlug, false);
+        }
+    }
+    {
+        MPlug filePlug = depFn.findPlug(_tokens->uvFilterSize.GetText(), true, &status);
+        if (!filePlug.isDestination()) {
+            MPlug uvPlug = uvDepFn.findPlug(_tokens->outUvFilterSize.GetText(), true, &status);
+            UsdMayaUtil::Connect(uvPlug, filePlug, false);
+        }
+    }
+    for (const TfToken& uvName : _Place2dTextureConnections) {
+        MPlug filePlug = depFn.findPlug(uvName.GetText(), true, &status);
+        if (!filePlug.isDestination()) {
+            MPlug uvPlug = uvDepFn.findPlug(uvName.GetText(), true, &status);
+            UsdMayaUtil::Connect(uvPlug, filePlug, false);
+        }
+    }
+}
+
+MObject UsdMayaShadingUtil::CreatePlace2dTextureAndConnectTexture(MObject textureNode)
+{
+    MStatus status;
+    MObject uvObj;
     if (!(UsdMayaTranslatorUtil::CreateShaderNode(
-              _tokens->place2dTexture.GetText(),
-              _tokens->place2dTexture.GetText(),
-              UsdMayaShadingNodeType::Utility,
-              &status,
-              &uvObj)
-          && uvDepFn.setObject(uvObj))) {
-        // we need to make sure assumes those types are loaded..
+            _tokens->place2dTexture.GetText(),
+            _tokens->place2dTexture.GetText(),
+            UsdMayaShadingNodeType::Utility,
+            &status,
+            &uvObj))) {
+        // we need to make sure those types are loaded..
+        MFnDependencyNode depFn(textureNode);
         TF_RUNTIME_ERROR(
             "Could not create place2dTexture for texture '%s'.\n", depFn.name().asChar());
         return MObject();
     }
 
     // Connect manually (fileTexturePlacementConnect is not available in batch):
-    {
-        MPlug uvPlug = uvDepFn.findPlug(_tokens->outUV.GetText(), true, &status);
-        MPlug filePlug = depFn.findPlug(_tokens->uvCoord.GetText(), true, &status);
-        UsdMayaUtil::Connect(uvPlug, filePlug, false);
-    }
-    {
-        MPlug uvPlug = uvDepFn.findPlug(_tokens->outUvFilterSize.GetText(), true, &status);
-        MPlug filePlug = depFn.findPlug(_tokens->uvFilterSize.GetText(), true, &status);
-        UsdMayaUtil::Connect(uvPlug, filePlug, false);
-    }
-    MString connectCmd;
-    for (const TfToken& uvName : _Place2dTextureConnections) {
-        MPlug uvPlug = uvDepFn.findPlug(uvName.GetText(), true, &status);
-        MPlug filePlug = depFn.findPlug(uvName.GetText(), true, &status);
-        UsdMayaUtil::Connect(uvPlug, filePlug, false);
-    }
+    ConnectPlace2dTexture(textureNode, uvObj);
 
     return uvObj;
 }

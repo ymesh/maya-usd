@@ -101,7 +101,9 @@ struct HdVP2BasisCurvesSharedData
     in HdVP2RenderDelegate::CommitResources(), which runs on main-thread after
     all Rprims have been updated.
 */
-class HdVP2BasisCurves final : public HdBasisCurves
+class HdVP2BasisCurves final
+    : public HdBasisCurves
+    , public MayaUsdRPrim
 {
 public:
     HdVP2BasisCurves(
@@ -129,51 +131,32 @@ protected:
 
     void _InitRepr(TfToken const& reprToken, HdDirtyBits* dirtyBits) override;
 
+    TfToken& _RenderTag() override { return _curvesSharedData._renderTag; }
+
 private:
     void _UpdateRepr(HdSceneDelegate* sceneDelegate, TfToken const& reprToken);
-    void _MakeOtherReprRenderItemsInvisible(HdSceneDelegate*, const TfToken&);
-
-    void _CommitMVertexBuffer(MHWRender::MVertexBuffer* const, void*) const;
 
     void _UpdateDrawItem(
         HdSceneDelegate*             sceneDelegate,
         HdVP2DrawItem*               drawItem,
+        const TfToken&               reprToken,
         HdBasisCurvesReprDesc const& desc);
-
-    void _HideAllDrawItems(const TfToken& reprToken);
 
     void _UpdatePrimvarSources(
         HdSceneDelegate*     sceneDelegate,
         HdDirtyBits          dirtyBits,
         TfTokenVector const& requiredPrimvars);
 
-    MHWRender::MRenderItem* _CreatePatchRenderItem(const MString& name) const;
-    MHWRender::MRenderItem* _CreateWireRenderItem(const MString& name) const;
-    MHWRender::MRenderItem* _CreateBBoxRenderItem(const MString& name) const;
-
-#ifndef MAYA_NEW_POINT_SNAPPING_SUPPORT
-    MHWRender::MRenderItem* _CreatePointsRenderItem(const MString& name) const;
-#endif
+    MHWRender::MRenderItem*
+    _CreatePatchRenderItem(const MString& name, const TfToken& reprToken) const;
 
     enum DirtyBits : HdDirtyBits
     {
-        DirtySelection = MayaPrimCommon::DirtySelection,
-        DirtySelectionHighlight = MayaPrimCommon::DirtySelectionHighlight
+        DirtySelectionHighlight = MayaUsdRPrim::DirtySelectionHighlight
     };
-
-    HdVP2RenderDelegate* _delegate {
-        nullptr
-    };                      //!< VP2 render delegate for which this mesh was created
-    const MString _rprimId; //!< Rprim id cached as a maya string for easier debugging and profiling
 
     //! Shared data for all draw items of the Rprim
     HdVP2BasisCurvesSharedData _curvesSharedData;
-
-    //! Selection status of the Rprim
-    HdVP2SelectionStatus _selectionStatus { kUnselected };
-
-    //! The string representation of the runtime only path to this object
-    MStringArray _PrimSegmentString;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

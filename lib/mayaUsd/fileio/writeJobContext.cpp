@@ -61,14 +61,18 @@ PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
-inline SdfPath _GetRootOverridePath(const UsdMayaJobExportArgs& args, const SdfPath& path)
+inline SdfPath _GetRootOverridePath(
+    const UsdMayaJobExportArgs& args,
+    const SdfPath&              path,
+    bool                        modelRootOverride = true,
+    bool                        rootMap = true)
 {
     if (!path.IsEmpty()) {
-        if (!args.usdModelRootOverridePath.IsEmpty()) {
+        if (modelRootOverride && !args.usdModelRootOverridePath.IsEmpty()) {
             return path.ReplacePrefix(path.GetPrefixes()[0], args.usdModelRootOverridePath);
         }
 
-        if (!args.rootMapFunction.IsNull()) {
+        if (rootMap && !args.rootMapFunction.IsNull()) {
             return args.rootMapFunction.MapSourceToTarget(path);
         }
     }
@@ -87,6 +91,25 @@ UsdMayaWriteJobContext::UsdMayaWriteJobContext(const UsdMayaJobExportArgs& args)
 }
 
 UsdMayaWriteJobContext::~UsdMayaWriteJobContext() = default;
+
+static bool _ShouldCreatePrim(const MDagPath& dagPath, bool isMerged)
+{
+    MDagPath shapeDagPath = dagPath;
+    if (isMerged) {
+        // if we're merging transforms, then we need to look at the shape.
+        shapeDagPath.extendToShape();
+    }
+
+    MStatus                 status;
+    MObject                 obj = shapeDagPath.node();
+    const MFnDependencyNode depFn(obj, &status);
+    if (!status) {
+        return false;
+    }
+
+    const std::string mayaTypeName(depFn.typeName().asChar());
+    return UsdMayaPrimWriterRegistry::IsPrimless(mayaTypeName);
+}
 
 bool UsdMayaWriteJobContext::IsMergedTransform(const MDagPath& path) const
 {
@@ -120,9 +143,23 @@ bool UsdMayaWriteJobContext::IsMergedTransform(const MDagPath& path) const
 
     // Any transform with multiple (non-intermediate) shapes below is
     // non-mergeable.
-    unsigned int numberOfShapesDirectlyBelow = 0u;
-    path.numberOfShapesDirectlyBelow(numberOfShapesDirectlyBelow);
-    if (numberOfShapesDirectlyBelow != 1) {
+    // Expanded out the implementation of MDagPath::numberOfShapesDirectlyBelow() to cut down
+    // the time by half.
+    unsigned int numShapes = 0;
+    const auto   childCount = path.childCount();
+    for (auto child = decltype(childCount) { 0 }; child < childCount; ++child) {
+        const auto dagObj = path.child(child);
+        MFnDagNode dagNode(dagObj);
+        if (dagNode.isIntermediateObject() || dagNode.isIntermediateObject()) {
+            continue;
+        }
+        if (dagObj.hasFn(MFn::kShape)) {
+            numShapes++;
+            if (numShapes > 1)
+                return false;
+        }
+    }
+    if (numShapes != 1) {
         return false;
     }
 
@@ -132,7 +169,6 @@ bool UsdMayaWriteJobContext::IsMergedTransform(const MDagPath& path) const
     // For efficiency reasons, since (# exportable children <= # children),
     // check the total child count first before checking whether they're
     // exportable.
-    const unsigned int childCount = path.childCount();
     if (childCount != 1) {
         MDagPath     childDag(path);
         unsigned int numExportableChildren = 0u;
@@ -163,13 +199,14 @@ SdfPath UsdMayaWriteJobContext::ConvertDagToUsdPath(const MDagPath& dagPath) con
         path = path.GetParentPath();
     }
 
+    path = _GetRootOverridePath(mArgs, path, /* modelRootOverride = */ false, /* rootMap = */ true);
+
     if (!mParentScopePath.IsEmpty()) {
         // Since path is from MDagPathToUsdPath, it will always be
         // an absolute path...
         path = path.ReplacePrefix(SdfPath::AbsoluteRootPath(), mParentScopePath);
     }
-
-    return _GetRootOverridePath(mArgs, path);
+    return _GetRootOverridePath(mArgs, path, /* modelRootOverride = */ true, /* rootMap = */ false);
 }
 
 UsdMayaWriteJobContext::_ExportAndRefPaths
@@ -208,8 +245,14 @@ UsdMayaWriteJobContext::_GetInstanceMasterPaths(const MDagPath& instancePath) co
     } else {
         // Cannot directly instance gprims, so this must be exported underneath
         // a fake scope using the gprim name.
-        MFnDagNode primNode(instancePath.node());
-        return std::make_pair(path.AppendChild(TfToken(primNode.name().asChar())), path);
+        MFnDagNode  primNode(instancePath.node());
+        std::string gprimScopeName(primNode.name().asChar());
+        if (mArgs.stripNamespaces) {
+            gprimScopeName = UsdMayaUtil::stripNamespaces(gprimScopeName);
+        }
+        gprimScopeName = TfStringReplace(gprimScopeName, "_", "__");
+        gprimScopeName = TfMakeValidIdentifier(gprimScopeName);
+        return std::make_pair(path.AppendChild(TfToken(gprimScopeName)), path);
     }
 }
 
@@ -338,6 +381,12 @@ bool UsdMayaWriteJobContext::_NeedToTraverse(const MDagPath& curDag) const
         }
     }
 
+    if (!_ShouldCreatePrim(curDag, mArgs.mergeTransformAndShape)) {
+        // If we're not going to create a prim at curDag, then we do not need to
+        // traverse.
+        return false;
+    }
+
     return true;
 }
 
@@ -390,7 +439,7 @@ bool UsdMayaWriteJobContext::_OpenFile(const std::string& filename, bool append)
         // Note that we only need to create the parentScope prim if we're not
         // using a usdModelRootOverridePath - if we ARE using
         // usdModelRootOverridePath, then IT will take the name of our parent
-        // scope, and will be created when we writ out the model variants
+        // scope, and will be created when we write out the model variants
         if (mArgs.usdModelRootOverridePath.IsEmpty()) {
             mParentScopePath
                 = UsdGeomScope::Define(mStage, mParentScopePath).GetPrim().GetPrimPath();

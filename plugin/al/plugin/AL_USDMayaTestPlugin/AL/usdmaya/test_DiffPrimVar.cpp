@@ -169,13 +169,81 @@ TEST(DiffPrimVar, diffGeomExtent)
     }
 }
 
-TEST(DiffPrimVar, diffGeomNormals)
+TEST(DiffPrimVar, diffGeomRGBA)
 {
     MFileIO::newFile(true);
     MStringArray result;
     ASSERT_TRUE(
-        MGlobal::executeCommand("polySphere  -r 1 -sx 20 -sy 20 -ax 0 1 0 -cuv 2 -ch 1", result)
+        MGlobal::executeCommand(
+            "polyCube -w 1 -h 1 -d 1 -sx 1 -sy 1 -sz 1 -ax 0 1 0 -cuv 4 -ch 1;;", result)
         == MS::kSuccess);
+    ASSERT_TRUE(
+        MGlobal::executeCommand("setAttr \"pCubeShape1.displayColors\" 1;") == MS::kSuccess);
+
+    MSelectionList mSel;
+    EXPECT_TRUE(mSel.add("pCube1") == MS::kSuccess);
+
+    MDagPath mDagPath;
+    mSel.getDagPath(0, mDagPath);
+    MFnMesh mFnMesh(mDagPath);
+    mFnMesh.createColorSetWithName("displayColor");
+
+    // Set one polyCube face color to blue and the alpha to 1
+    MColor blueColour(0.0f, 0.0f, 1.0f, 1.0f);
+    mFnMesh.setFaceColor(blueColour, 4);
+
+    // Run export comand
+    auto        tempPath = buildTempPath("AL_USDMayaTests_diffRGBA.usda");
+    std::string exportCommand = R"(
+    file -force -options "Dynamic_Attributes=1;Duplicate_Instances=1;Merge_Transforms=1;Animation=0;Use_Timeline_Range=0;Frame_Min=0;Frame_Max=1;Sub_Samples=1;Filter_Sample=0;Export_At_Which_Time=0;Export_In_World_Space=0;Activate_all_Plugin_Translators=1;Active_Translator_List=;Inactive_Translator_List=;Nurbs_Curves=1;Meshes=1;Mesh_Face_Connects=1;Mesh_Points=1;Mesh_Extents=1;Mesh_Normals=1;Mesh_Vertex_Creases=1;Mesh_Edge_Creases=1;Mesh_UVs=1;Mesh_UV_Only=0;Mesh_Points_as_PRef=0;Mesh_Colours=1;Default_RGB=0.2;Default_Alpha=1;Mesh_Holes=1;Write_Normals_as_Primvars=0;Reverse_Opposite_Normals=0;Subdivision_scheme=0;Compaction_Level=3;" -type "AL usdmaya export" -pr -ea
+  )";
+    exportCommand += "\"";
+    exportCommand += tempPath;
+    exportCommand += "\"";
+    ASSERT_TRUE(MGlobal::executeCommand(exportCommand.c_str()) == MS::kSuccess);
+
+    // Validate export
+    UsdStageRefPtr stage = UsdStage::Open(tempPath);
+
+    MString path = MString("/pCube1");
+    SdfPath primPath(path.asChar());
+    UsdPrim geomPrim = stage->GetPrimAtPath(primPath);
+    ASSERT_TRUE(geomPrim.IsValid());
+    UsdGeomMesh geom(geomPrim);
+
+    // Confirm displayOpacity is 1.0
+    const TfToken displayOpacityToken("primvars:displayOpacity");
+    UsdAttribute  opacityAttribute = geomPrim.GetAttribute(displayOpacityToken);
+
+    VtFloatArray opacity;
+    opacityAttribute.Get(&opacity);
+    VtFloatArray expectedOpacity { 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
+    EXPECT_EQ(opacity, expectedOpacity);
+
+    // Confirm displayColor has been applied
+    const TfToken displayColorToken("primvars:displayColor");
+    UsdAttribute  colorAttribute = geomPrim.GetAttribute(displayColorToken);
+
+    VtVec3fArray color;
+    colorAttribute.Get(&color);
+    VtVec3fArray expectedColor {
+        GfVec3f(0.2f), GfVec3f(0.2f),          GfVec3f(0.2f),
+        GfVec3f(0.2f), GfVec3f(0.f, 0.f, 1.f), GfVec3f(0.2f),
+    };
+    EXPECT_EQ(color, expectedColor);
+}
+
+TEST(DiffPrimVar, diffGeomNormals)
+{
+    MFileIO::newFile(true);
+    MStringArray result;
+    // Creates a sphere with per face per vertex normals
+    ASSERT_TRUE(
+        MGlobal::executeCommand("polySphere  -r 1 -sx 20 -sy 20 -ax 0 1 0 -cuv 2 -ch 1;", result)
+        == MS::kSuccess);
+    ASSERT_TRUE(result.length() == 2);
+    ASSERT_TRUE(
+        MGlobal::executeCommand("LockNormals; polySoftEdge -a 0 -ch 1 pSphere1;") == MS::kSuccess);
 
     const MString temp_path = buildTempPath("AL_USDMayaTests_diffPrimVarNormals.usda");
 
@@ -187,7 +255,6 @@ TEST(DiffPrimVar, diffGeomNormals)
         + temp_path + "\";";
 
     ASSERT_TRUE(MGlobal::executeCommand(exportCommand) == MS::kSuccess);
-    ASSERT_TRUE(result.length() == 2);
 
     MSelectionList sl;
     EXPECT_TRUE(sl.add("pSphereShape1") == MS::kSuccess);
@@ -1012,6 +1079,19 @@ TEST(DiffPrimVar, guessUVInterpolationType)
         TfToken token = AL::usdmaya::utils::guessUVInterpolationType(u, v, indices, pointindices);
         EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
+
+    // we should get a face varying description back (for uniform data)
+    {
+        MIntArray pointindices = indices;
+        pointindices[9] = 19;
+        // Set the indices to per-face values
+        for (int i = 0, face = 1; i < 31; ++i, (i % 4) ? 0 : ++face) {
+            indices[i] = face;
+        }
+
+        TfToken token = AL::usdmaya::utils::guessUVInterpolationType(u, v, indices, pointindices);
+        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
+    }
 }
 
 TEST(DiffPrimVar, guessUVInterpolationTypeExtended)
@@ -1066,6 +1146,8 @@ TEST(DiffPrimVar, guessUVInterpolationTypeExtended)
             u, v, indices, pointindices, faceCounts);
         EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
+
+    // we should get a uniform description back
     MIntArray pointindices = indices;
     pointindices[9] = 19;
 
@@ -1152,6 +1234,8 @@ TEST(DiffPrimVar, guessUVInterpolationTypeExtensive)
             u, v, indices, pointindices, faceCounts, newIndices);
         EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
+
+    // we should get a uniform description back
     MIntArray pointindices = indices;
     indices[0] = 4;
     indices[1] = 5;
@@ -1197,58 +1281,105 @@ TEST(DiffPrimVar, guessUVInterpolationTypeExtensive)
     EXPECT_TRUE(token == UsdGeomTokens->uniform);
 }
 
-TEST(DiffPrimVar, guessVec3InterpolationTypef)
+TEST(DiffPrimVar, guessColourSetInterpolationType)
 {
-    MIntArray         indices;
-    MFloatVectorArray u;
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
-        }
+    size_t      numElements = 31;
+    MColorArray rgba;
+    rgba.setLength(numElements);
+    for (int i = 0; i < (int)numElements; ++i) {
+        rgba[i].r = 0.f;
+        rgba[i].g = 0.f;
+        rgba[i].b = 0.f;
+        rgba[i].a = 1.f;
     }
 
-    // we should get a constant value back
+    // we should get a constant value back for constant data
     {
         TfToken token
-            = AL::usdmaya::utils::guessVec3InterpolationType(&u[0].x, u.length(), indices, indices);
+            = AL::usdmaya::utils::guessColourSetInterpolationType(&rgba[0].r, numElements);
         EXPECT_TRUE(token == UsdGeomTokens->constant);
     }
 
-    // we should get a per vertex description back
+    // we should get a face varying description back for per-vertex data
     {
-        u[9].x = 0.5f;
+        rgba[0].r = 0.2f;
+        rgba[0].g = 0.7f;
+        rgba[15].r = 0.2f;
+        rgba[15].g = 0.7f;
+        rgba[21].r = 0.2f;
+        rgba[21].g = 0.7f;
 
         TfToken token
-            = AL::usdmaya::utils::guessVec3InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
+            = AL::usdmaya::utils::guessColourSetInterpolationType(&rgba[0].r, numElements);
+        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
 
-    // we should get a face varying description back
+    // we should get a face varying description back for face varying data
     {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
+        rgba[9].r = 0.5f;
 
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationType(
-            &u[0].x, u.length(), indices, pointindices);
+        TfToken token
+            = AL::usdmaya::utils::guessColourSetInterpolationType(&rgba[0].r, numElements);
+        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
+    }
+
+    // we should get a face varying description back for uniform data
+    {
+        // Set the colours to per-face values
+        for (int i = 0, face = 0; i < (int)numElements; ++i, (i % 4) ? 0 : ++face) {
+            rgba[i] = 0.1f * face;
+        }
+
+        TfToken token
+            = AL::usdmaya::utils::guessColourSetInterpolationType(&rgba[0].r, numElements);
         EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
 }
 
-TEST(DiffPrimVar, guessVec3InterpolationTypeExtendedf)
+TEST(DiffPrimVar, guessColourSetInterpolationTypeExtensive)
 {
-    MIntArray         indices;
-    MFloatVectorArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
-        }
+    size_t                numPoints = 10;
+    size_t                numElements = 31;
+    std::vector<uint32_t> indicesToExtract;
+    MIntArray             indices;
+    MColorArray           rgba;
+    indices.append(0);
+    indices.append(1);
+    indices.append(3);
+    indices.append(2);
+    indices.append(2);
+    indices.append(3);
+    indices.append(5);
+    indices.append(4);
+    indices.append(4);
+    indices.append(5);
+    indices.append(7);
+    indices.append(6);
+    indices.append(6);
+    indices.append(7);
+    indices.append(1);
+    indices.append(0);
+    indices.append(1);
+    indices.append(7);
+    indices.append(5);
+    indices.append(3);
+    indices.append(6);
+    indices.append(0);
+    indices.append(2);
+    indices.append(4);
+    indices.append(8);
+    indices.append(9);
+    indices.append(8);
+    indices.append(9);
+    indices.append(8);
+    indices.append(9);
+    indices.append(1);
+    rgba.setLength(numElements);
+    for (int i = 0; i < (int)numElements; ++i) {
+        rgba[i].r = 0.f;
+        rgba[i].g = 0.f;
+        rgba[i].b = 0.f;
+        rgba[i].a = 1.f;
     }
     MIntArray faceCounts;
     faceCounts.append(4);
@@ -1260,763 +1391,52 @@ TEST(DiffPrimVar, guessVec3InterpolationTypeExtendedf)
     faceCounts.append(4);
     faceCounts.append(3);
 
-    // we should get a constant value back
+    // we should get a constant value back for constant data
     {
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
+        TfToken token = AL::usdmaya::utils::guessColourSetInterpolationTypeExtensive(
+            &rgba[0].r, numElements, numPoints, indices, faceCounts, indicesToExtract);
         EXPECT_TRUE(token == UsdGeomTokens->constant);
     }
 
-    // we should get a per vertex description back
+    // we should get a vertex description back for per-vertex data
     {
-        u[9].x = 0.5f;
+        rgba[0].r = 0.2f;
+        rgba[0].g = 0.7f;
+        rgba[15].r = 0.2f;
+        rgba[15].g = 0.7f;
+        rgba[21].r = 0.2f;
+        rgba[21].g = 0.7f;
 
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
+        TfToken token = AL::usdmaya::utils::guessColourSetInterpolationTypeExtensive(
+            &rgba[0].r, numElements, numPoints, indices, faceCounts, indicesToExtract);
         EXPECT_TRUE(token == UsdGeomTokens->vertex);
     }
 
-    // we should get a face varying description back
+    // we should get a face varying description back for face varying data
     {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
+        rgba[9].r = 0.5f;
 
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
+        TfToken token = AL::usdmaya::utils::guessColourSetInterpolationTypeExtensive(
+            &rgba[0].r, numElements, numPoints, indices, faceCounts, indicesToExtract);
         EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
     }
-    MIntArray pointindices = indices;
-    pointindices[9] = 19;
 
-    for (int i = 0; i < 4; ++i) {
-        indices[i] = 1;
-    }
-    for (int i = 4; i < 8; ++i) {
-        indices[i] = 2;
-    }
-    for (int i = 8; i < 12; ++i) {
-        indices[i] = 3;
-    }
-    for (int i = 12; i < 16; ++i) {
-        indices[i] = 4;
-    }
-    for (int i = 16; i < 20; ++i) {
-        indices[i] = 5;
-    }
-    for (int i = 20; i < 24; ++i) {
-        indices[i] = 6;
-    }
-    for (int i = 24; i < 28; ++i) {
-        indices[i] = 7;
-    }
-    for (int i = 28; i < 31; ++i) {
-        indices[i] = 8;
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec3InterpolationTypeExtensivef)
-{
-    MIntArray         indices;
-    MFloatVectorArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
+    // we should get a uniform description back for uniform data
     {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
+        MIntArray pointindices = indices;
+        indices[0] = 4;
+        indices[1] = 5;
+        indices[2] = 6;
+        indices[3] = 7;
+        pointindices[9] = 19;
+
+        // Set the colours to per-face values
+        for (int i = 0, face = 0; i < (int)numElements; ++i, (i % 4) ? 0 : ++face) {
+            rgba[i] = 0.1f * face;
         }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    indices[0] = 4;
-    indices[1] = 5;
-    indices[2] = 6;
-    indices[3] = 7;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
-    }
-    for (int i = 4; i < 8; ++i) {
-        u[i] = MFloatVector(1.1f, 2.1f, 3.1f);
-    }
-    for (int i = 8; i < 12; ++i) {
-        u[i] = MFloatVector(1.2f, 2.2f, 3.2f);
-    }
-    for (int i = 12; i < 16; ++i) {
-        u[i] = MFloatVector(1.3f, 2.3f, 3.3f);
-    }
-    for (int i = 16; i < 20; ++i) {
-        u[i] = MFloatVector(1.4f, 2.4f, 3.4f);
-    }
-    for (int i = 20; i < 24; ++i) {
-        u[i] = MFloatVector(1.5f, 2.5f, 3.5f);
-    }
-    for (int i = 24; i < 28; ++i) {
-        u[i] = MFloatVector(1.6f, 2.6f, 3.6f);
-    }
-    for (int i = 28; i < 31; ++i) {
-        u[i] = MFloatVector(1.7f, 2.7f, 3.7f);
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec3InterpolationTyped)
-{
-    MIntArray    indices;
-    MVectorArray u;
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
-        }
-    }
-
-    // we should get a constant value back
-    {
-        TfToken token
-            = AL::usdmaya::utils::guessVec3InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token
-            = AL::usdmaya::utils::guessVec3InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationType(
-            &u[0].x, u.length(), indices, pointindices);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-}
-
-TEST(DiffPrimVar, guessVec3InterpolationTypeExtendedd)
-{
-    MIntArray    indices;
-    MVectorArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MVector(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        indices[i] = 1;
-    }
-    for (int i = 4; i < 8; ++i) {
-        indices[i] = 2;
-    }
-    for (int i = 8; i < 12; ++i) {
-        indices[i] = 3;
-    }
-    for (int i = 12; i < 16; ++i) {
-        indices[i] = 4;
-    }
-    for (int i = 16; i < 20; ++i) {
-        indices[i] = 5;
-    }
-    for (int i = 20; i < 24; ++i) {
-        indices[i] = 6;
-    }
-    for (int i = 24; i < 28; ++i) {
-        indices[i] = 7;
-    }
-    for (int i = 28; i < 31; ++i) {
-        indices[i] = 8;
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtended(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec3InterpolationTypeExtensived)
-{
-    MIntArray    indices;
-    MVectorArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MVector(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    indices[0] = 4;
-    indices[1] = 5;
-    indices[2] = 6;
-    indices[3] = 7;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        u[i] = MVector(1.0f, 2.0f, 3.0f);
-    }
-    for (int i = 4; i < 8; ++i) {
-        u[i] = MVector(1.1f, 2.1f, 3.1f);
-    }
-    for (int i = 8; i < 12; ++i) {
-        u[i] = MVector(1.2f, 2.2f, 3.2f);
-    }
-    for (int i = 12; i < 16; ++i) {
-        u[i] = MVector(1.3f, 2.3f, 3.3f);
-    }
-    for (int i = 16; i < 20; ++i) {
-        u[i] = MVector(1.4f, 2.4f, 3.4f);
-    }
-    for (int i = 20; i < 24; ++i) {
-        u[i] = MVector(1.5f, 2.5f, 3.5f);
-    }
-    for (int i = 24; i < 28; ++i) {
-        u[i] = MVector(1.6f, 2.6f, 3.6f);
-    }
-    for (int i = 28; i < 31; ++i) {
-        u[i] = MVector(1.7f, 2.7f, 3.7f);
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec3InterpolationTypeExtensive(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTypef)
-{
-    MIntArray        indices;
-    MFloatPointArray u;
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatPoint(1.0f, 2.0f, 3.0f);
-        }
-    }
-
-    // we should get a constant value back
-    {
-        TfToken token
-            = AL::usdmaya::utils::guessVec4InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token
-            = AL::usdmaya::utils::guessVec4InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationType(
-            &u[0].x, u.length(), indices, pointindices);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTypeExtendedf)
-{
-    MIntArray        indices;
-    MFloatPointArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatPoint(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
 
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        indices[i] = 1;
-    }
-    for (int i = 4; i < 8; ++i) {
-        indices[i] = 2;
-    }
-    for (int i = 8; i < 12; ++i) {
-        indices[i] = 3;
-    }
-    for (int i = 12; i < 16; ++i) {
-        indices[i] = 4;
-    }
-    for (int i = 16; i < 20; ++i) {
-        indices[i] = 5;
-    }
-    for (int i = 20; i < 24; ++i) {
-        indices[i] = 6;
-    }
-    for (int i = 24; i < 28; ++i) {
-        indices[i] = 7;
-    }
-    for (int i = 28; i < 31; ++i) {
-        indices[i] = 8;
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTypeExtensivef)
-{
-    MIntArray        indices;
-    MFloatPointArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatPoint(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    indices[0] = 4;
-    indices[1] = 5;
-    indices[2] = 6;
-    indices[3] = 7;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        u[i] = MFloatPoint(1.0f, 2.0f, 3.0f);
-    }
-    for (int i = 4; i < 8; ++i) {
-        u[i] = MFloatPoint(1.1f, 2.1f, 3.1f);
-    }
-    for (int i = 8; i < 12; ++i) {
-        u[i] = MFloatPoint(1.2f, 2.2f, 3.2f);
-    }
-    for (int i = 12; i < 16; ++i) {
-        u[i] = MFloatPoint(1.3f, 2.3f, 3.3f);
-    }
-    for (int i = 16; i < 20; ++i) {
-        u[i] = MFloatPoint(1.4f, 2.4f, 3.4f);
-    }
-    for (int i = 20; i < 24; ++i) {
-        u[i] = MFloatPoint(1.5f, 2.5f, 3.5f);
-    }
-    for (int i = 24; i < 28; ++i) {
-        u[i] = MFloatPoint(1.6f, 2.6f, 3.6f);
-    }
-    for (int i = 28; i < 31; ++i) {
-        u[i] = MFloatPoint(1.7f, 2.7f, 3.7f);
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTyped)
-{
-    MIntArray   indices;
-    MPointArray u;
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MFloatVector(1.0f, 2.0f, 3.0f);
-        }
-    }
-
-    // we should get a constant value back
-    {
-        TfToken token
-            = AL::usdmaya::utils::guessVec4InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token
-            = AL::usdmaya::utils::guessVec4InterpolationType(&u[0].x, u.length(), indices, indices);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationType(
-            &u[0].x, u.length(), indices, pointindices);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTypeExtendedd)
-{
-    MIntArray   indices;
-    MPointArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MPoint(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        indices[i] = 1;
-    }
-    for (int i = 4; i < 8; ++i) {
-        indices[i] = 2;
-    }
-    for (int i = 8; i < 12; ++i) {
-        indices[i] = 3;
-    }
-    for (int i = 12; i < 16; ++i) {
-        indices[i] = 4;
-    }
-    for (int i = 16; i < 20; ++i) {
-        indices[i] = 5;
-    }
-    for (int i = 20; i < 24; ++i) {
-        indices[i] = 6;
-    }
-    for (int i = 24; i < 28; ++i) {
-        indices[i] = 7;
-    }
-    for (int i = 28; i < 31; ++i) {
-        indices[i] = 8;
+        TfToken token = AL::usdmaya::utils::guessColourSetInterpolationTypeExtensive(
+            &rgba[0].r, numElements, numPoints, pointindices, faceCounts, indicesToExtract);
+        EXPECT_TRUE(token == UsdGeomTokens->uniform);
     }
-
-    TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtended(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
-}
-
-TEST(DiffPrimVar, guessVec4InterpolationTypeExtensived)
-{
-    MIntArray   indices;
-    MPointArray u;
-
-    for (int i = 0; i < 31; ++i)
-        indices.append(i);
-    {
-        u.setLength(31);
-        for (int i = 0; i < 31; ++i) {
-            u[i] = MVector(1.0f, 2.0f, 3.0f);
-        }
-    }
-    MIntArray faceCounts;
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(4);
-    faceCounts.append(3);
-
-    // we should get a constant value back
-    {
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->constant);
-    }
-
-    // we should get a per vertex description back
-    {
-        u[9].x = 0.5f;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, indices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->vertex);
-    }
-
-    // we should get a face varying description back
-    {
-        MIntArray pointindices = indices;
-        pointindices[9] = 11;
-
-        TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-            &u[0].x, u.length(), indices, pointindices, faceCounts);
-        EXPECT_TRUE(token == UsdGeomTokens->faceVarying);
-    }
-    MIntArray pointindices = indices;
-    indices[0] = 4;
-    indices[1] = 5;
-    indices[2] = 6;
-    indices[3] = 7;
-    pointindices[9] = 19;
-
-    for (int i = 0; i < 4; ++i) {
-        u[i] = MPoint(1.0f, 2.0f, 3.0f);
-    }
-    for (int i = 4; i < 8; ++i) {
-        u[i] = MPoint(1.1f, 2.1f, 3.1f);
-    }
-    for (int i = 8; i < 12; ++i) {
-        u[i] = MPoint(1.2f, 2.2f, 3.2f);
-    }
-    for (int i = 12; i < 16; ++i) {
-        u[i] = MPoint(1.3f, 2.3f, 3.3f);
-    }
-    for (int i = 16; i < 20; ++i) {
-        u[i] = MPoint(1.4f, 2.4f, 3.4f);
-    }
-    for (int i = 20; i < 24; ++i) {
-        u[i] = MPoint(1.5f, 2.5f, 3.5f);
-    }
-    for (int i = 24; i < 28; ++i) {
-        u[i] = MPoint(1.6f, 2.6f, 3.6f);
-    }
-    for (int i = 28; i < 31; ++i) {
-        u[i] = MPoint(1.7f, 2.7f, 3.7f);
-    }
-
-    TfToken token = AL::usdmaya::utils::guessVec4InterpolationTypeExtensive(
-        &u[0].x, u.length(), indices, pointindices, faceCounts);
-    EXPECT_TRUE(token == UsdGeomTokens->uniform);
 }

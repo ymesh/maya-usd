@@ -24,6 +24,8 @@
 #include "AL/usdmaya/nodes/Transform.h"
 #include "AL/usdmaya/nodes/TransformationMatrix.h"
 
+#include <mayaUsd/listeners/notice.h>
+
 #include <pxr/base/plug/registry.h>
 #include <pxr/base/tf/getenv.h>
 #include <pxr/base/tf/stackTrace.h>
@@ -354,7 +356,8 @@ static void postFileRead(void*)
             proxy->loadStage();
             auto stage = proxy->getUsdStage();
             proxy->deserialiseTranslatorContext();
-            proxy->translatorManufacture().preparePythonTranslators(proxy->context());
+
+            fileio::translators::TranslatorContextSetterCtx ctxSetter(proxy->context());
             proxy->findPrimsWithMetaData();
             proxy->deserialiseTransformRefs();
         }
@@ -478,6 +481,10 @@ void Global::onPluginLoad()
     }
 #endif
 
+    UsdMayaSceneResetNotice::InstallListener();
+    UsdMayaBeforeSceneResetNotice::InstallListener();
+    UsdMayaExitNotice::InstallListener();
+
     // For callback initialization for stage cache callback, it will be done via proxy node
     // attribute change.
 }
@@ -506,6 +513,10 @@ void Global::onPluginUnload()
         m_ufeSelectionObserver = nullptr;
     }
 #endif
+
+    UsdMayaSceneResetNotice::RemoveListener();
+    UsdMayaBeforeSceneResetNotice::RemoveListener();
+    UsdMayaExitNotice::RemoveListener();
 }
 
 void Global::openingFile(bool val)

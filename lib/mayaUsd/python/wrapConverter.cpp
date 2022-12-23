@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/converter.h>
 #include <mayaUsd/utils/util.h>
 
@@ -24,7 +25,8 @@
 
 #include <maya/MObject.h>
 
-#include <boost/python.hpp>
+#include <boost/python/class.hpp>
+#include <boost/python/def.hpp>
 
 using namespace boost::python;
 
@@ -105,9 +107,11 @@ static void test_convertUsdAttrToMDGModifier(
     const std::string&   attrName,
     const ConverterArgs& args)
 {
-    MPlug plug;
+    // Testing function, no need for undo.
+    OpUndoItemList undoInfo;
+    MPlug          plug;
     if (UsdMayaUtil::GetPlugByName(attrName, plug) == MS::kSuccess) {
-        MDGModifier modifier;
+        MDGModifier& modifier = MDGModifierUndoItem::create("Test USD to DG conversion", undoInfo);
         self.convert(usdAttr, plug, modifier, args);
 
         modifier.doIt();

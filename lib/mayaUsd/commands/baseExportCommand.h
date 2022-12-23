@@ -48,20 +48,24 @@ public:
     static constexpr auto kExportUVsFlag = "uvs";
     static constexpr auto kEulerFilterFlag = "ef";
     static constexpr auto kExportVisibilityFlag = "vis";
+    static constexpr auto kExportComponentTagsFlag = "tag";
     static constexpr auto kIgnoreWarningsFlag = "ign";
     static constexpr auto kExportInstancesFlag = "ein";
     static constexpr auto kMergeTransformAndShapeFlag = "mt";
     static constexpr auto kStripNamespacesFlag = "sn";
     static constexpr auto kExportRefsAsInstanceableFlag = "eri";
     static constexpr auto kExportDisplayColorFlag = "dsp";
+    static constexpr auto kExportDistanceUnitFlag = "edu";
     static constexpr auto kShadingModeFlag = "shd";
     static constexpr auto kConvertMaterialsToFlag = "cmt";
+    static constexpr auto kRemapUVSetsToFlag = "ruv";
     static constexpr auto kMaterialsScopeNameFlag = "msn";
     static constexpr auto kExportMaterialCollectionsFlag = "mcs";
     static constexpr auto kMaterialCollectionsPathFlag = "mcp";
     static constexpr auto kExportCollectionBasedBindingsFlag = "cbb";
     static constexpr auto kNormalizeNurbsFlag = "nnu";
-    static constexpr auto kExportReferenceObjectsFlag = "ero";
+    static constexpr auto kPreserveUVSetNamesFlag = "puv";
+    static constexpr auto kReferenceObjectModeFlag = "rom";
     static constexpr auto kExportRootsFlag = "ert";
     static constexpr auto kExportSkelsFlag = "skl";
     static constexpr auto kExportSkinFlag = "skn";
@@ -71,6 +75,7 @@ public:
     static constexpr auto kDefaultCamerasFlag = "dc";
     static constexpr auto kRenderLayerModeFlag = "rlm";
     static constexpr auto kKindFlag = "k";
+    static constexpr auto kDisableModelKindProcessorFlag = "dmk";
     static constexpr auto kCompatibilityFlag = "com";
     static constexpr auto kChaserFlag = "chr";
     static constexpr auto kChaserArgsFlag = "cha";
@@ -81,6 +86,9 @@ public:
     static constexpr auto kVerboseFlag = "v";
     static constexpr auto kStaticSingleSample = "sss";
     static constexpr auto kGeomSidednessFlag = "gs";
+    static constexpr auto kApiSchemaFlag = "api";
+    static constexpr auto kJobContextFlag = "jc";
+    static constexpr auto kWorldspaceFlag = "wsp";
 
     // Short and Long forms of flags defined by this command itself:
     static constexpr auto kAppendFlag = "a";

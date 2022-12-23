@@ -45,11 +45,9 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-REGISTER_SHADING_MODE_IMPORT_MATERIAL_CONVERSION(
-    TrMtlxTokens->conversionName,
-    TrMtlxTokens->contextName,
-    TrMtlxTokens->niceName,
-    TrMtlxTokens->importDescription);
+namespace {
+const unsigned int INVALID_INDEX = -1;
+}
 
 // Very simple delegating converter for intermediate nodes added between an image node and
 // a shader parameter when swizzling/conversion is required.
@@ -59,12 +57,12 @@ public:
     MtlxUsd_ConverterReader(const UsdMayaPrimReaderArgs& readArgs)
         : UsdMayaShaderReader(readArgs) {};
 
-    bool IsConverter(UsdShadeShader& downstreamSchema, TfToken& downstreamOutputName) override
+    boost::optional<IsConverterResult> IsConverter() override
     {
         const UsdPrim& prim = _GetArgs().GetUsdPrim();
         UsdShadeShader shaderSchema = UsdShadeShader(prim);
         if (!shaderSchema) {
-            return false;
+            return {};
         }
 
         TfToken shaderId;
@@ -72,7 +70,7 @@ public:
 
         const UsdShadeInput& input = shaderSchema.GetInput(TrMtlxTokens->in);
         if (!input) {
-            return false;
+            return {};
         }
 
         UsdShadeConnectableAPI source;
@@ -80,12 +78,12 @@ public:
         UsdShadeAttributeType  sourceType;
         if (!UsdShadeConnectableAPI::GetConnectedSource(
                 input, &source, &sourceOutputName, &sourceType)) {
-            return false;
+            return {};
         }
 
-        downstreamSchema = UsdShadeShader(source.GetPrim());
+        UsdShadeShader downstreamSchema = UsdShadeShader(source.GetPrim());
         if (!downstreamSchema) {
-            return false;
+            return {};
         }
 
         // No refinement necessary for ND_convert_color3_vector3 and ND_normalmap.
@@ -93,7 +91,7 @@ public:
         if (shaderId.GetString().rfind("ND_luminance_", 0) != std::string::npos) {
             // Luminance is an alpha output.
             _setAlphaIsLuminance = true;
-            _refinedOutputToken = TrMayaTokens->outAlpha;
+            _childIndex = 3;
         } else if (shaderId.GetString().rfind("ND_swizzle_", 0) != std::string::npos) {
             const UsdShadeInput& channelsAttr = shaderSchema.GetInput(TrMtlxTokens->channels);
             VtValue              val;
@@ -103,32 +101,32 @@ public:
                     // Single channel swizzles refines to a subcomponent
                     switch (channels[0]) {
                     case 'r':
-                    case 'x': _refinedOutputToken = TrMayaTokens->outColorR; break;
-                    case 'g': _refinedOutputToken = TrMayaTokens->outColorG; break;
-                    case 'y':
-                        if (shaderSchema.GetOutput(TrMtlxTokens->out).GetTypeName()
-                            == SdfValueTypeNames->Float) {
-                            _refinedOutputToken = TrMayaTokens->outAlpha;
-                        } else {
-                            _refinedOutputToken = TrMayaTokens->outColorG;
-                        }
-                        break;
+                    case 'x': _childIndex = 0; break;
+                    case 'g':
+                    case 'y': _childIndex = 1; break;
                     case 'b':
-                    case 'z': _refinedOutputToken = TrMayaTokens->outColorB; break;
+                    case 'z': _childIndex = 2; break;
                     case 'a':
-                    case 'w': _refinedOutputToken = TrMayaTokens->outAlpha; break;
+                    case 'w': _childIndex = 3; break;
                     default: TF_CODING_ERROR("Unsupported swizzle");
                     }
-                } else if (channels.size() == 3) {
-                    // Triple channel swizzles must go to outColor:
-                    _refinedOutputToken = TrMayaTokens->outColor;
                 }
             }
         }
         _downstreamPrim = source.GetPrim();
-        downstreamOutputName = sourceOutputName;
 
-        return true;
+        if (sourceOutputName == TrMayaTokens->outColor && _childIndex == 3) {
+            // Special case for RGBA outColor which never happens in Maya and are indeed connections
+            // on outAlpha instead. Happens because we merged the channels on the MaterialX side to
+            // work around multi-output issues.
+            _downstreamOutputName
+                = UsdShadeUtils::GetFullName(TrMayaTokens->outAlpha, UsdShadeAttributeType::Output);
+            _childIndex = INVALID_INDEX;
+        } else {
+            _downstreamOutputName
+                = UsdShadeUtils::GetFullName(sourceOutputName, UsdShadeAttributeType::Output);
+        }
+        return IsConverterResult { downstreamSchema, sourceOutputName };
     }
 
     void SetDownstreamReader(std::shared_ptr<UsdMayaShaderReader> downstreamReader) override
@@ -158,30 +156,28 @@ public:
     {
         MPlug mayaPlug;
         if (_downstreamReader) {
-            mayaPlug = _downstreamReader->GetMayaPlugForUsdAttrName(usdAttrName, mayaObject);
+            mayaPlug
+                = _downstreamReader->GetMayaPlugForUsdAttrName(_downstreamOutputName, mayaObject);
 
-            if (mayaPlug.isNull() || _refinedOutputToken.IsEmpty()) {
+            if (mayaPlug.isNull() || _childIndex == INVALID_INDEX) {
                 // Nothing tho refine.
                 return mayaPlug;
             }
 
-            if (_refinedOutputToken != TrMayaTokens->outColor
-                && UsdMayaShadingUtil::GetStandardAttrName(mayaPlug, false)
-                    != TrMayaTokens->outColor.GetString()) {
+            if (_childIndex != INVALID_INDEX && !mayaPlug.numChildren()) {
                 // Already refined. Do not refine twice.
                 return mayaPlug;
             }
 
-            MFnDependencyNode depNodeFn(mayaPlug.node());
-
             if (_setAlphaIsLuminance) {
-                MPlug alphaIsLuminancePlug
+                MFnDependencyNode depNodeFn(mayaPlug.node());
+                MPlug             alphaIsLuminancePlug
                     = depNodeFn.findPlug(TrMayaTokens->alphaIsLuminance.GetText());
                 alphaIsLuminancePlug.setValue(true);
             }
 
-            if (!_refinedOutputToken.IsEmpty()) {
-                mayaPlug = depNodeFn.findPlug(_refinedOutputToken.GetText());
+            if (_childIndex != INVALID_INDEX) {
+                mayaPlug = mayaPlug.child(_childIndex);
             }
         }
         return mayaPlug;
@@ -189,20 +185,57 @@ public:
 
 private:
     std::shared_ptr<UsdMayaShaderReader> _downstreamReader;
-    TfToken                              _refinedOutputToken;
+    unsigned int                         _childIndex = INVALID_INDEX;
     UsdPrim                              _downstreamPrim;
+    TfToken                              _downstreamOutputName;
     bool                                 _setAlphaIsLuminance = false;
 };
 
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_luminance_color3, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_luminance_color4, MtlxUsd_ConverterReader);
-PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_float, MtlxUsd_ConverterReader);
-PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_float_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_float_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_float_vector4, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_float_color3, MtlxUsd_ConverterReader);
-PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_float_color4, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector2_color4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector3_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector3_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector3_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector3_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector3_color4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector4_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector4_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector4_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector4_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_vector4_color4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color3_color4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_float, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_vector4, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_swizzle_color4_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_float_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_float_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_float_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_float_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_color3_color4, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_color3_vector3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_color4_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_color4_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_vector3_vector2, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_vector3_color3, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_vector3_vector4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_vector4_color4, MtlxUsd_ConverterReader);
+PXRUSDMAYA_REGISTER_SHADER_READER(ND_convert_vector4_vector3, MtlxUsd_ConverterReader);
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_normalmap, MtlxUsd_ConverterReader);
 
 PXR_NAMESPACE_CLOSE_SCOPE
