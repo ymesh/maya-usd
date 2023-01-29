@@ -8,7 +8,13 @@ macro(fetch_googletest)
         if (NOT GTEST_ROOT)
             set(GTEST_ROOT "${GOOGLETEST_BUILD_ROOT}/googletest-install")
         endif()
-        find_package(GTest QUIET)
+        message ("* GTEST_ROOT = ${GTEST_ROOT}")
+        message ("* GTest_DIR = ${GTest_DIR}")
+        message ("* GOOGLETEST_BUILD_ROOT = ${GOOGLETEST_BUILD_ROOT}")
+        find_package(GTest)
+        message ("* GTEST_INCLUDE_DIRS= ${GTEST_INCLUDE_DIRS}")
+        message ("* GTEST_LIBRARIES = ${GTEST_LIBRARIES}")
+        # find_package(GTest QUIET)
         # At this point GTEST_FOUND is set to True in Release but False in Debug.
     endif()
 
@@ -36,7 +42,9 @@ macro(fetch_googletest)
             # We will just update to newer version, if required.
             set(disable_all_warnings_flag -w)
 
-            set(glibcxx_abi -D_GLIBCXX_USE_CXX11_ABI=$<IF:$<BOOL:${MAYA_LINUX_BUILT_WITH_CXX11_ABI}>,1,0>)
+            # set(glibcxx_abi -D_GLIBCXX_USE_CXX11_ABI=$<IF:$<BOOL:${MAYA_LINUX_BUILT_WITH_CXX11_ABI}>,1,0>)
+            set(glibcxx_abi -D_GLIBCXX_USE_CXX11_ABI=0)
+            message("* glibcxx_abi = ${glibcxx_abi}")
         endif()
 
         if (GOOGLETEST_SRC_DIR)
@@ -65,7 +73,22 @@ macro(fetch_googletest)
     endif()
 
     # FindGTest should get call after GTEST_ROOT is set
-    find_package(GTest QUIET)
+    set (GTest_DIR "${GTEST_ROOT}/lib64/cmake/GTest")
+    message ("* GTEST_ROOT = ${GTEST_ROOT}")
+    message ("* GTest_DIR = ${GTest_DIR}")
+    
+    # find_package(GTest NO_DEFAULT_PATH)
+    
+    set (GTEST_INCLUDE_DIRS "${GTEST_ROOT}/include")
+    set (GTEST_LIBRARIES 
+        "${GTEST_ROOT}/lib64/libgtest.so" 
+        "${GTEST_ROOT}/lib64/libgtest_main.so"
+    )
+    
+    set (GTEST_LIBRARY "${GTEST_ROOT}/lib64/libgtest.so")
+    
+    message ("* GTEST_INCLUDE_DIRS= ${GTEST_INCLUDE_DIRS}")
+    message ("* GTEST_LIBRARIES = ${GTEST_LIBRARIES}")
 
     # https://gitlab.kitware.com/cmake/cmake/issues/17799
     # FindGtest is buggy when dealing with Debug build.
@@ -87,6 +110,8 @@ macro(fetch_googletest)
         endif()
         install(FILES "${GTEST_ROOT}/bin/${GTEST_SHARED_LIB_NAME}" DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/gtest")
     else()
+        message ("* GTEST_LIBRARY = ${GTEST_LIBRARY}")
+        message ("* DESTINATION = ${CMAKE_INSTALL_PREFIX}/lib/gtest")
         install(FILES "${GTEST_LIBRARY}" DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/gtest")
     endif()
 
