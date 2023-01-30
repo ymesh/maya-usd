@@ -24,6 +24,8 @@
 #include <pxr/usd/usdGeom/xform.h>
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 
+#include <maya/MTypes.h> // For MAYA_APP_VERSION
+
 #include <vector>
 
 namespace AL {
@@ -69,13 +71,15 @@ public:
     /// \param  to the USD prim to copy the attributes to
     /// \param  params the exporter params to determine what should be exported
     /// \param  path the dag path
+    /// \param  exportInWorldSpace parameter to determine if world space xform should be exported
     /// \return MS::kSuccess if ok
     AL_USDMAYA_PUBLIC
     static MStatus copyAttributes(
         const MObject&        from,
         UsdPrim&              to,
         const ExporterParams& params,
-        const MDagPath&       path);
+        const MDagPath&       path,
+        bool                  exportInWorldSpace);
 
     /// \brief  copy the attribute value from the plug specified, at the given time, and store the
     /// data on the usdAttr. \param  attr the attribute to be copied \param  usdAttr the attribute
@@ -97,6 +101,34 @@ public:
         TransformOperation operation,
         MObject&           attribute,
         double&            conversionFactor);
+
+#if MAYA_APP_VERSION > 2019
+    /// \brief  helper method to copy attributes from the UsdPrim to the Maya node
+    /// \param  attr the maya node to copy the data from
+    /// \param  usdAttr the UsdPrim to copy the data to
+    /// \param  timeCode Usd timecode to copy to
+    /// \param  mergeOffsetMatrix flag if needs to merge offset parent matrix
+    AL_USDMAYA_PUBLIC
+    static void copyAttributeValue(
+        const MPlug&       attr,
+        UsdAttribute&      usdAttr,
+        const UsdTimeCode& timeCode,
+        bool               mergeOffsetMatrix);
+
+    /// \brief  helper method to copy attributes from the UsdPrim to the Maya node
+    /// \param  attr the maya node to copy the data from
+    /// \param  usdAttr the UsdPrim to copy the data to
+    /// \param  scale additional scale value to apply before copying to USD
+    /// \param  timeCode Usd timecode to copy to
+    /// \param  mergeOffsetMatrix flag if needs to merge offset parent matrix
+    AL_USDMAYA_PUBLIC
+    static void copyAttributeValue(
+        const MPlug&       attr,
+        UsdAttribute&      usdAttr,
+        float              scale,
+        const UsdTimeCode& timeCode,
+        bool               mergeOffsetMatrix);
+#endif
 
 private:
     static MStatus processMetaData(const UsdPrim& from, MObject& to, const ImporterParams& params);

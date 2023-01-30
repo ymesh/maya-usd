@@ -20,7 +20,8 @@
 #include <pxr/usd/usd/pyConversions.h>
 #include <pxr/usd/usdGeom/primvar.h>
 
-#include <boost/python.hpp>
+#include <boost/python/class.hpp>
+#include <boost/python/def.hpp>
 
 using namespace std;
 using namespace boost::python;
@@ -45,5 +46,8 @@ void wrapRoundTripUtil()
               .staticmethod("IsPrimvarClamped")
 
               .def("MarkPrimvarAsClamped", This::MarkPrimvarAsClamped)
-              .staticmethod("MarkPrimvarAsClamped");
+              .staticmethod("MarkPrimvarAsClamped")
+
+              .def("GetPrimVarMayaName", This::GetPrimVarMayaName)
+              .staticmethod("GetPrimVarMayaName");
 }

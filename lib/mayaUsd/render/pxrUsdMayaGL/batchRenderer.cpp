@@ -53,6 +53,8 @@
 #include <pxr/imaging/hd/tokens.h>
 #include <pxr/imaging/hdx/selectionTracker.h>
 #include <pxr/imaging/hdx/tokens.h>
+#include <pxr/imaging/hgi/hgi.h>
+#include <pxr/imaging/hgi/tokens.h>
 #include <pxr/usd/sdf/path.h>
 
 #include <maya/M3dView.h>
@@ -79,11 +81,6 @@
 
 #include <utility>
 #include <vector>
-
-#if PXR_VERSION > 2002
-#include <pxr/imaging/hgi/hgi.h>
-#include <pxr/imaging/hgi/tokens.h>
-#endif
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -398,30 +395,20 @@ UsdMayaGLBatchRenderer::UsdMayaGLBatchRenderer()
     , _objectSoftSelectEnabled(false)
     , _softSelectOptionsCallbackId(0)
     , _selectResultsKey(GfMatrix4d(0.0), GfMatrix4d(0.0), false)
-    ,
-#if PXR_VERSION > 2002
 #if PXR_VERSION > 2005
-    _hgi(Hgi::CreatePlatformDefaultHgi())
-    ,
+    , _hgi(Hgi::CreatePlatformDefaultHgi())
 #else
-    _hgi(Hgi::GetPlatformDefaultHgi())
-    ,
+    , _hgi(Hgi::GetPlatformDefaultHgi())
 #endif
-    _hgiDriver { HgiTokens->renderDriver, VtValue(_hgi.get()) }
-    ,
-#endif
-    _selectionResolution(256)
+    , _hgiDriver { HgiTokens->renderDriver, VtValue(_hgi.get()) }
+    , _selectionResolution(256)
     , _enableDepthSelection(false)
 {
     _rootId = SdfPath::AbsoluteRootPath().AppendChild(_tokens->BatchRendererRootName);
     _legacyViewportPrefix = _rootId.AppendChild(_tokens->LegacyViewport);
     _viewport2Prefix = _rootId.AppendChild(_tokens->Viewport2);
 
-#if PXR_VERSION > 2002
     _renderIndex.reset(HdRenderIndex::New(&_renderDelegate, { &_hgiDriver }));
-#else
-    _renderIndex.reset(HdRenderIndex::New(&_renderDelegate));
-#endif
     if (!TF_VERIFY(_renderIndex)) {
         return;
     }
@@ -1020,6 +1007,10 @@ bool UsdMayaGLBatchRenderer::_TestIntersection(
         GL_VIEWPORT_BIT | GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT
         | GL_STENCIL_BUFFER_BIT | GL_TEXTURE_BIT | GL_POLYGON_BIT);
 
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
     // hydra orients all geometry during topological processing so that
     // front faces have ccw winding. We disable culling because culling
     // is handled by fragment shader discard.
@@ -1048,6 +1039,9 @@ bool UsdMayaGLBatchRenderer::_TestIntersection(
     VtValue vtPickParams(pickParams);
     _hdEngine.SetTaskContextData(HdxPickTokens->pickParams, vtPickParams);
     _hdEngine.Execute(_renderIndex.get(), &tasks);
+
+    glBindVertexArray(0);
+    glDeleteVertexArrays(1, &vao);
 
     glPopAttrib();
 
@@ -1380,21 +1374,11 @@ bool UsdMayaGLBatchRenderer::_UpdateIsSelectionPending(const bool isPending)
     return true;
 }
 
-void UsdMayaGLBatchRenderer::StartBatchingFrameDiagnostics()
-{
-    if (!_sharedDiagBatchCtx) {
-        _sharedDiagBatchCtx.reset(new UsdMayaDiagnosticBatchContext());
-    }
-}
-
 void UsdMayaGLBatchRenderer::_MayaRenderDidEnd(const MHWRender::MDrawContext* /* context */)
 {
     // Completing a viewport render invalidates any previous selection
     // computation we may have done, so mark a new one as pending.
     _UpdateIsSelectionPending(true);
-
-    // End any diagnostics batching.
-    _sharedDiagBatchCtx.reset();
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

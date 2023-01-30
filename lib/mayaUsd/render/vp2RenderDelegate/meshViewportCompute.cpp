@@ -16,6 +16,8 @@
 
 #include "meshViewportCompute.h"
 
+#ifdef HDVP2_ENABLE_GPU_COMPUTE
+
 #include "mesh.h"
 #include "render_delegate.h"
 
@@ -27,8 +29,6 @@
 #include <pxr/pxr.h>
 
 #include <maya/MProfiler.h>
-
-#ifdef HDVP2_ENABLE_GPU_COMPUTE
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -276,6 +276,12 @@ void MeshViewportCompute::createConsolidatedTopology(TopologyAccessor getTopolog
             TF_VERIFY(sourceMeshSharedData);
 
             HdMeshTopology& sourceTopology = getTopology(sourceMeshSharedData);
+
+            if (sourceIndex == 0) {
+                scheme = sourceTopology.GetScheme();
+                orientation = sourceTopology.GetOrientation();
+                refineLevel = sourceTopology.GetRefineLevel();
+            }
 
             TF_VERIFY(sourceTopology.GetScheme() == scheme);
             TF_VERIFY(sourceTopology.GetOrientation() == orientation);
@@ -792,11 +798,6 @@ void MeshViewportCompute::compileNormalsProgram()
 
     glslString.assign((std::istreambuf_iterator<char>(glslFile)), std::istreambuf_iterator<char>());
 
-    if (hasOpenGL()) {
-        initializeOpenGL();
-    }
-    TF_VERIFY(hasOpenGL());
-
     _computeNormalsProgram = new PxrMayaGLSLProgram;
     _computeNormalsProgram->CompileShader(GL_COMPUTE_SHADER, glslString);
     _computeNormalsProgram->Link();
@@ -1303,6 +1304,11 @@ bool MeshViewportCompute::execute(
 
     prepareAdjacencyBuffer();
 
+    if (!hasOpenGL()) {
+        initializeOpenGL();
+    }
+    TF_VERIFY(hasOpenGL());
+
     prepareUniformBufferForNormals();
 
     computeNormals();
@@ -1324,11 +1330,15 @@ bool MeshViewportCompute::canConsolidate(const MPxViewportComputeItem& other) co
     // If the compute has executed then the data to be consolidated will already
     // be smoothed. Smoothed items can only consolidate with other smoothed items.
     return hasExecuted() == otherMeshViewportCompute->hasExecuted()
+        && _meshSharedData->_renderingTopology.GetScheme()
+        == otherMeshViewportCompute->_meshSharedData->_renderingTopology.GetScheme()
+        && _meshSharedData->_renderingTopology.GetOrientation()
+        == otherMeshViewportCompute->_meshSharedData->_renderingTopology.GetOrientation()
+        && _meshSharedData->_renderingTopology.GetRefineLevel()
+        == otherMeshViewportCompute->_meshSharedData->_renderingTopology.GetRefineLevel()
 #if defined(DO_CPU_OSD) || defined(DO_OPENGL_OSD)
         && _adaptive == otherMeshViewportCompute->_adaptive
         && _level == otherMeshViewportCompute->_level
-        && _meshSharedData->_renderingTopology.GetScheme()
-        == otherMeshViewportCompute->_meshSharedData->_renderingTopology.GetScheme()
 #endif
         ;
 }

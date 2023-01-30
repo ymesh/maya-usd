@@ -16,11 +16,14 @@
 #include "utilSerialization.h"
 
 #include <mayaUsd/base/tokens.h>
+#include <mayaUsd/fileio/jobs/jobArgs.h>
+#include <mayaUsd/utils/stageCache.h>
 #include <mayaUsd/utils/util.h>
 #include <mayaUsd/utils/utilFileSystem.h>
 
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/usd/sdf/layerUtils.h>
+#include <pxr/usd/usd/stageCacheContext.h>
 #include <pxr/usd/usd/usdFileFormat.h>
 #include <pxr/usd/usd/usdaFileFormat.h>
 #include <pxr/usd/usd/usdcFileFormat.h>
@@ -82,7 +85,7 @@ void populateChildren(
     recursionDetector->pop();
 }
 
-bool saveRootLayer(SdfLayerRefPtr layer, const std::string& proxy)
+bool saveRootLayer(SdfLayerRefPtr layer, const std::string& proxy, bool savePathAsRelative)
 {
     if (!layer || proxy.empty() || layer->IsAnonymous()) {
         return false;
@@ -95,9 +98,33 @@ bool saveRootLayer(SdfLayerRefPtr layer, const std::string& proxy)
     fp = TfStringReplace(fp, "\\", "/");
 #endif
 
+    if (savePathAsRelative) {
+        fp = UsdMayaUtilFileSystem::getPathRelativeToMayaSceneFile(fp);
+    }
+
     MayaUsd::utils::setNewProxyPath(MString(proxy.c_str()), MString(fp.c_str()));
 
     return true;
+}
+
+void updateAllCachedStageWithLayer(SdfLayerRefPtr originalLayer, const std::string& newFilePath)
+{
+    SdfLayerRefPtr newLayer = SdfLayer::FindOrOpen(newFilePath);
+    if (!newLayer) {
+        TF_WARN("The filename %s is an invalid file name for a layer.", newFilePath.c_str());
+        return;
+    }
+    for (UsdStageCache& cache : UsdMayaStageCache::GetAllCaches()) {
+        UsdStageCacheContext        ctx(cache);
+        std::vector<UsdStageRefPtr> stages = cache.FindAllMatching(originalLayer);
+        for (const auto& stage : stages) {
+            auto sessionLayer = stage->GetSessionLayer();
+            auto newStage = UsdStage::UsdStage::Open(
+                newLayer, sessionLayer, UsdStage::InitialLoadSet::LoadNone);
+            newStage->SetLoadRules(stage->GetLoadRules());
+            newStage->MuteAndUnmuteLayers(stage->GetMutedLayers(), {});
+        }
+    }
 }
 
 } // namespace
@@ -184,6 +211,63 @@ void setNewProxyPath(const MString& proxyNodeName, const MString& newValue)
         /*undo*/ false);
 }
 
+static bool isCompatibleWithSave(
+    SdfLayerRefPtr     layer,
+    const std::string& filePath,
+    const std::string& formatArg)
+{
+    if (!layer)
+        return false;
+
+    // Save cannot specify the filename, so the file name must match to use save.
+    if (layer->GetRealPath() != filePath)
+        return false;
+
+    const TfToken underlyingFormat = UsdUsdFileFormat::GetUnderlyingFormatForLayer(*layer);
+    if (underlyingFormat.size()) {
+        return underlyingFormat == formatArg;
+    } else {
+        const SdfFileFormat::FileFormatArguments currentFormatArgs
+            = layer->GetFileFormatArguments();
+
+        // If we cannot find the format argument then we cannot validate that the file format match
+        // so we err to the side of safety and claim they don't match.
+        const auto keyAndValue = currentFormatArgs.find("format");
+        if (keyAndValue == currentFormatArgs.end())
+            return false;
+
+        return keyAndValue->second == formatArg;
+    }
+}
+
+bool saveLayerWithFormat(
+    SdfLayerRefPtr     layer,
+    const std::string& requestedFilePath,
+    const std::string& requestedFormatArg)
+{
+    const std::string& filePath
+        = requestedFilePath.empty() ? layer->GetRealPath() : requestedFilePath;
+
+    const std::string& formatArg
+        = requestedFormatArg.empty() ? usdFormatArgOption() : requestedFormatArg;
+
+    if (isCompatibleWithSave(layer, filePath, formatArg)) {
+        if (!layer->Save()) {
+            return false;
+        }
+    } else {
+        PXR_NS::SdfFileFormat::FileFormatArguments args;
+        args["format"] = formatArg;
+        if (!layer->Export(filePath, "", args)) {
+            return false;
+        }
+    }
+
+    updateAllCachedStageWithLayer(layer, filePath);
+
+    return true;
+}
+
 SdfLayerRefPtr saveAnonymousLayer(
     SdfLayerRefPtr     anonLayer,
     LayerParent        parent,
@@ -191,12 +275,13 @@ SdfLayerRefPtr saveAnonymousLayer(
     std::string        formatArg)
 {
     std::string newFileName = generateUniqueFileName(basename);
-    return saveAnonymousLayer(anonLayer, newFileName, parent, formatArg);
+    return saveAnonymousLayer(anonLayer, newFileName, false, parent, formatArg);
 }
 
 SdfLayerRefPtr saveAnonymousLayer(
     SdfLayerRefPtr     anonLayer,
     const std::string& path,
+    bool               savePathAsRelative,
     LayerParent        parent,
     std::string        formatArg)
 {
@@ -204,25 +289,33 @@ SdfLayerRefPtr saveAnonymousLayer(
         return nullptr;
     }
 
-    PXR_NS::SdfFileFormat::FileFormatArguments args;
-    if (!formatArg.empty()) {
-        args["format"] = formatArg;
-    } else {
-        args["format"] = usdFormatArgOption();
-    }
+    std::string filePath(path);
+    ensureUSDFileExtension(filePath);
 
-    anonLayer->Export(path, "", args);
+    saveLayerWithFormat(anonLayer, filePath, formatArg);
 
-    SdfLayerRefPtr newLayer = SdfLayer::FindOrOpen(path);
+    SdfLayerRefPtr newLayer = SdfLayer::FindOrOpen(filePath);
     if (newLayer) {
         if (parent._layerParent) {
             parent._layerParent->GetSubLayerPaths().Replace(
                 anonLayer->GetIdentifier(), newLayer->GetIdentifier());
         } else if (!parent._proxyPath.empty()) {
-            saveRootLayer(newLayer, parent._proxyPath);
+            saveRootLayer(newLayer, parent._proxyPath, savePathAsRelative);
         }
     }
     return newLayer;
+}
+
+void ensureUSDFileExtension(std::string& filePath)
+{
+    const std::string& extension = SdfFileFormat::GetFileExtension(filePath);
+    const std::string  defaultExt(UsdMayaTranslatorTokens->UsdFileExtensionDefault.GetText());
+    const std::string  usdCrateExt(UsdMayaTranslatorTokens->UsdFileExtensionCrate.GetText());
+    const std::string  usdASCIIExt(UsdMayaTranslatorTokens->UsdFileExtensionASCII.GetText());
+    if (extension != defaultExt && extension != usdCrateExt && extension != usdASCIIExt) {
+        filePath.append(".");
+        filePath.append(defaultExt.c_str());
+    }
 }
 
 void getLayersToSaveFromProxy(const std::string& proxyPath, stageLayersToSave& layersInfo)

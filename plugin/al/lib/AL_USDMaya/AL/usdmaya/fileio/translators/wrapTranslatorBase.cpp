@@ -96,6 +96,11 @@ public:
         return this->CallPureVirtual<TfType>("getTranslatedType")();
     }
 
+    std::size_t default_generateUniqueKey(const UsdPrim& prim) const
+    {
+        return base_t::generateUniqueKey(prim);
+    }
+
     std::size_t generateUniqueKey(const UsdPrim& prim) const override
     {
         if (Override o = GetOverride("generateUniqueKey")) {
@@ -114,6 +119,8 @@ public:
         return 0;
     }
 
+    bool default_needsTransformParent() const { return base_t::needsTransformParent(); }
+
     bool needsTransformParent() const override
     {
         return this->CallVirtual<bool>("needsTransformParent", &This::needsTransformParent)();
@@ -124,14 +131,23 @@ public:
         return this->CallVirtual<bool>("supportsUpdate", &This::supportsUpdate)();
     }
 
+    bool default_importableByDefault() const { return base_t::importableByDefault(); }
+
     bool importableByDefault() const override
     {
         return this->CallVirtual<bool>("importableByDefault", &This::importableByDefault)();
     }
 
+    MStatus default_initialize() { return base_t::initialize(); }
+
     MStatus initialize() override
     {
         return this->CallVirtual<MStatus>("initialize", &This::initialize)();
+    }
+
+    MStatus default_import(const UsdPrim& prim, MObject& parent, MObject& createdObj)
+    {
+        return base_t::import(prim, parent, createdObj);
     }
 
     MStatus import(const UsdPrim& prim, MObject& parent, MObject& createdObj) override
@@ -149,6 +165,8 @@ public:
         return MS::kSuccess;
     }
 
+    MStatus default_postImport(const UsdPrim& prim) { return base_t::postImport(prim); }
+
     MStatus postImport(const UsdPrim& prim) override
     {
         if (Override o = GetOverride("postImport")) {
@@ -158,10 +176,14 @@ public:
         return MS::kSuccess;
     }
 
+    MStatus default_preTearDown(UsdPrim& prim) { return base_t::preTearDown(prim); }
+
     MStatus preTearDown(UsdPrim& prim) override
     {
         return this->CallVirtual<MStatus>("preTearDown", &This::preTearDown)(prim);
     }
+
+    MStatus default_tearDown(const SdfPath& path) { return base_t::tearDown(path); }
 
     MStatus tearDown(const SdfPath& path) override
     {
@@ -173,11 +195,27 @@ public:
         return this->CallVirtual<MStatus>("update", &This::update)(prim);
     }
 
+    ExportFlag default_canExport(const MObject& obj) { return base_t::canExport(obj); }
+
     ExportFlag canExport(const MObject& obj) override
     {
         MFnDependencyNode fn(obj);
         std::string       name(fn.name().asChar());
-        return this->CallVirtual<ExportFlag>("canExport", &This::canExport)(obj);
+
+        // pass a string to the python method instead of a dependency node
+        if (Override o = GetOverride("canExport")) {
+            return std::function<ExportFlag(const char*)>(TfPyCall<ExportFlag>(o))(name.c_str());
+        }
+        return ExportFlag::kNotSupported;
+    }
+
+    UsdPrim default_exportObject(
+        UsdStageRefPtr                             stage,
+        MDagPath                                   dagPath,
+        const SdfPath&                             usdPath,
+        const AL::usdmaya::fileio::ExporterParams& params)
+    {
+        return base_t::exportObject(stage, dagPath, usdPath, params);
     }
 
     UsdPrim exportObject(
@@ -186,9 +224,20 @@ public:
         const SdfPath&                             usdPath,
         const AL::usdmaya::fileio::ExporterParams& params) override
     {
+        // note: an incomplete list, add as needed
+        boost::python::dict pyParams;
+        pyParams["dynamicAttributes"] = params.m_dynamicAttributes;
+        pyParams["m_minFrame"] = params.m_minFrame;
+        pyParams["m_maxFrame"] = params.m_maxFrame;
+
         std::string name(dagPath.fullPathName().asChar());
-        return this->CallVirtual<UsdPrim>("exportObject", &This::exportObject)(
-            stage, dagPath, usdPath, params);
+        // pass a dagPath name and dictionary of params to the python method
+        if (Override o = GetOverride("exportObject")) {
+            return std::function<UsdPrim(
+                UsdStageRefPtr, const char*, SdfPath, boost::python::dict)>(TfPyCall<UsdPrim>(o))(
+                stage, name.c_str(), usdPath, pyParams);
+        }
+        return UsdPrim();
     }
 
     static void registerTranslator(refptr_t plugin, const TfToken& assetType = TfToken())
@@ -279,27 +328,33 @@ void wrapTranslatorBase()
         "TranslatorBase", boost::python::no_init)
         .def(TfPyRefAndWeakPtr())
         .def(TfMakePyConstructor(&TranslatorBaseWrapper::New))
-        .def("initialize", &TranslatorBase::initialize, &TranslatorBaseWrapper::initialize)
+        .def("initialize", &TranslatorBase::initialize, &TranslatorBaseWrapper::default_initialize)
         .def("getTranslatedType", boost::python::pure_virtual(&TranslatorBase::getTranslatedType))
         .def(
             "generateUniqueKey",
             &TranslatorBase::generateUniqueKey,
-            &TranslatorBaseWrapper::generateUniqueKey)
+            &TranslatorBaseWrapper::default_generateUniqueKey)
         .def("context", &TranslatorBase::context)
         .def(
             "needsTransformParent",
             &TranslatorBase::needsTransformParent,
-            &TranslatorBaseWrapper::needsTransformParent)
+            &TranslatorBaseWrapper::default_needsTransformParent)
         .def(
             "importableByDefault",
             &TranslatorBase::importableByDefault,
-            &TranslatorBaseWrapper::importableByDefault)
-        .def("importObject", &TranslatorBase::import, &TranslatorBaseWrapper::import)
-        .def("exportObject", &TranslatorBase::exportObject, &TranslatorBaseWrapper::exportObject)
-        .def("postImport", &TranslatorBase::postImport, &TranslatorBaseWrapper::postImport)
-        .def("preTearDown", &TranslatorBase::preTearDown, &TranslatorBaseWrapper::preTearDown)
-        .def("tearDown", &TranslatorBase::tearDown, &TranslatorBaseWrapper::tearDown)
-        .def("canExport", &TranslatorBase::canExport, &TranslatorBaseWrapper::canExport)
+            &TranslatorBaseWrapper::default_importableByDefault)
+        .def("importObject", &TranslatorBase::import, &TranslatorBaseWrapper::default_import)
+        .def(
+            "exportObject",
+            &TranslatorBase::exportObject,
+            &TranslatorBaseWrapper::default_exportObject)
+        .def("postImport", &TranslatorBase::postImport, &TranslatorBaseWrapper::default_postImport)
+        .def(
+            "preTearDown",
+            &TranslatorBase::preTearDown,
+            &TranslatorBaseWrapper::default_preTearDown)
+        .def("tearDown", &TranslatorBase::tearDown, &TranslatorBaseWrapper::default_tearDown)
+        .def("canExport", &TranslatorBase::canExport, &TranslatorBaseWrapper::default_canExport)
         .def("stage", &TranslatorBaseWrapper::stage)
         .def("getMObjects", &TranslatorBaseWrapper::getMObjects)
         .def(

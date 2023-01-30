@@ -74,7 +74,7 @@ bool MayaSessionState::getStageEntry(StageEntry* out_stageEntry, const MString& 
     UsdPrim prim;
 
     MObject shapeObj;
-    MStatus status = UsdMayaUtil::GetMObjectByName(shapePath.asChar(), shapeObj);
+    MStatus status = UsdMayaUtil::GetMObjectByName(shapePath, shapeObj);
     CHECK_MSTATUS_AND_RETURN(status, false);
     MFnDagNode dagNode(shapeObj, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);
@@ -146,6 +146,9 @@ void MayaSessionState::registerNotifications()
         MSceneMessage::kBeforeNew, MayaSessionState::sceneClosingCB, this);
     _callbackIds.push_back(id);
 
+    id = MSceneMessage::addNamespaceRenamedCallback(MayaSessionState::namespaceRenamedCB, this);
+    _callbackIds.push_back(id);
+
     TfWeakPtr<MayaSessionState> me(this);
     _stageResetNoticeKey = TfNotice::Register(me, &MayaSessionState::mayaUsdStageReset);
 }
@@ -212,35 +215,53 @@ void MayaSessionState::proxyShapeRemovedCB(MObject& node, void* clientData)
 }
 
 /* static */
-void MayaSessionState::nodeRenamedCB(MObject& obj, const MString& oldName, void* clientData)
+void MayaSessionState::namespaceRenamedCB(
+    const MString& oldName,
+    const MString& newName,
+    void*          clientData)
 {
     if (oldName.length() != 0) {
         auto THIS = static_cast<MayaSessionState*>(clientData);
-
-        // doing it on idle give time to the Load Stage to set a file name
-        QTimer::singleShot(
-            0, [THIS, obj, oldName]() { THIS->nodeRenamedCBOnIdle(oldName.asChar(), obj); });
+        for (StageEntry& entry : THIS->allStages()) {
+            // Need to update the current Entry also
+            if (THIS->_currentStageEntry._id == entry._id) {
+                THIS->_currentStageEntry = entry;
+            }
+            Q_EMIT THIS->stageRenamedSignal(entry);
+        }
     }
 }
 
-void MayaSessionState::nodeRenamedCBOnIdle(std::string const& oldName, const MObject& obj)
+/* static */
+void MayaSessionState::nodeRenamedCB(MObject& obj, const MString& oldName, void* clientData)
+{
+    if (oldName.length() != 0) {
+        if (obj.hasFn(MFn::kShape)) {
+            MDagPath dagPath;
+            MFnDagNode(obj).getPath(dagPath);
+            const MString shapePath = dagPath.fullPathName();
+
+            auto THIS = static_cast<MayaSessionState*>(clientData);
+
+            // doing it on idle give time to the Load Stage to set a file name
+            QTimer::singleShot(0, [THIS, shapePath]() { THIS->nodeRenamedCBOnIdle(shapePath); });
+        }
+    }
+}
+
+void MayaSessionState::nodeRenamedCBOnIdle(const MString& shapePath)
 {
     // this does not work:
     //        if OpenMaya.MFnDependencyNode(obj).typeName == PROXY_NODE_TYPE
-    if (obj.hasFn(MFn::kShape)) {
-        MDagPath dagPath;
-        MFnDagNode(obj).getPath(dagPath);
-        auto shapePath = dagPath.fullPathName();
 
-        StageEntry entry;
-        if (getStageEntry(&entry, shapePath)) {
-            // Need to update the current Entry also
-            if (_currentStageEntry._id == entry._id) {
-                _currentStageEntry = entry;
-            }
-
-            Q_EMIT stageRenamedSignal(entry);
+    StageEntry entry;
+    if (getStageEntry(&entry, shapePath)) {
+        // Need to update the current Entry also
+        if (_currentStageEntry._id == entry._id) {
+            _currentStageEntry = entry;
         }
+
+        Q_EMIT stageRenamedSignal(entry);
     }
 }
 

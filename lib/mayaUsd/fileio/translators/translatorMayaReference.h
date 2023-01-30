@@ -52,7 +52,8 @@ struct UsdMayaTranslatorMayaReference
         const UsdPrim& prim,
         MObject&       parent,
         MString&       mayaReferencePath,
-        MString&       rigNamespaceM);
+        MString&       rigNamespaceM,
+        bool           mergeNamespacesOnClash);
 
     MAYAUSD_CORE_PUBLIC
     static MStatus UnloadMayaReference(const MObject& parent);
@@ -61,10 +62,16 @@ struct UsdMayaTranslatorMayaReference
     static MStatus update(const UsdPrim& prim, MObject parent);
 
 private:
+    static MString namespaceFromPrim(const UsdPrim& prim);
+    static MString getUniqueRefNodeName(
+        const UsdPrim&      prim,
+        const MFnDagNode&   parentDag,
+        const MFnReference& refDependNode);
     static MStatus connectReferenceAssociatedNode(MFnDagNode& dagNode, MFnReference& refNode);
 
     static const TfToken m_namespaceName;
     static const TfToken m_referenceName;
+    static const TfToken m_mergeNamespacesOnClash;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

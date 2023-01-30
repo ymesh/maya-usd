@@ -18,9 +18,12 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 MayaUsd_SchemasTokensType::MayaUsd_SchemasTokensType()
-    : mayaNamespace("mayaNamespace", TfToken::Immortal)
+    : mayaAutoEdit("mayaAutoEdit", TfToken::Immortal)
+    , mayaNamespace("mayaNamespace", TfToken::Immortal)
     , mayaReference("mayaReference", TfToken::Immortal)
-    , allTokens({ mayaNamespace, mayaReference })
+    , ALMayaReference("ALMayaReference", TfToken::Immortal)
+    , MayaReference("MayaReference", TfToken::Immortal)
+    , allTokens({ mayaAutoEdit, mayaNamespace, mayaReference, ALMayaReference, MayaReference })
 {
 }
 

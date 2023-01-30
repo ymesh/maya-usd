@@ -36,7 +36,9 @@ class testUsdImportCustomConverter(unittest.TestCase):
         else:
             suffix = "USD"
 
-        cls.input_path = fixturesUtils.setUpClass(__file__, suffix)
+        fixturesUtils.setUpClass(__file__, suffix)
+
+        cls.input_path = os.path.abspath(os.getenv("INPUT_PATH"))
 
         cls.test_dir = os.path.join(cls.input_path,
                                     "UsdImportCustomConverterTest")
@@ -128,9 +130,9 @@ class testUsdImportCustomConverter(unittest.TestCase):
                   pr=True, importTimeRange="combine",
                   options=";".join(import_options))
 
-        expected = [["pCube1Shape", "phong"],
-                    ["pCube2Shape", "standardSurface"],
-                    ["pCube3Shape", "phong"]]
+        expected = [["Test:pCube1Shape", "phong"],
+                    ["Test:pCube2Shape", "standardSurface"],
+                    ["Test:pCube3Shape", "phong"]]
         self.checkMaterials(expected)
 
     def testAsMayaDoesItNoConversion(self):
@@ -152,9 +154,9 @@ class testUsdImportCustomConverter(unittest.TestCase):
                   pr=True, importTimeRange="combine",
                   options=";".join(import_options))
 
-        expected = [["pCube1Shape", "lambert"],
-                    ["pCube2Shape", "standardSurface"],
-                    ["pCube3Shape", "usdPreviewSurface"]]
+        expected = [["Test:pCube1Shape", "lambert"],
+                    ["Test:pCube2Shape", "standardSurface"],
+                    ["Test:pCube3Shape", "usdPreviewSurface"]]
         self.checkMaterials(expected)
 
     def testAsMayaDoesItWithConversion(self):
@@ -177,9 +179,9 @@ class testUsdImportCustomConverter(unittest.TestCase):
                   pr=True, importTimeRange="combine",
                   options=";".join(import_options))
 
-        expected = [["pCube1Shape", "phong"],
-                    ["pCube2Shape", "standardSurface"],
-                    ["pCube3Shape", "phong"]]
+        expected = [["Test:pCube1Shape", "phong"],
+                    ["Test:pCube2Shape", "standardSurface"],
+                    ["Test:pCube3Shape", "phong"]]
         self.checkMaterials(expected)
 
 

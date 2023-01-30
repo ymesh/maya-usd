@@ -31,6 +31,10 @@ import maya.OpenMaya as om
 import ufe
 import re
 
+def isGatewayNode(dagPath):
+    baseProxyShape = 'mayaUsdProxyShapeBase'
+    return baseProxyShape in cmds.nodeType(dagPath, inherited=True)
+
 def getUfeSelection():
     try:
         return ufe.GlobalSelection.get().front()
@@ -48,7 +52,10 @@ def getDagAndPrimFromUfe(ufeObject):
     dagPath = str(ufeObject.path().segments[0])[6:]
     
     if segmentCount == 1:
-        return dagPath, None
+        if isGatewayNode(dagPath):
+            return dagPath, Sdf.Path.absoluteRootPath
+        else:
+            return dagPath, None
     
     primPath = str(ufeObject.path().segments[1])
     
@@ -64,8 +71,12 @@ def getAccessPlugName(sdfPath):
 
 def isUfeUsdPath(ufeObject):
     segmentCount = ufeObject.path().nbSegments()
-    if segmentCount < 2:
+    if segmentCount == 0:
         return False
+        
+    if segmentCount == 1:
+        dagPath = str(ufeObject.path().segments[0])[6:]
+        return isGatewayNode(dagPath)
     
     lastSegment = ufeObject.path().segments[segmentCount-1]
     return Sdf.Path.IsValidPathString(str(lastSegment))
@@ -204,7 +215,7 @@ def keyframeAccessPlug(ufeObject, usdAttrName):
     else:
         result = cmds.setKeyframe(proxyDagPath, attribute=plugNameValueAttr)
     
-def parentItems(ufeChildren, ufeParent):
+def parentItems(ufeChildren, ufeParent, connect=True):
     if not isUfeUsdPath(ufeParent):
         print("This method implements parenting under USD prim. Please provide UFE-USD item for ufeParent")
         return
@@ -220,11 +231,19 @@ def parentItems(ufeChildren, ufeParent):
          
         childDagPath = getDagAndPrimFromUfe(ufeChild)[0]
         
-        print('Parenting "{}" to "{}{}"'.format(childDagPath, parentDagPath,parentUsdPrimPath))
+        print('{} "{}" to "{}{}"'.format(
+            ["Unparenting", "Parenting"][connect],
+            childDagPath, parentDagPath, parentUsdPrimPath))
         childConnectionAttr = childDagPath+'.offsetParentMatrix'
-        cmds.connectAttr(parentConnectionAttr, childConnectionAttr)
+        print('{} "{}" to "{}"'.format(
+            ["Disconnecting", "Connecting"][connect],
+            parentConnectionAttr, childConnectionAttr))
+        if connect:
+            cmds.connectAttr(parentConnectionAttr, childConnectionAttr)
+        else:
+            cmds.disconnectAttr(parentConnectionAttr, childConnectionAttr)
 
-def parent():
+def __parent(doParenting):
    ufeSelection = iter(ufe.GlobalSelection.get())
    ufeSelectionList = []
    for ufeItem in ufeSelection:
@@ -241,7 +260,13 @@ def parent():
    ufeParent = ufeSelectionList[-1]
    ufeChildren = ufeSelectionList[:-1]
    
-   parentItems(ufeChildren, ufeParent)
+   parentItems(ufeChildren, ufeParent, doParenting)
+
+def parent():
+    __parent(True)
+
+def unparent():
+    __parent(False)
 
 def connectItems(ufeObjectSrc, ufeObjectDst, attrToConnect):
     connectMayaToUsd = isUfeUsdPath(ufeObjectDst)

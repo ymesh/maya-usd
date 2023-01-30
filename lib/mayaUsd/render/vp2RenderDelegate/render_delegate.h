@@ -121,16 +121,28 @@ public:
 
     void CommitResources(HdChangeTracker* tracker) override;
 
-    TfToken GetMaterialBindingPurpose() const override;
+    TfToken       GetMaterialBindingPurpose() const override;
+    TfTokenVector GetShaderSourceTypes() const override;
+#if PXR_VERSION < 2105
+    TfToken GetMaterialNetworkSelector() const override;
+#else
+    TfTokenVector GetMaterialRenderContexts() const override;
+#endif
+
+    bool IsPrimvarFilteringNeeded() const override { return true; }
 
     MString GetLocalNodeName(const MString& name) const;
 
     MHWRender::MShaderInstance* GetFallbackShader(const MColor& color) const;
     MHWRender::MShaderInstance* GetFallbackCPVShader() const;
+    MHWRender::MShaderInstance* GetPointsFallbackShader(const MColor& color) const;
+    MHWRender::MShaderInstance* GetPointsFallbackCPVShader() const;
     MHWRender::MShaderInstance* Get3dSolidShader(const MColor& color) const;
     MHWRender::MShaderInstance* Get3dDefaultMaterialShader() const;
     MHWRender::MShaderInstance* Get3dCPVSolidShader() const;
-    MHWRender::MShaderInstance* Get3dFatPointShader() const;
+    MHWRender::MShaderInstance* Get3dCPVFatPointShader() const;
+    MHWRender::MShaderInstance*
+    Get3dFatPointShader(const MColor& color = MColor(1.f, 1.f, 1.f)) const;
 
     MHWRender::MShaderInstance* GetBasisCurvesFallbackShader(
         const TfToken& curveType,
@@ -142,12 +154,20 @@ public:
 
     MHWRender::MShaderInstance* GetShaderFromCache(const TfToken& id);
     bool AddShaderToCache(const TfToken& id, const MHWRender::MShaderInstance& shader);
+#ifdef WANT_MATERIALX_BUILD
+    const TfTokenVector* GetPrimvarsFromCache(const TfToken& id);
+    bool                 AddPrimvarsToCache(const TfToken& id, const TfTokenVector& primvars);
+#endif
 
     const MHWRender::MSamplerState* GetSamplerState(const MHWRender::MSamplerStateDesc& desc) const;
 
     const HdVP2BBoxGeom& GetSharedBBoxGeom() const;
 
+    void CleanupMaterials();
+
     static const int sProfilerCategory; //!< Profiler category
+
+    static void OnMayaExit();
 
 private:
     HdVP2RenderDelegate(const HdVP2RenderDelegate&) = delete;
@@ -161,13 +181,13 @@ private:
     static HdResourceRegistrySharedPtr
         _resourceRegistry; //!< Shared and unused by VP2 resource registry
 
+    std::unordered_set<HdSprim*> _materialSprims;
+
     std::unique_ptr<HdVP2RenderParam>
             _renderParam; //!< Render param used to provided access to VP2 during prim synchronization
     SdfPath _id;          //!< Render delegate ID
     HdVP2ResourceRegistry
         _resourceRegistryVP2; //!< VP2 resource registry used for enqueue and execution of commits
-
-    HdVP2ShaderCache _shaderCache; //!< A thread-safe cache of named shaders.
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

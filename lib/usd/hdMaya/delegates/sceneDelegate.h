@@ -103,6 +103,9 @@ public:
     void NodeAdded(const MObject& obj);
 
     HDMAYA_API
+    void NodeRemoved(const MObject& obj);
+
+    HDMAYA_API
     void UpdateLightVisibility(const MDagPath& dag);
 
     HDMAYA_API
@@ -193,6 +196,11 @@ protected:
 
     HDMAYA_API
     VtIntArray GetInstanceIndices(const SdfPath& instancerId, const SdfPath& prototypeId) override;
+
+#if defined(HD_API_VERSION) && HD_API_VERSION >= 39
+    HDMAYA_API
+    SdfPathVector GetInstancerPrototypes(SdfPath const& instancerId) override;
+#endif
 
 #if defined(HD_API_VERSION) && HD_API_VERSION >= 36
     HDMAYA_API

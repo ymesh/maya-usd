@@ -16,13 +16,17 @@
 # limitations under the License.
 #
 
+import mayaUsd.lib
+
 import fixturesUtils
 import mayaUtils
-import usdUtils
+import ufeUtils
 
 from maya import cmds
 from maya import standalone
 from maya.api import OpenMaya as om
+
+from pxr import UsdGeom, Vt, Gf
 
 import ufe
 
@@ -35,6 +39,12 @@ import unittest
 
 def v3dToMPoint(v):
     return om.MPoint(v.x(), v.y(), v.z())
+
+def assertMPointAlmostEqual(testCase, a, b, places=7):
+    testCase.assertAlmostEqual(a.x, b.x)
+    testCase.assertAlmostEqual(a.y, b.y)
+    testCase.assertAlmostEqual(a.z, b.z)
+    testCase.assertAlmostEqual(a.w, b.w)
 
 # Index into MMatrix linearly as a 16-element vector, starting at row 0.
 def ndx(i, j):
@@ -115,7 +125,7 @@ class RotatePivotTestCase(unittest.TestCase):
 
         t3d.rotatePivot(pivot[0], pivot[1], pivot[2])
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), pivot)
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), pivot)
 
         t3d.rotate(degrees(rot[0]), degrees(rot[1]), degrees(rot[2]))
         sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
@@ -123,7 +133,7 @@ class RotatePivotTestCase(unittest.TestCase):
 
         t3d.rotatePivot(0, 0, 0)
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), om.MPoint(0, 0, 0))
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), om.MPoint(0, 0, 0))
 
         sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
         self.checkPos(sphereMatrix, [10, 0, 0])
@@ -133,7 +143,7 @@ class RotatePivotTestCase(unittest.TestCase):
         rotatePivotCmd.set(pivot[0], pivot[1], pivot[2])
 
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), pivot)
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), pivot)
 
         sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
 
@@ -142,7 +152,7 @@ class RotatePivotTestCase(unittest.TestCase):
         rotatePivotCmd.undo()
 
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), om.MPoint(0, 0, 0))
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), om.MPoint(0, 0, 0))
 
         sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
         self.checkPos(sphereMatrix, [10, 0, 0])
@@ -158,12 +168,14 @@ class RotatePivotTestCase(unittest.TestCase):
         rot = om.MEulerRotation(0, 0, rotZ)
         # Pivot around x=0.
         pivot = om.MPoint(-10, 0, 0)
+        pivotTranslate = om.MPoint(0, 0, 0)
         xyWorldValue = sin(rotZ) * 10
+        rotatedPosition = [xyWorldValue, xyWorldValue, 0]
 
         # USD sphere is at (10, 0, 0) in local space, and since its parents
         # have an identity transform, in world space as well.
         spherePath = ufe.PathString.path(
-                '|usdSphereParent|usdSphereParentShape,/sphereXform/sphere')
+                '|usdSphereParent|usdSphereParentShape,/sphereXform')
         sphereItem = ufe.Hierarchy.createItem(spherePath)
         ufe.GlobalSelection.get().append(sphereItem)
 
@@ -175,26 +187,82 @@ class RotatePivotTestCase(unittest.TestCase):
         # correct result through an unintended code path.
         t3d.rotatePivot(2, 0, 0)
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), om.MPoint(2, 0, 0))
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), om.MPoint(2, 0, 0))
+        t3d.rotatePivot(0, 0, 0)
 
-        cmds.move(-12, 0, 0, relative=True, ufeRotatePivot=True)
+        # Start with a non-zero initial rotation. This is required to test
+        # MAYA-112175, otherwise a zero initial rotation means rotate pivot
+        # translation will be empty and we get the correct result by accident.
+        if (mayaUtils.mayaMajorVersion() >= 2023):
+            cmds.rotate(0, 0, 90)
+            print(type(pivot))
+            pivot = om.MPoint(0, 10, 0)
+            print(type(pivot))
+            pivotTranslate = om.MPoint(-10, -10, 0)
+            rotatedPosition = [xyWorldValue, -xyWorldValue, 0]
+
+        cmds.move(-10, 0, 0, relative=True, ufeRotatePivot=True)
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), pivot)
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), pivot)
+        usdRotatePivotTranslation = t3d.rotatePivotTranslation()
+        assertMPointAlmostEqual(self, v3dToMPoint(usdRotatePivotTranslation), pivotTranslate)
 
         cmds.undo()
 
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), om.MPoint(2, 0, 0))
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), om.MPoint(0, 0, 0))
+        usdRotatePivotTranslation = t3d.rotatePivotTranslation()
+        assertMPointAlmostEqual(self, v3dToMPoint(usdRotatePivotTranslation), om.MPoint(0, 0, 0))
 
         cmds.redo()
 
         usdPivot = t3d.rotatePivot()
-        self.assertEqual(v3dToMPoint(usdPivot), pivot)
+        assertMPointAlmostEqual(self, v3dToMPoint(usdPivot), pivot)
 
         cmds.rotate(degrees(rot[0]), degrees(rot[1]), degrees(rot[2]))
         sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
-        self.checkPos(sphereMatrix, [xyWorldValue, xyWorldValue, 0])
+        self.checkPos(sphereMatrix, rotatedPosition)
 
+        if (mayaUtils.mayaMajorVersion() >= 2023):
+            cmds.undo()
+            cmds.move(10, 10, 0, absolute=True)
+            sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
+            self.checkPos(sphereMatrix, [10, 10, 0])
+            cmds.move(10, 10, 0, absolute=True, rotatePivotRelative=True)
+            sphereMatrix = om.MMatrix(t3d.inclusiveMatrix().matrix)
+            self.checkPos(sphereMatrix, [20, 10, 0])
+
+    def testRotatePivotMatrixOp(self):
+        '''Setting the rotate pivot on a prim with a matrix op.'''
+
+        # Create a scene with an xform that has a matrix op.
+        import mayaUsd_createStageWithNewLayer
+
+        mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        proxyShapePathStr = '|stage1|stageShape1'
+        stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
+        xform = stage.DefinePrim('/Xform1', 'Xform')
+        xformable = UsdGeom.Xformable(xform)
+        
+        transformOp = xformable.AddTransformOp()
+        transformOp.Set(Gf.Matrix4d(1.0))
+    
+        self.assertEqual(xformable.GetXformOpOrderAttr().Get(), Vt.TokenArray([
+            "xformOp:transform"]))
+
+        xformItem = ufeUtils.createItem(proxyShapePathStr + ',/Xform1')
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(xformItem)
+
+        # Set the rotate and scale pivot.  Since the matrix op does not support
+        # these, this will create a Maya fallback transform stack after the
+        # matrix op.
+        cmds.move(3, 2, 1, r=True, urp=True, usp=True)
+
+        # Read back the rotate pivot using the Transform3d interface.
+        t3d = ufe.Transform3d.transform3d(xformItem)
+        self.assertEqual(t3d.rotatePivot().vector, [3, 2, 1])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

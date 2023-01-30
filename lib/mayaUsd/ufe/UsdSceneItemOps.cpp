@@ -22,20 +22,6 @@
 
 #include <maya/MGlobal.h>
 
-namespace {
-// Warning: If a user tries to delete a prim that is deactivated (can be localized).
-static constexpr char kWarningCannotDeactivePrim[]
-    = "Cannot deactivate \"^1s\" because it is already inactive.";
-
-void displayWarning(const PXR_NS::UsdPrim& prim, const MString& fmt)
-{
-    MString msg, primArg(prim.GetName().GetText());
-    msg.format(fmt, primArg);
-    MGlobal::displayWarning(msg);
-}
-
-} // namespace
-
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
@@ -63,27 +49,46 @@ const Ufe::Path& UsdSceneItemOps::path() const { return fItem->path(); }
 
 Ufe::SceneItem::Ptr UsdSceneItemOps::sceneItem() const { return fItem; }
 
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4033)
+Ufe::UndoableCommand::Ptr UsdSceneItemOps::deleteItemCmdNoExecute()
+{
+    return UsdUndoDeleteCommand::create(prim());
+}
+#endif
+#endif
+
 Ufe::UndoableCommand::Ptr UsdSceneItemOps::deleteItemCmd()
 {
-    if (prim().IsActive()) {
-        auto deleteCmd = UsdUndoDeleteCommand::create(prim());
-        deleteCmd->execute();
-        return deleteCmd;
-    }
-
-    displayWarning(prim(), kWarningCannotDeactivePrim);
-    return nullptr;
+    auto deleteCmd = UsdUndoDeleteCommand::create(prim());
+    deleteCmd->execute();
+    return deleteCmd;
 }
 
 bool UsdSceneItemOps::deleteItem()
 {
-    if (prim().IsActive()) {
-        return prim().SetActive(false);
+    if (prim()) {
+        auto deleteCmd = UsdUndoDeleteCommand::create(prim());
+        deleteCmd->execute();
+        return true;
     }
 
-    displayWarning(prim(), kWarningCannotDeactivePrim);
     return false;
 }
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4033)
+#if (UFE_PREVIEW_VERSION_NUM >= 4041)
+Ufe::SceneItemResultUndoableCommand::Ptr
+#else
+Ufe::UndoableCommand::Ptr
+#endif
+UsdSceneItemOps::duplicateItemCmdNoExecute()
+{
+    return UsdUndoDuplicateCommand::create(fItem);
+}
+#endif
+#endif
 
 Ufe::Duplicate UsdSceneItemOps::duplicateItemCmd()
 {
@@ -98,18 +103,32 @@ Ufe::SceneItem::Ptr UsdSceneItemOps::duplicateItem()
     return duplicate.item;
 }
 
-Ufe::SceneItem::Ptr UsdSceneItemOps::renameItem(const Ufe::PathComponent& newName)
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4033)
+#if (UFE_PREVIEW_VERSION_NUM >= 4041)
+Ufe::SceneItemResultUndoableCommand::Ptr
+#else
+Ufe::UndoableCommand::Ptr
+#endif
+UsdSceneItemOps::renameItemCmdNoExecute(const Ufe::PathComponent& newName)
 {
-    auto renameCmd = UsdUndoRenameCommand::create(fItem, newName);
-    renameCmd->execute();
-    return renameCmd->renamedItem();
+    return UsdUndoRenameCommand::create(fItem, newName);
 }
+#endif
+#endif
 
 Ufe::Rename UsdSceneItemOps::renameItemCmd(const Ufe::PathComponent& newName)
 {
     auto renameCmd = UsdUndoRenameCommand::create(fItem, newName);
     renameCmd->execute();
     return Ufe::Rename(renameCmd->renamedItem(), renameCmd);
+}
+
+Ufe::SceneItem::Ptr UsdSceneItemOps::renameItem(const Ufe::PathComponent& newName)
+{
+    auto renameCmd = UsdUndoRenameCommand::create(fItem, newName);
+    renameCmd->execute();
+    return renameCmd->renamedItem();
 }
 
 } // namespace ufe

@@ -1,5 +1,3 @@
-set(TARGET_NAME IMPORT_EXPORT_TEST)
-
 set(TEST_SCRIPT_FILES
     testUsdExportAnimation.py
     testUsdExportAsClip.py
@@ -17,13 +15,14 @@ set(TEST_SCRIPT_FILES
     testUsdExportGeomSubset.py
     testUsdExportInstances.py
     testUsdExportLayerAttributes.py
+    testUsdExportLight.py
     testUsdExportLocator.py
     testUsdExportMayaInstancer.py
     testUsdExportMesh.py
     testUsdExportNurbsCurve.py
     testUsdExportOpenLayer.py
     testUsdExportOverImport.py
-    testUsdExportPackage.py
+    testUsdExportUsdPreviewSurface.py
     testUsdExportParentScope.py
     # To investigate: following test asserts in MFnParticleSystem, but passes.
     # PPT, 17-Jun-20.
@@ -36,6 +35,8 @@ set(TEST_SCRIPT_FILES
     testUsdExportRenderLayerMode.py
     ## XXX: This test is disabled by default since it requires the RenderMan for Maya plugin.
     # testUsdExportRfMLight.py
+    testUsdExportRoots.py
+    testUsdExportRootsAndParentScope.py
     testUsdExportSelection.py
     testUsdExportSelectionHierarchy.py
     testUsdExportShadingInstanced.py
@@ -47,6 +48,12 @@ set(TEST_SCRIPT_FILES
     testUsdExportVisibilityDefault.py
     testUsdImportAnonymousLayer.py
     testUsdImportCamera.py
+    testUsdImportBasisCurves.py
+    testUsdImportBatchNurbsCurves.py
+    testUsdImportLinearCurves.py
+    testUsdImportHighDegreeNurbsCurves.py
+    testUsdImportNurbsCurves.py
+    testUsdImportBatchBezierCurves.py
     testUsdImportColorSets.py
     testUsdImportDisplacement.py
     testUsdImportExportScope.py
@@ -56,8 +63,10 @@ set(TEST_SCRIPT_FILES
     testUsdImportFrameRange.py
     testUsdImportFramerates.py
     testUsdImportInstances.py
+    testUsdImportLight.py
     testUsdImportMayaReference.py
     testUsdImportMesh.py
+    testUsdImportPointCache.py
     testUsdImportPreviewSurface.py
     # XXX: This test is disabled by default since it requires the RenderMan for Maya plugin.
     # testUsdImportRfMLight.py
@@ -84,6 +93,13 @@ if(BUILD_PXR_PLUGIN)
     list(APPEND TEST_SCRIPT_FILES
         testUsdExportUVTransforms.py
     )
+
+    # This test uses the file "asset.ma" which
+    # requires the plugin "pxrUsdPreviewSurface" that is built by the
+    # Pixar plugin.
+    list(APPEND TEST_SCRIPT_FILES
+        testUsdExportUsdzPackage.py
+    )
 endif()
 
 if (BUILD_RFM_TRANSLATORS)
@@ -92,15 +108,6 @@ if (BUILD_RFM_TRANSLATORS)
         testUsdImportRfMShaders.py
     )
 endif()
-
-add_custom_target(${TARGET_NAME} ALL)
-
-# copy all the resources and python scripts to build directory
-mayaUsd_copyDirectory(${TARGET_NAME}
-    SOURCE ${CMAKE_CURRENT_SOURCE_DIR}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    EXCLUDE "*.txt"
-)
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})
@@ -121,7 +128,6 @@ mayaUsd_add_test(testUsdExportUVSets
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "PIXMAYA_WRITE_UV_AS_FLOAT2=0"
-        "MAYAUSD_EXPORT_MAP1_AS_PRIMARY_UV_SET=0"
 )
 set_property(TEST testUsdExportUVSets APPEND PROPERTY LABELS translators)
 
@@ -130,43 +136,22 @@ mayaUsd_add_test(testUsdExportUVSetsFloat
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "PIXMAYA_WRITE_UV_AS_FLOAT2=1"
-        "MAYAUSD_EXPORT_MAP1_AS_PRIMARY_UV_SET=0"
 )
 set_property(TEST testUsdExportUVSetsFloat APPEND PROPERTY LABELS translators)
-
-mayaUsd_add_test(testUsdExportUVSetsST
-    PYTHON_MODULE testUsdExportUVSets
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    ENV
-        "PIXMAYA_WRITE_UV_AS_FLOAT2=0"
-        "MAYAUSD_EXPORT_MAP1_AS_PRIMARY_UV_SET=1"
-)
-set_property(TEST testUsdExportUVSetsST APPEND PROPERTY LABELS translators)
 
 mayaUsd_add_test(testUsdExportUVSetMappings
     PYTHON_MODULE testUsdExportUVSetMappings
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "PIXMAYA_WRITE_UV_AS_FLOAT2=0"
-        "MAYAUSD_EXPORT_MAP1_AS_PRIMARY_UV_SET=0"
 )
 set_property(TEST testUsdExportUVSetMappings APPEND PROPERTY LABELS translators)
-
-mayaUsd_add_test(testUsdExportUVSetMappingsST
-    PYTHON_MODULE testUsdExportUVSetMappings
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    ENV
-        "PIXMAYA_WRITE_UV_AS_FLOAT2=0"
-        "MAYAUSD_EXPORT_MAP1_AS_PRIMARY_UV_SET=1"
-)
-set_property(TEST testUsdExportUVSetMappingsST APPEND PROPERTY LABELS translators)
 
 mayaUsd_add_test(testUsdImportUVSets
     PYTHON_MODULE testUsdImportUVSets
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "PIXMAYA_READ_FLOAT2_AS_UV=0"
-        "MAYAUSD_IMPORT_PRIMARY_UV_SET_AS_MAP1=0"
 )
 set_property(TEST testUsdImportUVSets APPEND PROPERTY LABELS translators)
 
@@ -175,18 +160,8 @@ mayaUsd_add_test(testUsdImportUVSetsFloat
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "PIXMAYA_READ_FLOAT2_AS_UV=1"
-        "MAYAUSD_IMPORT_PRIMARY_UV_SET_AS_MAP1=0"
 )
 set_property(TEST testUsdImportUVSetsFloat APPEND PROPERTY LABELS translators)
-
-mayaUsd_add_test(testUsdImportUVSetsST
-    PYTHON_MODULE testUsdImportUVSets
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    ENV
-        "PIXMAYA_READ_FLOAT2_AS_UV=0"
-        "MAYAUSD_IMPORT_PRIMARY_UV_SET_AS_MAP1=1"
-)
-set_property(TEST testUsdImportUVSetsST APPEND PROPERTY LABELS translators)
 
 mayaUsd_add_test(testUsdImportChaser
     PYTHON_MODULE testUsdImportChaser
@@ -225,6 +200,8 @@ if (MAYA_APP_VERSION VERSION_GREATER_EQUAL 2020)
                 ENV
                     "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
                     "${PXR_OVERRIDE_PLUGINPATH_NAME}=${CMAKE_CURRENT_BINARY_DIR}/../plugin/${plugin_type}"
+                    "INPUT_PATH=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
             )
             set_property(TEST ${target} APPEND PROPERTY LABELS translators)
         endforeach()
@@ -249,6 +226,14 @@ if (MAYA_APP_VERSION VERSION_GREATER 2022 AND PXR_VERSION VERSION_GREATER 2102)
         # Add a ctest label to these tests for easy filtering.
         set_property(TEST ${target} APPEND PROPERTY LABELS translators)
     endforeach()
+
+    if (BUILD_RFM_TRANSLATORS)
+        mayaUsd_add_test(testUsdExportMultiMaterial
+            PYTHON_MODULE testUsdExportMultiMaterial
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        )
+        set_property(TEST testUsdExportMultiMaterial APPEND PROPERTY LABELS translators)
+    endif()
 endif()
 
 # We are explicitly not setting PXR_PLUGINPATH_NAME here. We want to test
@@ -260,3 +245,26 @@ mayaUsd_add_test(testUsdMayaListShadingModesCommand
         "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
 )
 set_property(TEST testUsdMayaListShadingModesCommand APPEND PROPERTY LABELS translators)
+
+# Requires Physics API to test some exporters:
+if (PXR_VERSION VERSION_GREATER 2105)
+    # Once of the tests in this file requires UsdMaya (from the Pixar plugin). That test
+    # will be skipped if not found (probably because BUILD_PXR_PLUGIN is off).
+    mayaUsd_add_test(testUsdExportSchemaApi
+        PYTHON_MODULE testUsdExportSchemaApi
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        ENV
+            "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_BINARY_DIR}/../plugin"
+            "${PXR_OVERRIDE_PLUGINPATH_NAME}=${CMAKE_CURRENT_BINARY_DIR}/../plugin/nullApiExporter"
+    )
+    set_property(TEST testUsdExportSchemaApi APPEND PROPERTY LABELS translators)
+endif()
+
+mayaUsd_add_test(testUsdImportExportSiteSpecificConfig
+    PYTHON_MODULE testUsdImportExportSiteSpecificConfig
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    ENV
+        "${PXR_OVERRIDE_PLUGINPATH_NAME}=${CMAKE_CURRENT_BINARY_DIR}/../plugin/SiteSpecificConfig"
+)
+set_property(TEST testUsdImportExportSiteSpecificConfig APPEND PROPERTY LABELS translators)
+

@@ -20,10 +20,12 @@
     Helper functions regarding Maya that will be used throughout the test.
 """
 
+from math import radians
 from mayaUsd import lib as mayaUsdLib
 from mayaUsd import ufe as mayaUsdUfe
 
 from maya import cmds
+from maya.api import OpenMaya as om
 
 import ufe
 import ufeUtils, testUtils
@@ -185,6 +187,28 @@ def openCompositionArcsScene():
 def openPrimPathScene():
     return openTestScene("primPath", "primPath.ma" )
 
+def setMayaTranslation(aMayaItem, t):
+    '''Set the translation on the argument Maya scene item.'''
+
+    aMayaPath = aMayaItem.path()
+    aMayaPathStr = ufe.PathString.string(aMayaPath)
+    aDagPath = om.MSelectionList().add(aMayaPathStr).getDagPath(0)
+    aFn= om.MFnTransform(aDagPath)
+    aFn.setTranslation(t, om.MSpace.kObject)
+    return (aMayaPath, aMayaPathStr, aFn, aFn.transformation().asMatrix())
+
+def setMayaRotation(aMayaItem, r):
+    '''Set the rotation (XYZ) on the argument Maya scene item.'''
+
+    aMayaPath = aMayaItem.path()
+    aMayaPathStr = ufe.PathString.string(aMayaPath)
+    aDagPath = om.MSelectionList().add(aMayaPathStr).getDagPath(0)
+    aFn = om.MFnTransform(aDagPath)
+    rads = [ radians(v) for v in r ]
+    rot = om.MEulerRotation(rads[0], rads[1], rads[2])
+    aFn.setRotation(rot, om.MSpace.kTransform)
+    return (aMayaPath, aMayaPathStr, aFn, aFn.transformation().asMatrix())
+
 def createProxyAndStage():
     """
     Create in-memory stage
@@ -215,12 +239,31 @@ def createProxyFromFile(filePath):
 
     return shapeNode,shapeStage
 
+def createSingleSphereMayaScene(directory=None):
+    '''Create a Maya scene with a single polygonal sphere.
+    Returns the file path.
+    '''
+
+    cmds.file(new=True, force=True)
+    cmds.CreatePolygonSphere()
+    tempMayaFile = 'simpleSphere.ma'
+    if directory is not None:
+        tempMayaFile = os.path.join(directory, tempMayaFile)
+    # Prevent Windows single backslash from being interpreted as a control
+    # character.
+    tempMayaFile = tempMayaFile.replace(os.sep, '/')
+    cmds.file(rename=tempMayaFile)
+    cmds.file(save=True, force=True, type='mayaAscii')
+    return tempMayaFile
+
 def previewReleaseVersion():
     '''Return the Maya Preview Release version.
 
     If the version of Maya is 2019, returns 98.
 
     If the version of Maya is 2020, returns 110.
+
+    If the version of Maya is 2022, returns 122.
 
     If the version of Maya is current and is not a Preview Release, returns
     sys.maxsize (a very large number).  If the environment variable
@@ -247,6 +290,23 @@ def mayaMajorVersion():
 
 def mayaMinorVersion():
     return int(cmds.about(minorVersion=True))
+
+def mayaMajorMinorVersions():
+    """
+    Return the Maya version as a tuple (Major, Minor).
+    Thanks to Python tuple comparison rules, (2022, 0) > (2021,3).
+    """
+    return (mayaMajorVersion(), mayaMinorVersion())
+
+def ufeSupportFixLevel():
+    '''
+    Return the fix level defined in the UFE support package.  This is used
+    to determine the presence of a UFE-related feature or bug fix in Maya that
+    does not depend on a version of UFE itself.
+    '''
+    import maya.internal.ufeSupport.utils as ufeSupportUtils
+    return ufeSupportUtils.fixLevel() if hasattr(ufeSupportUtils, 'fixLevel') \
+        else 0
 
 def activeModelPanel():
     """Return the model panel that will be used for playblasting etc..."""

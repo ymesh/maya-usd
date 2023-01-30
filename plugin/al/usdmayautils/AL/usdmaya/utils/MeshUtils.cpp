@@ -23,6 +23,7 @@
 #include <mayaUsdUtils/DebugCodes.h>
 #include <mayaUsdUtils/DiffCore.h>
 
+#include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdUtils/pipeline.h>
 
 #include <maya/MGlobal.h>
@@ -202,11 +203,12 @@ void MeshImportContext::gatherFaceConnectsAndVertices()
 
     // According to the docs for UsdGeomMesh: If 'normals' and 'primvars:normals' are both
     // specified, the latter has precedence.
-    const TfToken primvarNormalsToken("primvars:normals");
-    TfToken       interpolation = mesh.GetNormalsInterpolation();
-    bool          hasNormalsOpinion = false;
-    if (mesh.HasPrimvar(primvarNormalsToken)) {
-        UsdGeomPrimvar primvar = mesh.GetPrimvar(primvarNormalsToken);
+    const TfToken      primvarNormalsToken("primvars:normals");
+    TfToken            interpolation = mesh.GetNormalsInterpolation();
+    bool               hasNormalsOpinion = false;
+    UsdGeomPrimvarsAPI pvAPI(mesh);
+    if (pvAPI.HasPrimvar(primvarNormalsToken)) {
+        UsdGeomPrimvar primvar = pvAPI.GetPrimvar(primvarNormalsToken);
         interpolation = primvar.GetInterpolation();
         hasNormalsOpinion = true;
         primvar.Get(&normalsData, m_timeCode);
@@ -505,21 +507,13 @@ bool MeshImportContext::applyVertexNormals()
         return false;
     };
 
-    // Lambda to set face vertex normals in unlocked state
-    auto setUnlockedFaceVertexNormals
-        = [&](MVectorArray& normals, MIntArray& faceList, MIntArray& vertexList) -> bool {
-        if (fnMesh.setFaceVertexNormals(normals, faceList, vertexList, MSpace::kObject)) {
-            return fnMesh.unlockFaceVertexNormals(faceList, vertexList);
-        }
-        return false;
-    };
-
     if (normals.length()) {
         // According to the docs for UsdGeomMesh: If 'normals' and 'primvars:normals' are both
         // specified, the latter has precedence.
-        TfToken primvarNormalsToken("primvars:normals");
-        if (mesh.HasPrimvar(primvarNormalsToken)) {
-            UsdGeomPrimvar primvar = mesh.GetPrimvar(primvarNormalsToken);
+        TfToken            primvarNormalsToken("primvars:normals");
+        UsdGeomPrimvarsAPI pvAPI(mesh);
+        if (pvAPI.HasPrimvar(primvarNormalsToken)) {
+            UsdGeomPrimvar primvar = pvAPI.GetPrimvar(primvarNormalsToken);
             const TfToken  interpolation = primvar.GetInterpolation();
             const bool     isIndexed = primvar.IsIndexed();
             if (interpolation == UsdGeomTokens->vertex) {
@@ -555,9 +549,11 @@ bool MeshImportContext::applyVertexNormals()
                         ns[i] = normals[indices[i]];
                     }
 
-                    return setUnlockedFaceVertexNormals(ns, normalsFaceIds, connects);
+                    return fnMesh.setFaceVertexNormals(
+                        ns, normalsFaceIds, connects, MSpace::kObject);
                 } else {
-                    return setUnlockedFaceVertexNormals(normals, normalsFaceIds, connects);
+                    return fnMesh.setFaceVertexNormals(
+                        normals, normalsFaceIds, connects, MSpace::kObject);
                 }
             }
         } else {
@@ -574,7 +570,8 @@ bool MeshImportContext::applyVertexNormals()
                         }
                     }
                 }
-                return setUnlockedFaceVertexNormals(normals, normalsFaceIds, connects);
+                return fnMesh.setFaceVertexNormals(
+                    normals, normalsFaceIds, connects, MSpace::kObject);
             }
         }
     }
@@ -685,7 +682,7 @@ bool MeshImportContext::applyEdgeCreases()
 
 void MeshImportContext::applyColourSetData()
 {
-    const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
     for (auto it = primvars.begin(), end = primvars.end(); it != end; ++it) {
 
         const UsdGeomPrimvar& primvar = *it;
@@ -735,19 +732,25 @@ void MeshImportContext::applyColourSetData()
                                     if (opacityValues.IsHolding<VtArray<float>>()) {
                                         const VtArray<float> rawValOpacity
                                             = opacityValues.UncheckedGet<VtArray<float>>();
-                                        colours.setLength(rawValOpacity.size());
                                         const VtArray<GfVec3f> rawValColour
                                             = vtValue.UncheckedGet<VtArray<GfVec3f>>();
-                                        assert(rawValOpacity.size() == rawValColour.size());
-
-                                        for (uint32_t i = 0, n = rawValColour.size(); i < n; ++i)
-                                            colours[i] = MColor(
-                                                rawValColour[i][0],
-                                                rawValColour[i][1],
-                                                rawValColour[i][2],
-                                                rawValOpacity[i]);
-                                        representation = MFnMesh::kRGBA;
-                                        setCombinedDisplayAndOpacityColourSet = true;
+                                        bool isConstantDisplayOpacity
+                                            = primvar.GetInterpolation() == UsdGeomTokens->constant;
+                                        if ((rawValOpacity.size() == rawValColour.size()
+                                             && interpolation == primvar.GetInterpolation())
+                                            || isConstantDisplayOpacity) {
+                                            colours.setLength(rawValColour.size());
+                                            for (uint32_t i = 0, n = rawValColour.size(); i < n;
+                                                 ++i)
+                                                colours[i] = MColor(
+                                                    rawValColour[i][0],
+                                                    rawValColour[i][1],
+                                                    rawValColour[i][2],
+                                                    isConstantDisplayOpacity ? rawValOpacity[0]
+                                                                             : rawValOpacity[i]);
+                                            representation = MFnMesh::kRGBA;
+                                            setCombinedDisplayAndOpacityColourSet = true;
+                                        }
                                     }
                                 }
                             }
@@ -849,7 +852,7 @@ void MeshImportContext::applyColourSetData()
 void MeshImportContext::applyUVs()
 {
     const TfToken                     prefToken("pref");
-    const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
     for (auto it = primvars.begin(), end = primvars.end(); it != end; ++it) {
         const UsdGeomPrimvar& primvar = *it;
         TfToken               name, interpolation;
@@ -980,18 +983,20 @@ void MeshImportContext::applyUVs()
 
 //----------------------------------------------------------------------------------------------------------------------
 MeshExportContext::MeshExportContext(
-    MDagPath        path,
-    UsdGeomMesh&    mesh,
-    UsdTimeCode     timeCode,
-    bool            performDiff,
-    CompactionLevel compactionLevel,
-    bool            reverseNormals)
+    MDagPath          path,
+    UsdGeomMesh&      mesh,
+    UsdTimeCode       timeCode,
+    bool              performDiff,
+    CompactionLevel   compactionLevel,
+    bool              reverseNormals,
+    SubdivisionScheme inSubdivisionScheme)
     : fnMesh()
     , faceCounts()
     , faceConnects()
     , m_timeCode(timeCode)
     , mesh(mesh)
     , compaction(compactionLevel)
+    , subdivisionScheme(inSubdivisionScheme)
     , performDiff(performDiff)
     , reverseNormals(reverseNormals)
 {
@@ -1005,6 +1010,19 @@ MeshExportContext::MeshExportContext(
 
     if (!reverseNormals && fnMesh.findPlug("opposite", true).asBool()) {
         mesh.CreateOrientationAttr().Set(UsdGeomTokens->leftHanded);
+    }
+
+    TfToken subdToken;
+    switch (subdivisionScheme) {
+    case kSubdCatmull: subdToken = UsdGeomTokens->catmullClark; break;
+    case kSubdNone: subdToken = UsdGeomTokens->none; break;
+    case kSubdLoop: subdToken = UsdGeomTokens->loop; break;
+    case kSubdBilinear: subdToken = UsdGeomTokens->bilinear; break;
+    default: break;
+    }
+    // Author opinion only if "default" has not been used.
+    if (!subdToken.IsEmpty()) {
+        mesh.GetSubdivisionSchemeAttr().Set(subdToken);
     }
 
     if (performDiff) {
@@ -1198,7 +1216,7 @@ void MeshExportContext::copyUvSetData()
                         if (uvSetNames[i] == "map1") {
                             uvSetNames[i] = "st";
                         }
-                        UsdGeomPrimvar uvSet = mesh.CreatePrimvar(
+                        UsdGeomPrimvar uvSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                             TfToken(uvSetNames[i].asChar()),
                             SdfValueTypeNames->Float2Array,
                             UsdGeomTokens->constant);
@@ -1223,7 +1241,7 @@ void MeshExportContext::copyUvSetData()
                             if (uvSetNames[i] == "map1") {
                                 uvSetNames[i] = "st";
                             }
-                            UsdGeomPrimvar uvSet = mesh.CreatePrimvar(
+                            UsdGeomPrimvar uvSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                                 TfToken(uvSetNames[i].asChar()),
                                 SdfValueTypeNames->Float2Array,
                                 UsdGeomTokens->vertex);
@@ -1239,7 +1257,7 @@ void MeshExportContext::copyUvSetData()
                         if (uvSetNames[i] == "map1") {
                             uvSetNames[i] = "st";
                         }
-                        UsdGeomPrimvar uvSet = mesh.CreatePrimvar(
+                        UsdGeomPrimvar uvSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                             TfToken(uvSetNames[i].asChar()),
                             SdfValueTypeNames->Float2Array,
                             UsdGeomTokens->uniform);
@@ -1257,7 +1275,7 @@ void MeshExportContext::copyUvSetData()
 
                         /// \todo   Ideally I'd want some form of interpolation scheme such as
                         /// UsdGeomTokens->faceVaryingIndexed
-                        UsdGeomPrimvar uvSet = mesh.CreatePrimvar(
+                        UsdGeomPrimvar uvSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                             TfToken(uvSetNames[i].asChar()),
                             SdfValueTypeNames->Float2Array,
                             UsdGeomTokens->faceVarying);
@@ -1462,11 +1480,34 @@ void interleaveIndexedUvData(
 
 //----------------------------------------------------------------------------------------------------------------------
 // Loops through each Colour Set in the mesh writing out a set of non-indexed Colour Values in RGBA
+// format, Writes out faceVarying values only Default RGB is 0.18 and alpha is 1.0 if there is no
+// RGBA assigned to the mesh. Have a special case for "displayColor" which write as RGB
+// @todo: needs refactoring to handle face/vert/faceVarying correctly, allow separate RGB/A to be
+// written etc.
+void MeshExportContext::copyColourSetData() { copyColourSetData(0.18f, 1.0f, true, 1e-5); }
+
+//----------------------------------------------------------------------------------------------------------------------
+// Loops through each Colour Set in the mesh writing out a set of non-indexed Colour Values in RGBA
 // format, Writes out faceVarying values only Have a special case for "displayColor" which write as
 // RGB
 // @todo: needs refactoring to handle face/vert/faceVarying correctly, allow separate RGB/A to be
 // written etc.
-void MeshExportContext::copyColourSetData()
+void MeshExportContext::copyColourSetData(float defaultColour, float defaultAlpha)
+{
+    copyColourSetData(defaultColour, defaultAlpha, true, 1e-5);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Loops through each Colour Set in the mesh writing out a set of non-indexed Colour Values in RGBA
+// format, Writes out faceVarying values only Have a special case for "displayColor" which write as
+// RGB
+// @todo: needs refactoring to handle face/vert/faceVarying correctly, allow separate RGB/A to be
+// written etc.
+void MeshExportContext::copyColourSetData(
+    float defaultColour,
+    float defaultAlpha,
+    bool  hasThreshold,
+    float threshold)
 {
     UsdPrim                           prim = mesh.GetPrim();
     MStringArray                      colourSetNames;
@@ -1493,12 +1534,18 @@ void MeshExportContext::copyColourSetData()
         while (!it.isDone()) {
             MColorArray faceColours;
             it.getColors(faceColours, &colourSetNames[i]);
-            it.next();
             // Append face colours
             uint32_t offset = colours.length();
             colours.setLength(offset + faceColours.length());
-            for (uint32_t j = 0, n = faceColours.length(); j < n; ++j)
-                colours[offset + j] = faceColours[j];
+            for (uint32_t j = 0, n = faceColours.length(); j < n; ++j) {
+                if (it.hasColor()) {
+                    colours[offset + j] = faceColours[j];
+                } else {
+                    colours[offset + j]
+                        = MColor(defaultColour, defaultColour, defaultColour, defaultAlpha);
+                }
+            }
+            it.next();
         }
         TfToken interpolation = UsdGeomTokens->faceVarying;
         coloursLength = colours.length();
@@ -1506,18 +1553,28 @@ void MeshExportContext::copyColourSetData()
         switch (compaction) {
         case kNone: break;
         case kBasic:
-            interpolation = guessColourSetInterpolationType(&colours[0].r, coloursLength);
+            interpolation = hasThreshold
+                ? guessColourSetInterpolationType(&colours[0].r, coloursLength, threshold)
+                : guessColourSetInterpolationType(&colours[0].r, coloursLength);
             break;
 
         case kMedium:
         case kFull:
-            interpolation = guessColourSetInterpolationTypeExtensive(
-                &colours[0].r,
-                coloursLength,
-                fnMesh.numVertices(),
-                faceConnects,
-                faceCounts,
-                indicesToExtract);
+            interpolation = hasThreshold ? guessColourSetInterpolationTypeExtensive(
+                                &colours[0].r,
+                                coloursLength,
+                                threshold,
+                                fnMesh.numVertices(),
+                                faceConnects,
+                                faceCounts,
+                                indicesToExtract)
+                                         : guessColourSetInterpolationTypeExtensive(
+                                             &colours[0].r,
+                                             coloursLength,
+                                             fnMesh.numVertices(),
+                                             faceConnects,
+                                             faceCounts,
+                                             indicesToExtract);
             break;
         }
 
@@ -1546,7 +1603,7 @@ void MeshExportContext::copyColourSetData()
                         }
                     }
                 }
-                UsdGeomPrimvar colourSet = mesh.CreatePrimvar(
+                UsdGeomPrimvar colourSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                     TfToken(colourSetNames[i].asChar()),
                     SdfValueTypeNames->Color3fArray,
                     interpolation);
@@ -1574,7 +1631,7 @@ void MeshExportContext::copyColourSetData()
                         }
                     }
                 }
-                UsdGeomPrimvar opacitySet = mesh.CreatePrimvar(
+                UsdGeomPrimvar opacitySet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                     displayOpacityToken, SdfValueTypeNames->FloatArray, interpolation);
                 opacitySet.Set(alphaValues, m_timeCode);
             }
@@ -1601,7 +1658,7 @@ void MeshExportContext::copyColourSetData()
                     }
                 }
             }
-            UsdGeomPrimvar colourSet = mesh.CreatePrimvar(
+            UsdGeomPrimvar colourSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                 TfToken(colourSetNames[i].asChar()),
                 SdfValueTypeNames->Color4fArray,
                 interpolation);
@@ -1648,7 +1705,7 @@ void MeshExportContext::copyColourSetData()
                     }
                 }
             }
-            UsdGeomPrimvar colourSet = mesh.CreatePrimvar(
+            UsdGeomPrimvar colourSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                 TfToken(diff_report[i].setName().asChar()),
                 SdfValueTypeNames->Color3fArray,
                 interp);
@@ -1673,7 +1730,7 @@ void MeshExportContext::copyColourSetData()
                     }
                 }
             }
-            UsdGeomPrimvar colourSet = mesh.CreatePrimvar(
+            UsdGeomPrimvar colourSet = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
                 TfToken(diff_report[i].setName().asChar()),
                 SdfValueTypeNames->Color4fArray,
                 interp);
@@ -1846,7 +1903,7 @@ void MeshExportContext::copyBindPoseData(UsdTimeCode time)
 {
     if (diffGeom & kPoints) {
 
-        UsdGeomPrimvar pRefPrimVarAttr = mesh.CreatePrimvar(
+        UsdGeomPrimvar pRefPrimVarAttr = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
             UsdUtilsGetPrefName(), SdfValueTypeNames->Point3fArray, UsdGeomTokens->vertex);
 
         if (pRefPrimVarAttr) {
@@ -1874,7 +1931,8 @@ void MeshExportContext::copyNormalData(UsdTimeCode time, bool copyAsPrimvar)
         UsdAttribute   normalsAttr = mesh.GetNormalsAttr();
         UsdGeomPrimvar primvar;
         if (copyAsPrimvar) {
-            primvar = mesh.CreatePrimvar(normalPrimvarName, SdfValueTypeNames->Float3Array);
+            primvar = UsdGeomPrimvarsAPI(mesh).CreatePrimvar(
+                normalPrimvarName, SdfValueTypeNames->Float3Array);
             normalsAttr = primvar.GetAttr();
         }
 
@@ -1909,26 +1967,44 @@ void MeshExportContext::copyNormalData(UsdTimeCode time, bool copyAsPrimvar)
                             &normalIndices[0],
                             &faceConnects[0],
                             normalIndices.length(),
-                            faceConnects.length())) {
+                            faceConnects.length())
+                        || numNormals == (size_t)fnMesh.numVertices()) {
                         if (copyAsPrimvar) {
                             primvar.SetInterpolation(UsdGeomTokens->vertex);
                         } else {
                             mesh.SetNormalsInterpolation(UsdGeomTokens->vertex);
                         }
 
-                        VtArray<GfVec3f> normals(vecData, vecData + numNormals);
-                        normalsAttr.Set(normals, time);
+                        if (numNormals == (size_t)fnMesh.numVertices()) {
+                            auto             object = fnMesh.object();
+                            MItMeshVertex    itVertex(object);
+                            VtArray<GfVec3f> normals(numNormals);
+                            for (size_t i = 0; !itVertex.isDone(); itVertex.next(), i++) {
+                                MVector mayaNormal;
+                                itVertex.getNormal(mayaNormal);
+                                normals[i] = GfVec3f(mayaNormal.x, mayaNormal.y, mayaNormal.z);
+                            }
+                            normalsAttr.Set(normals, time);
+                        } else {
+                            VtArray<GfVec3f> normals(vecData, vecData + numNormals);
+                            normalsAttr.Set(normals, time);
+                        }
                     } else {
                         std::unordered_map<uint32_t, uint32_t> missing;
                         bool                                   isPerVertex = true;
-                        for (uint32_t i = 0, n = normalIndices.length(); isPerVertex && i < n;
-                             ++i) {
-                            if (normalIndices[i] != faceConnects[i]) {
-                                auto it = missing.find(normalIndices[i]);
-                                if (it == missing.end()) {
-                                    missing[normalIndices[i]] = faceConnects[i];
-                                } else if (it->second != uint32_t(faceConnects[i])) {
-                                    isPerVertex = false;
+                        const unsigned int numFaceVertices = fnMesh.numFaceVertices(&status);
+                        if (numFaceVertices == normalIndices.length()) {
+                            isPerVertex = false;
+                        } else {
+                            for (uint32_t i = 0, n = normalIndices.length(); isPerVertex && i < n;
+                                 ++i) {
+                                if (normalIndices[i] != faceConnects[i]) {
+                                    auto it = missing.find(normalIndices[i]);
+                                    if (it == missing.end()) {
+                                        missing[normalIndices[i]] = faceConnects[i];
+                                    } else if (it->second != uint32_t(faceConnects[i])) {
+                                        isPerVertex = false;
+                                    }
                                 }
                             }
                         }

@@ -7,10 +7,13 @@ target_sources(${PROJECT_NAME}
         bboxGeom.cpp
         debugCodes.cpp
         draw_item.cpp
+        extComputation.cpp
         instancer.cpp
         material.cpp
+        mayaPrimCommon.cpp
         mesh.cpp
         meshViewportCompute.cpp
+        points.cpp
         proxyRenderDelegate.cpp
         render_delegate.cpp
         render_param.cpp

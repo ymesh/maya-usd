@@ -44,11 +44,13 @@ TF_DEFINE_PRIVATE_TOKENS(
 
 typedef std::map<std::string, UsdMayaPrimWriterRegistry::WriterFactoryFn> _Registry;
 static _Registry                                                          _reg;
+static std::set<std::string> _mayaTypesThatDoNotCreatePrims;
 
 /* static */
 void UsdMayaPrimWriterRegistry::Register(
     const std::string&                         mayaTypeName,
-    UsdMayaPrimWriterRegistry::WriterFactoryFn fn)
+    UsdMayaPrimWriterRegistry::WriterFactoryFn fn,
+    bool                                       fromPython)
 {
     TF_DEBUG(PXRUSDMAYA_REGISTRY)
         .Msg("Registering UsdMayaPrimWriter for maya type %s.\n", mayaTypeName.c_str());
@@ -56,7 +58,8 @@ void UsdMayaPrimWriterRegistry::Register(
     std::pair<_Registry::iterator, bool> insertStatus
         = _reg.insert(std::make_pair(mayaTypeName, fn));
     if (insertStatus.second) {
-        UsdMaya_RegistryHelper::AddUnloader([mayaTypeName]() { _reg.erase(mayaTypeName); });
+        UsdMaya_RegistryHelper::AddUnloader(
+            [mayaTypeName]() { _reg.erase(mayaTypeName); }, fromPython);
     } else {
         TF_CODING_ERROR("Multiple writers for type %s", mayaTypeName.c_str());
     }
@@ -97,6 +100,19 @@ UsdMayaPrimWriterRegistry::Find(const std::string& mayaTypeName)
     }
 
     return ret;
+}
+
+/* static */
+void UsdMayaPrimWriterRegistry::RegisterPrimless(const std::string& mayaTypeName)
+{
+    TfRegistryManager::GetInstance().SubscribeTo<UsdMayaPrimWriterRegistry>();
+    _mayaTypesThatDoNotCreatePrims.insert(mayaTypeName);
+}
+
+/* static */
+bool UsdMayaPrimWriterRegistry::IsPrimless(const std::string& mayaTypeName)
+{
+    return _mayaTypesThatDoNotCreatePrims.count(mayaTypeName) == 0;
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

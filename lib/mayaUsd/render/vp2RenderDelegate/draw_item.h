@@ -22,6 +22,7 @@
 #include <pxr/imaging/hd/geomSubset.h>
 #include <pxr/imaging/hd/mesh.h>
 #include <pxr/pxr.h>
+#include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/timeCode.h>
 
 #include <maya/MBoundingBox.h>
@@ -46,6 +47,8 @@ public:
         MString _renderItemName;
         //! Pointer of the render item for fast access. No ownership is held.
         MHWRender::MRenderItem* _renderItem { nullptr };
+        //! If the render item is shared, this will store the shared counter
+        std::shared_ptr<size_t> _sharedRenderItemCounter;
 
         //! The geom subset this render item represents. _geomSubset.id is StdPath::EmptyPath() if
         //! there is no geom subset.
@@ -53,10 +56,17 @@ public:
 
         //! Render item index buffer - use when updating data
         std::unique_ptr<MHWRender::MIndexBuffer> _indexBuffer;
+        bool                                     _indexBufferValid { false };
         //! Bounding box of the render item.
         MBoundingBox _boundingBox;
         //! World matrix of the render item.
         MMatrix _worldMatrix;
+
+        //! Instance transforms for the render item
+        std::shared_ptr<MMatrixArray> _instanceTransforms;
+
+        //! Instance colors for the render item
+        std::shared_ptr<MFloatArray> _instanceColors;
 
         //! Shader instance assigned to the render item. No ownership is held.
         MHWRender::MShaderInstance* _shader { nullptr };
@@ -64,11 +74,19 @@ public:
         //! Is _shader a fallback material?
         bool _shaderIsFallback { true };
 
+        //! Fallback color changed
+        bool _fallbackColorDirty { true };
+
         //! Whether or not the render item is enabled
         bool _enabled { true };
 
         //! Whether or not the render item is transparent
         bool _transparent { false };
+
+#ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
+        //! Whether or not the render item represents the shaded draw for selected instances
+        bool _shadedSelectedInstances { false };
+#endif
 
         //! Primitive type of the render item
         MHWRender::MGeometry::Primitive _primitiveType {
@@ -103,8 +121,8 @@ public:
     //! can be created for multiple usages.
     enum RenderItemUsage
     {
-        kRegular = 1 << 0,           //!< Regular drawing (shaded, wireframe etc.)
-        kSelectionHighlight = 1 << 1 //!< Selection highlight.
+        kRegular = 1 << 0,                  //!< Regular drawing (shaded, wireframe etc.)
+        kSelectionHighlight = kRegular << 1 //!< Selection highlight.
     };
 
 public:
@@ -112,7 +130,8 @@ public:
 
     ~HdVP2DrawItem();
 
-    void AddRenderItem(MHWRender::MRenderItem* item, const HdGeomSubset* geomSubset = nullptr);
+    RenderItemData&
+    AddRenderItem(MHWRender::MRenderItem* item, const HdGeomSubset* geomSubset = nullptr);
 
     using RenderItemDataVector = std::vector<RenderItemData>;
     const RenderItemDataVector& GetRenderItems() const { return _renderItems; }
@@ -138,21 +157,13 @@ public:
      */
     const MString& GetDrawItemName() const { return _drawItemName; }
 
-    /*! \brief  Get render item name
-     */
-    const MString& GetRenderItemName() const { return GetRenderItemData()._renderItemName; }
-
     /*! \brief  Get pointer of the associated render item
      */
     MHWRender::MRenderItem* GetRenderItem() const { return GetRenderItemData()._renderItem; }
 
-    /*! \brief  Set pointer of the associated render item
+    /*! \brief Shares a single render item between the source and the destination draw items
      */
-    void SetRenderItem(MHWRender::MRenderItem* item)
-    {
-        TF_VERIFY(_renderItems.size() == 0);
-        AddRenderItem(item);
-    }
+    void ShareRenderItem(HdVP2DrawItem& sourceDrawItem);
 
     /*! \brief  Set a usage to the render item
      */
@@ -170,10 +181,6 @@ public:
      */
     bool MatchesUsage(RenderItemUsage usage) const { return _renderItemUsage == usage; }
 
-    /*! \brief  Bitwise OR with the input dirty bits.
-     */
-    void SetDirtyBits(HdDirtyBits bits) { GetRenderItemData().SetDirtyBits(bits); }
-
     /*! \brief  Reset the dirty bits to clean.
      */
     void ResetDirtyBits() { GetRenderItemData().ResetDirtyBits(); }
@@ -181,6 +188,27 @@ public:
     /*! \brief  Get the dirty bits of the draw items.
      */
     HdDirtyBits GetDirtyBits() const { return GetRenderItemData().GetDirtyBits(); }
+
+    static SdfPath RenderItemToPrimPath(const MHWRender::MRenderItem& item);
+
+    /*! Mods are used in instanced primitives to represent particular instances which visual
+        properties were modified by a display layer. Example: instances with hide-on-playback
+        flag enabled will have their own mod. A mod associated with the main draw item may have
+        another mod attached to it and so on, thus forming a linked list of mods.
+     */
+    void SetMod(std::unique_ptr<HdVP2DrawItem>&& mod) { _mod = std::move(mod); }
+
+    /*! \brief Get the mod assotiated with the given draw item.
+     */
+    HdVP2DrawItem* GetMod() { return _mod.get(); }
+
+    /*! \brief Mark this draw item as being a mod for instances with hide-on-playback enabled.
+     */
+    void SetModFlagHideOnPlayback(bool prop) { _modFlagHideOnPlayback = prop; }
+
+    /*! \brief Verify if this draw item is a mod for instances with hide-on-playback enabled.
+     */
+    bool GetModFlagHideOnPlayback() const { return _modFlagHideOnPlayback; }
 
 private:
     /*
@@ -199,6 +227,15 @@ private:
         The list of MRenderItems used to represent *this in VP2.
     */
     RenderItemDataVector _renderItems; //!< VP2 render item data
+
+    /*
+        Mod associated with the given draw item.
+        This mod may have another one attached to it, thus forming a linked list
+    */
+    std::unique_ptr<HdVP2DrawItem> _mod;
+
+    //! flag marking the given draw item as a mod for instances with hide-on-playback enabled.
+    bool _modFlagHideOnPlayback = false;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

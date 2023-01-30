@@ -57,6 +57,9 @@ public:
     Ufe::SceneItem::Ptr sceneItem() const override;
     bool                hasChildren() const override;
     Ufe::SceneItemList  children() const override;
+#if (UFE_PREVIEW_VERSION_NUM >= 4004)
+    bool hasFilteredChildren(const ChildFilter&) const override;
+#endif
     UFE_V2(Ufe::SceneItemList filteredChildren(const ChildFilter&) const override;)
     Ufe::SceneItem::Ptr parent() const override;
 #ifndef UFE_V2_FEATURES_AVAILABLE
@@ -64,10 +67,15 @@ public:
 #endif
 
 #ifdef UFE_V2_FEATURES_AVAILABLE
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    Ufe::SceneItem::Ptr          createGroup(const Ufe::PathComponent& name) const override;
+    Ufe::InsertChildCommand::Ptr createGroupCmd(const Ufe::PathComponent& name) const override;
+#else
     Ufe::SceneItem::Ptr
     createGroup(const Ufe::Selection& selection, const Ufe::PathComponent& name) const override;
     Ufe::UndoableCommand::Ptr
     createGroupCmd(const Ufe::Selection& selection, const Ufe::PathComponent& name) const override;
+#endif
 
     Ufe::SceneItem::Ptr defaultParent() const override;
 
@@ -79,9 +87,14 @@ public:
     Ufe::UndoableCommand::Ptr reorderCmd(const Ufe::SceneItemList& orderedList) const override;
 #endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    Ufe::UndoableCommand::Ptr ungroupCmd() const override;
+#endif
+
 private:
     const PXR_NS::UsdPrim& getUsdRootPrim() const;
-    Ufe::SceneItemList     createUFEChildList(const PXR_NS::UsdPrimSiblingRange& range) const;
+    Ufe::SceneItemList
+    createUFEChildList(const PXR_NS::UsdPrimSiblingRange& range, bool filterInactive) const;
 
 private:
     Ufe::SceneItem::Ptr        fItem;

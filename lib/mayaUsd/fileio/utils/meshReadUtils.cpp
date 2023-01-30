@@ -29,15 +29,19 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/array.h>
 #include <pxr/usd/usdGeom/mesh.h>
+#include <pxr/usd/usdGeom/primvarsAPI.h>
+#include <pxr/usd/usdGeom/subset.h>
 #include <pxr/usd/usdGeom/tokens.h>
 #include <pxr/usd/usdUtils/pipeline.h>
 
 #include <maya/MFloatVector.h>
 #include <maya/MFloatVectorArray.h>
 #include <maya/MFnBlendShapeDeformer.h>
+#include <maya/MFnComponentListData.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnPartition.h>
 #include <maya/MFnSet.h>
+#include <maya/MFnSingleIndexedComponent.h>
 #include <maya/MGlobal.h>
 #include <maya/MIntArray.h>
 #include <maya/MItMeshEdge.h>
@@ -96,7 +100,7 @@ bool addCreaseSet(
     // .../lib/python2.7/site-packages/maya/app/general/creaseSetEditor.py
 
     MObject creasePartitionObj;
-    *statusOK = UsdMayaUtil::GetMObjectByName(":creasePartition", creasePartitionObj);
+    *statusOK = UsdMayaUtil::GetMObjectByName(MString(":creasePartition"), creasePartitionObj);
 
     if (creasePartitionObj.isNull()) {
         statusOK->clear();
@@ -186,7 +190,7 @@ MIntArray getMayaFaceVertexAssignmentIds(
     return valueIds;
 }
 
-bool assignUVSetPrimvarToMesh(const UsdGeomPrimvar& primvar, MFnMesh& meshFn, bool hasDefaultUVSet)
+bool assignUVSetPrimvarToMesh(const UsdGeomPrimvar& primvar, MFnMesh& meshFn, bool& firstUVPrimvar)
 {
     const TfToken& primvarName = primvar.GetPrimvarName();
 
@@ -202,28 +206,21 @@ bool assignUVSetPrimvarToMesh(const UsdGeomPrimvar& primvar, MFnMesh& meshFn, bo
     // Determine the name to use for the Maya UV set.
     MStatus status { MS::kSuccess };
     MString uvSetName(primvarName.GetText());
-    bool    createUVSet = true;
 
-    if (primvarName == UsdUtilsGetPrimaryUVSetName() && UsdMayaReadUtil::ReadSTAsMap1()) {
-        // We assume that the primary USD UV set maps to Maya's default 'map1'
-        // set which always exists, so we shouldn't try to create it.
-        uvSetName = UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName.GetText();
-        createUVSet = false;
-    } else if (!hasDefaultUVSet) {
-        // If map1 still exists, we rename and re-use it:
-        MStringArray uvSetNames;
-        meshFn.getUVSetNames(uvSetNames);
-        if (uvSetNames[0u] == UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName.GetText()) {
-            meshFn.renameUVSet(
-                UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName.GetText(), uvSetName);
-            createUVSet = false;
-        }
-    } else if (primvarName == UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName) {
-        // For UV sets explicitly named map1
-        createUVSet = false;
+    TfToken originalName = UsdMayaRoundTripUtil::GetPrimVarMayaName(primvar);
+    if (!originalName.IsEmpty()) {
+        uvSetName = originalName.GetText();
     }
 
-    if (createUVSet) {
+    // The initial mesh will already have one empty UV set. We must re-use it.
+    if (firstUVPrimvar) {
+        MStringArray uvSetNames;
+        meshFn.getUVSetNames(uvSetNames);
+        if (uvSetNames[0u] != uvSetName) {
+            meshFn.renameUVSet(uvSetNames[0u], uvSetName);
+        }
+        firstUVPrimvar = false;
+    } else {
         status = meshFn.createUVSet(uvSetName);
         if (status != MS::kSuccess) {
             TF_WARN(
@@ -602,23 +599,8 @@ void UsdMayaMeshReadUtils::assignPrimvarsToMesh(
     MFnMesh meshFn(meshObj);
 
     // GETTING PRIMVARS
-    const std::vector<UsdGeomPrimvar> primvars = mesh.GetPrimvars();
-
-    // Maya always has a map1 UV set. We need to find out if there is any stream in the file that
-    // will use that slot. If not, the first texcoord stream to load will replace the default map1
-    // stream.
-    bool hasDefaultUVSet = false;
-    for (const UsdGeomPrimvar& primvar : primvars) {
-        const SdfValueTypeName typeName = primvar.GetTypeName();
-        if (typeName == SdfValueTypeNames->TexCoord2fArray
-            || (UsdMayaReadUtil::ReadFloat2AsUV() && typeName == SdfValueTypeNames->Float2Array)) {
-            const TfToken fullName = primvar.GetPrimvarName();
-            if (fullName == UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName
-                || (fullName == UsdUtilsGetPrimaryUVSetName() && UsdMayaReadUtil::ReadSTAsMap1())) {
-                hasDefaultUVSet = true;
-            }
-        }
-    }
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(mesh).GetPrimvars();
+    bool                              firstUVPrimvar = true;
 
     for (const UsdGeomPrimvar& primvar : primvars) {
         const TfToken          name = primvar.GetBaseName();
@@ -655,7 +637,7 @@ void UsdMayaMeshReadUtils::assignPrimvarsToMesh(
             // Otherwise, if env variable for reading Float2
             // as uv sets is turned on, we assume that Float2Array primvars
             // are UV sets.
-            if (!assignUVSetPrimvarToMesh(primvar, meshFn, hasDefaultUVSet)) {
+            if (!assignUVSetPrimvarToMesh(primvar, meshFn, firstUVPrimvar)) {
                 TF_WARN(
                     "Unable to retrieve and assign data for UV set <%s> on "
                     "mesh <%s>",
@@ -903,5 +885,93 @@ MStatus UsdMayaMeshReadUtils::assignSubDivTagsToMesh(
 
     return MS::kSuccess;
 }
+
+#if MAYA_API_VERSION >= 20220000
+
+MStatus
+UsdMayaMeshReadUtils::getComponentTags(const UsdGeomMesh& mesh, std::vector<ComponentTagData>& tags)
+{
+    MStatus status { MS::kSuccess };
+
+    // Find all the prims defining componentTags
+    TfToken                    componentTagFamilyName("componentTag");
+    std::vector<UsdGeomSubset> subsets
+        = UsdGeomSubset::GetGeomSubsets(mesh, UsdGeomTokens->face, componentTagFamilyName);
+
+    for (auto& ss : subsets) {
+        // Get the tagName out of the subset
+        MString tagName(ss.GetPrim().GetName().GetText());
+
+        // Get the indices out of the subset
+        VtIntArray   faceIndices;
+        UsdAttribute indicesAttribute = ss.GetIndicesAttr();
+        indicesAttribute.Get(&faceIndices);
+
+        MFnSingleIndexedComponent compFn;
+        MObject                   faceComp = compFn.create(MFn::kMeshPolygonComponent, &status);
+        if (!status) {
+            TF_RUNTIME_ERROR("Failed to create face component.");
+            return status;
+        }
+
+        MIntArray mFaces;
+        TF_FOR_ALL(fIdxIt, faceIndices) { mFaces.append(*fIdxIt); }
+        compFn.addElements(mFaces);
+
+        tags.emplace_back(tagName, faceComp);
+    }
+
+    return status;
+}
+
+MStatus UsdMayaMeshReadUtils::createComponentTags(const UsdGeomMesh& mesh, const MObject& meshObj)
+{
+    if (meshObj.apiType() != MFn::kMesh) {
+        return MS::kFailure;
+    }
+
+    MStatus status { MS::kSuccess };
+
+    MFnDependencyNode depNodeFn;
+    depNodeFn.setObject(meshObj);
+    MPlug ctPlug = depNodeFn.findPlug("componentTags", &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+
+    MObject ctAttr = depNodeFn.attribute("componentTags");
+    MObject ctNameAttr = depNodeFn.attribute("componentTagName");
+    MObject ctContentsAttr = depNodeFn.attribute("componentTagContents");
+
+    MPlug ctName(meshObj, ctNameAttr);
+    MPlug ctContent(meshObj, ctContentsAttr);
+
+    std::vector<ComponentTagData> tags;
+    status = getComponentTags(mesh, tags);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+
+    unsigned int idx = 0;
+
+    for (auto& tag : tags) {
+        MString tagName(tag.first);
+        MObject faceComp(tag.second);
+
+        MFnComponentListData componentListFn;
+        MObject              componentList = componentListFn.create();
+        status = componentListFn.add(faceComp);
+        CHECK_MSTATUS_AND_RETURN_IT(status);
+
+        // Set the attribute values
+        ctName.selectAncestorLogicalIndex(idx, ctAttr);
+        ctContent.selectAncestorLogicalIndex(idx, ctAttr);
+
+        ctName.setValue(tagName);
+        ctContent.setValue(componentList);
+
+        idx++;
+    }
+
+    return status;
+}
+
+#endif
 
 PXR_NAMESPACE_CLOSE_SCOPE

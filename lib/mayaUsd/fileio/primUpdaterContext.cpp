@@ -16,16 +16,37 @@
 //
 #include "primUpdaterContext.h"
 
+#include <memory>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 UsdMayaPrimUpdaterContext::UsdMayaPrimUpdaterContext(
-    const UsdTimeCode&    timeCode,
-    const UsdStageRefPtr& stage)
+    const UsdTimeCode&            timeCode,
+    const UsdStageRefPtr&         stage,
+    const VtDictionary&           userArgs,
+    const UsdPathToDagPathMapPtr& pathMap)
     : _timeCode(timeCode)
     , _stage(stage)
+    , _pathMap(pathMap)
+    , _userArgs(userArgs)
+    , _args(UsdMayaPrimUpdaterArgs::createFromDictionary(userArgs))
+    , _additionalCommands(std::make_shared<Ufe::CompositeUndoableCommand>())
 {
 }
 
-void UsdMayaPrimUpdaterContext::Clear(const SdfPath&) { }
+MDagPath UsdMayaPrimUpdaterContext::MapSdfPathToDagPath(const SdfPath& sdfPath) const
+{
+    if (!_pathMap || sdfPath.IsEmpty()) {
+        return MDagPath();
+    }
+
+    auto found = _pathMap->find(sdfPath);
+    return found == _pathMap->end() ? MDagPath() : found->second;
+}
+
+void UsdMayaPrimUpdaterContext::SetUsdPathToDagPathMap(const UsdPathToDagPathMapPtr& pathMap)
+{
+    _pathMap = pathMap;
+}
 
 PXR_NAMESPACE_CLOSE_SCOPE

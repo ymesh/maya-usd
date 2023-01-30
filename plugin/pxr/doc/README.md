@@ -112,11 +112,12 @@ Short flag | Long flag | Type | Default | Description
 `-dc` | `-defaultCameras` | noarg | false | Export the four Maya default cameras
 `-dms` | `-defaultMeshScheme` | string | `catmullClark` | Sets the default subdivision scheme for exported Maya meshes, if the `USD_subdivisionScheme` attribute is not present on the Mesh. Valid values are: `none`, `catmullClark`, `loop`, `bilinear`
 `-cls` | `-exportColorSets` | bool | true | Enable or disable the export of color sets
-`-ero` | `-exportReferenceObjects` | bool | false | Whether to export reference objects for meshes. The reference object's points are exported as a primvar on the mesh object; the primvar name is determined by querying `UsdUtilsGetPrefName()`, which defaults to `pref`.
+`-rom` | `-referenceObjectMode` | string | `none` | Determines how to export reference objects for meshes. The reference object's points are exported as a primvar on the mesh object; the primvar name is determined by querying `UsdUtilsGetPrefName()`, which defaults to `pref`. Valid values are: `none` - No reference objects are exported, `attributeOnly` - Only meshes set with a valid "referenceObject" attached will be exported, `defaultToMesh` - Meshes with no "referenceObject" attached will export thier own points
 `-eri` | `-exportRefsAsInstanceable` | bool | false | Will cause all references created by USD reference assembly nodes or explicitly tagged reference nodes to be set to be instanceable (`UsdPrim::SetInstanceable(true)`).
 `-skn` | `-exportSkin` | string | none | Determines how to export skinClusters via the UsdSkel schema. On any mesh where skin bindings are exported, the geometry data is the pre-deformation data. On any mesh where skin bindings are not exported, the geometry data is the final (post-deformation) data. Valid values are: `none` - No skinClusters are exported, `auto` - All skinClusters will be exported for non-root prims. The exporter errors on skinClusters on any root prims. The rootmost prim containing any skinned mesh will automatically be promoted into a SkelRoot, e.g. if `</Model/Mesh>` has skinning, then `</Model>` will be promoted to a SkelRoot, `explicit` - Only skinClusters under explicitly-tagged SkelRoot prims will be exported. The exporter errors if there are nested SkelRoots. To explicitly tag a prim as a SkelRoot, specify a `USD_typeName`attribute on a Maya node.
 `-uvs` | `-exportUVs` | bool | true | Enable or disable the export of UV sets
 `-vis` | `-exportVisibility` | bool | true | Export any state and animation on Maya `visibility` attributes
+`-tag` | `-exportComponentTags` | bool | true | Export component tags
 `-mcs` | `-exportMaterialCollections` | bool | false | Create collections representing sets of Maya geometry with the same material binding. These collections are created in the `material:` namespace on the prim at the specified `materialCollectionsPath` (see export option `-mcp`). These collections are encoded using the UsdCollectionAPI schema and are authored compactly using the API `UsdUtilsCreateCollections()`.
 `-ft` | `-filterTypes` | string (multi) | none | Maya type names to exclude when exporting. If a type is excluded, all inherited types are also excluded, e.g. excluding `surfaceShape` will exclude `mesh` as well. When a node is excluded based on its type name, its subtree hierarchy will be pruned from the export, and its descendants will not be exported.
 `-mcp` | `-materialCollectionsPath` | string | none | Path to the prim where material collections must be exported.
@@ -343,16 +344,24 @@ For example, your `plugInfo.json` would contain these keys if you wanted the def
 
 ```javascript
 {
-    "UsdMaya": {
-        "UsdExport": {
-            "exportMaterialCollections": true,
-            "chaser": "alembic",
-            "chaserArgs": [
-                ["alembic", "primvarprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"],
-                ["alembic", "attrprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"]
-            ]
+  "Plugins": [
+    {
+      "Info": {
+        "UsdMaya": {
+            "UsdExport": {
+              "exportMaterialCollections": true,
+              "chaser": ["alembic"],
+              "chaserArgs": [
+                  ["alembic", "primvarprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"],
+                  ["alembic", "attrprefix", "ABC_,ABC2_=customPrefix_,ABC3_=,ABC4_=customNamespace:"]
+              ]
+          }
         }
+      },
+      "Name": "MySiteSpecificConfigPlugin",
+      "Type": "resource"
     }
+  ]
 }
 ```
 

@@ -181,13 +181,13 @@ MString GetUniqueNameOfDagNode(const MObject& node);
 MAYAUSD_CORE_PUBLIC
 MStatus GetMObjectByName(const std::string& nodeName, MObject& mObj);
 
+/// Gets the Maya MObject for the node named \p nodeName.
+MAYAUSD_CORE_PUBLIC
+MStatus GetMObjectByName(const MString& nodeName, MObject& mObj);
+
 /// Gets the UsdStage for the proxy shape  node named \p nodeName.
 MAYAUSD_CORE_PUBLIC
 UsdStageRefPtr GetStageByProxyName(const std::string& nodeName);
-
-/// Gets the Maya MDagPath for the node named \p nodeName.
-MAYAUSD_CORE_PUBLIC
-MStatus GetDagPathByName(const std::string& nodeName, MDagPath& dagPath);
 
 /// Gets the Maya MPlug for the given \p attrPath.
 /// The attribute path should be specified as "nodeName.attrName" (the format
@@ -287,6 +287,16 @@ std::string stripNamespaces(const std::string& nodeName, const int nsDepth = -1)
 MAYAUSD_CORE_PUBLIC
 std::string SanitizeName(const std::string& name);
 
+/// Return a prettified name from camelCase or snake_case source.
+///
+/// Put a space in the name when preceded by a capital letter.
+/// Exceptions: Number followed by capital
+///            Multiple capital letters together
+/// Replace underscore by space and capitalize next letter
+/// Always capitalize first letter
+MAYAUSD_CORE_PUBLIC
+std::string prettifyName(const std::string& name);
+
 // This to allow various pipeline to sanitize the colorset name for output
 MAYAUSD_CORE_PUBLIC
 std::string SanitizeColorSetName(const std::string& name);
@@ -381,6 +391,13 @@ MPlug GetConnected(const MPlug& plug);
 
 MAYAUSD_CORE_PUBLIC
 void Connect(const MPlug& srcPlug, const MPlug& dstPlug, const bool clearDstPlug);
+
+MAYAUSD_CORE_PUBLIC
+void Connect(
+    const MPlug& srcPlug,
+    const MPlug& dstPlug,
+    const bool   clearDstPlug,
+    MDGModifier& dgMod);
 
 /// Get a named child plug of \p plug by name.
 MAYAUSD_CORE_PUBLIC
@@ -551,6 +568,15 @@ MString convert(const TfToken& token);
 MAYAUSD_CORE_PUBLIC
 std::string convert(const MString&);
 
+/// Retrieve all descendant nodes, including self.
+MAYAUSD_CORE_PUBLIC
+std::vector<MDagPath> getDescendants(const MDagPath& path);
+
+/// Retrieve all descendant nodes, including self, but starting from the most
+/// distant grand-children.
+MAYAUSD_CORE_PUBLIC
+std::vector<MDagPath> getDescendantsStartingWithChildren(const MDagPath& path);
+
 MAYAUSD_CORE_PUBLIC
 MDagPath getDagPath(const MFnDependencyNode& depNodeFn, const bool reportError = true);
 
@@ -655,6 +681,37 @@ MString GetCurrentMayaWorkspacePath();
 
 MAYAUSD_CORE_PUBLIC
 MString GetCurrentSceneFilePath();
+
+/**
+ * Returns all the sublayers recursively for a given layer
+ *
+ * @param layer   The layer to start from and get the sublayers
+ *
+ * @return The list of identifiers for all the sublayers
+ */
+MAYAUSD_CORE_PUBLIC
+std::set<std::string> getAllSublayers(const PXR_NS::SdfLayerRefPtr& layer);
+
+/**
+ * Returns all the sublayers recursively for a list of layers
+ *
+ * @param parentLayerPaths   The list of the parent layer paths to traverse recursively
+ * @param includeParents   This will add the parents passed in to the output
+ *
+ * @return The list of identifiers for all the sublayers for each parent (plus the parents
+ * potentially)
+ */
+MAYAUSD_CORE_PUBLIC
+std::set<std::string>
+getAllSublayers(const std::vector<std::string>& parentLayerPaths, bool includeParents = false);
+
+/// Takes the supplied bounding box and adds to it Maya-specific extents
+/// that come from the nodes originating from the supplied root node
+MAYAUSD_CORE_PUBLIC
+void AddMayaExtents(
+    PXR_NS::GfBBox3d&         bbox,
+    const PXR_NS::UsdPrim&    root,
+    const PXR_NS::UsdTimeCode time);
 
 } // namespace UsdMayaUtil
 

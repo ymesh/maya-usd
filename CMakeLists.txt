@@ -33,7 +33,12 @@ option(BUILD_TESTS "Build tests." ON)
 option(BUILD_STRICT_MODE "Enforce all warnings as errors." ON)
 option(BUILD_SHARED_LIBS "Build libraries as shared or static." ON)
 option(BUILD_WITH_PYTHON_3 "Build with python 3." OFF)
+if(APPLE)
+    option(BUILD_UB2 "Build Universal Binary 2 (UB2) Intel64+arm64" OFF)
+endif()
+set(BUILD_WITH_PYTHON_3_VERSION 3.7 CACHE STRING "The version of Python 3 to build with")
 option(CMAKE_WANT_UFE_BUILD "Enable building with UFE (if found)." ON)
+option(CMAKE_WANT_MATERIALX_BUILD "Enable building with MaterialX (experimental)." OFF)
 
 set(PXR_OVERRIDE_PLUGINPATH_NAME PXR_PLUGINPATH_NAME
     CACHE STRING "Name of env var USD searches to find plugins")
@@ -51,7 +56,16 @@ set(PXR_OVERRIDE_PLUGINPATH_NAME PXR_PLUGINPATH_NAME
 # Avoid noisy install messages
 set(CMAKE_INSTALL_MESSAGE "NEVER")
 
-set(CMAKE_OSX_ARCHITECTURES "x86_64")
+if(APPLE)
+    if(BUILD_UB2)
+        message(STATUS "Building with Universal Binary 2")
+        set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
+    else()
+        set(CMAKE_OSX_ARCHITECTURES "x86_64")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 10.14)
+    endif()
+endif()
 
 set(CMAKE_MODULE_PATH
     ${CMAKE_MODULE_PATH}
@@ -59,7 +73,7 @@ set(CMAKE_MODULE_PATH
 )
 
 # Use RUNPATH instead of RPATH for all shared libs, executables and modules on Linux
-if(IS_LINUX)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux") # IS_LINUX not yet defined
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--enable-new-dtags")
@@ -68,6 +82,13 @@ endif()
 #------------------------------------------------------------------------------
 # modules and definitions
 #------------------------------------------------------------------------------
+include(cmake/utils.cmake)
+find_package(Maya 2018 REQUIRED)
+
+if(APPLE AND BUILD_UB2 AND NOT MAYA_MACOSX_BUILT_WITH_UB2)
+    message(WARNING  "Maya was NOT built with Universal Binary 2")
+endif()
+
 if (BUILD_MAYAUSD_LIBRARY)
     include(cmake/mayausd_version.info)
     set(MAYAUSD_VERSION "${MAYAUSD_MAJOR_VERSION}.${MAYAUSD_MINOR_VERSION}.${MAYAUSD_PATCH_LEVEL}")
@@ -78,7 +99,7 @@ if (DEFINED PYTHON_INCLUDE_DIR AND DEFINED PYTHON_LIBRARIES AND DEFINED Python_E
     SET(PYTHONLIBS_FOUND TRUE)
     # Use the Python module to find the python lib.
     if(BUILD_WITH_PYTHON_3)
-        find_package(Python 3.7 EXACT REQUIRED COMPONENTS Interpreter)
+        find_package(Python ${BUILD_WITH_PYTHON_3_VERSION} EXACT REQUIRED COMPONENTS Interpreter)
     else()
         find_package(Python 2.7 EXACT REQUIRED COMPONENTS Interpreter)
     endif()
@@ -94,12 +115,16 @@ message(STATUS "   PYTHON_INCLUDE_DIRS = ${PYTHON_INCLUDE_DIRS}")
 message(STATUS "   PYTHON_LIBRARIES    = ${PYTHON_LIBRARIES}")
 message(STATUS "   Python_EXECUTABLE   = ${Python_EXECUTABLE}")
 
-include(cmake/utils.cmake)
-
 include(cmake/jinja.cmake)
 
-find_package(Maya 2018 REQUIRED)
-find_package(USD 0.20.02 REQUIRED)
+find_package(USD 0.20.05 REQUIRED)
+if (CMAKE_WANT_MATERIALX_BUILD)
+    # Requires at least USD 21.08 for hdMtlx module and USD must have been built with MaterialX:
+    if(NOT TARGET hdMtlx)
+        set(CMAKE_WANT_MATERIALX_BUILD OFF)
+        message(WARNING "Disabling MaterialX VP2 rendering: it is not supported by this USD package.")
+    endif()
+endif()
 include(cmake/usd.cmake)
 
 if( MAYA_APP_VERSION LESS 2020 AND PXR_VERSION GREATER 2005 AND PXR_VERSION LESS 2102 )
@@ -129,6 +154,19 @@ if(CMAKE_WANT_UFE_BUILD)
     endif()
 endif()
 
+if(CMAKE_WANT_MATERIALX_BUILD AND MAYA_LIGHTAPI_VERSION LESS 2)
+    set(CMAKE_WANT_MATERIALX_BUILD OFF)
+    message(WARNING "Disabling MaterialX VP2 rendering: it is not supported by this version of Maya.")
+endif()
+
+if(TARGET hdMtlx)
+    # MaterialX was built into USD. We need to know where to find MaterialX targets.
+    find_package(MaterialX REQUIRED)
+    if(TARGET MaterialXCore)
+        message(STATUS "Found MaterialX")
+    endif()
+endif()
+
 if(DEFINED QT_LOCATION)
     if(NOT DEFINED QT_VERSION)
         if(${MAYA_APP_VERSION} STRLESS_EQUAL "2019")
@@ -152,9 +190,9 @@ endif()
 include(cmake/compiler_config.cmake)
 
 #------------------------------------------------------------------------------
-# gulark filesystem
+# gulrak filesystem
 #------------------------------------------------------------------------------
-include(cmake/gulark.cmake)
+include(cmake/gulrak.cmake)
 
 #------------------------------------------------------------------------------
 # test

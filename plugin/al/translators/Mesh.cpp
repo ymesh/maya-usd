@@ -37,7 +37,19 @@
 #include <maya/MFnSet.h>
 #include <maya/MIntArray.h>
 #include <maya/MNodeClass.h>
+#include <maya/MProfiler.h>
 #include <maya/MVectorArray.h>
+
+namespace {
+const int _meshProfilerCategory = MProfiler::addCategory(
+#if MAYA_API_VERSION >= 20190000
+    "Mesh",
+    "Mesh"
+#else
+    "Mesh"
+#endif
+);
+} // namespace
 
 namespace AL {
 namespace usdmaya {
@@ -64,6 +76,8 @@ MStatus Mesh::initialize()
 //----------------------------------------------------------------------------------------------------------------------
 MStatus Mesh::import(const UsdPrim& prim, MObject& parent, MObject& createdObj)
 {
+    MProfilingScope profilerScope(_meshProfilerCategory, MProfiler::kColorE_L3, "Import");
+
     TF_DEBUG(ALUSDMAYA_TRANSLATORS).Msg("Mesh::import prim=%s\n", prim.GetPath().GetText());
 
     const UsdGeomMesh mesh(prim);
@@ -83,7 +97,13 @@ MStatus Mesh::import(const UsdPrim& prim, MObject& parent, MObject& createdObj)
     }
 
     AL::usdmaya::utils::MeshImportContext importContext(mesh, parent, dagName, timeCode);
-    importContext.applyVertexNormals();
+    TfToken                               scheme;
+    mesh.GetSubdivisionSchemeAttr().Get(&scheme);
+    bool isSubd = (scheme != UsdGeomTokens->none);
+    // Skip normals for subdiv surfaces
+    if (!isSubd) {
+        importContext.applyVertexNormals();
+    }
     importContext.applyHoleFaces();
     importContext.applyVertexCreases();
     importContext.applyEdgeCreases();
@@ -127,13 +147,18 @@ UsdPrim Mesh::exportObject(
     auto compaction = (AL::usdmaya::utils::MeshExportContext::CompactionLevel)params.getInt(
         GeometryExportOptions::kCompactionLevel);
 
+    auto subdivisionScheme
+        = (AL::usdmaya::utils::MeshExportContext::SubdivisionScheme)params.getInt(
+            GeometryExportOptions::kSubdivisionScheme);
+
     AL::usdmaya::utils::MeshExportContext context(
         dagPath,
         mesh,
         params.m_timeCode,
         false,
         compaction,
-        params.getBool(GeometryExportOptions::kReverseOppositeNormals));
+        params.getBool(GeometryExportOptions::kReverseOppositeNormals),
+        subdivisionScheme);
     if (context) {
         UsdAttribute pointsAttr = mesh.GetPointsAttr();
         if (params.m_animTranslator && AnimationTranslator::isAnimatedMesh(dagPath)) {
@@ -160,7 +185,11 @@ UsdPrim Mesh::exportObject(
                 context.timeCode(), params.getBool(GeometryExportOptions::kNormalsAsPrimvars));
         }
         if (params.getBool(GeometryExportOptions::kMeshColours)) {
-            context.copyColourSetData();
+            context.copyColourSetData(
+                params.getFloat(GeometryExportOptions::kMeshDefaultColourRGB),
+                params.getFloat(GeometryExportOptions::kMeshDefaultColourA),
+                params.getBool(GeometryExportOptions::kCustomColourThreshold),
+                params.getFloat(GeometryExportOptions::kColourThresholdValue));
         }
         if (params.getBool(GeometryExportOptions::kMeshVertexCreases)) {
             context.copyCreaseVertices();

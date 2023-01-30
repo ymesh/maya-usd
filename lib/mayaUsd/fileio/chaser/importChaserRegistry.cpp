@@ -54,7 +54,7 @@ const SdfPathVector& UsdMayaImportChaserRegistry::FactoryContext::GetImportedPri
     return this->_sdfPaths;
 }
 
-const UsdMayaJobImportArgs& UsdMayaImportChaserRegistry::FactoryContext::GetImportJobArgs() const
+const UsdMayaJobImportArgs& UsdMayaImportChaserRegistry::FactoryContext::GetJobArgs() const
 {
     return this->_jobArgs;
 }
@@ -63,14 +63,15 @@ TF_INSTANTIATE_SINGLETON(UsdMayaImportChaserRegistry);
 
 std::map<std::string, UsdMayaImportChaserRegistry::FactoryFn> _factoryImportRegistry;
 
-bool UsdMayaImportChaserRegistry::RegisterFactory(const char* name, FactoryFn fn)
+bool UsdMayaImportChaserRegistry::RegisterFactory(const char* name, FactoryFn fn, bool fromPython)
 {
     TF_DEBUG(PXRUSDMAYA_REGISTRY).Msg("Registering import chaser '%s'.\n", name);
     std::pair<std::string, UsdMayaImportChaserRegistry::FactoryFn> p
         = std::make_pair(std::string(name), fn);
     auto ret = _factoryImportRegistry.insert(std::make_pair(std::string(name), fn));
     if (ret.second) {
-        UsdMaya_RegistryHelper::AddUnloader([name]() { _factoryImportRegistry.erase(name); });
+        UsdMaya_RegistryHelper::AddUnloader(
+            [name]() { _factoryImportRegistry.erase(name); }, fromPython);
     }
 
     return ret.second;

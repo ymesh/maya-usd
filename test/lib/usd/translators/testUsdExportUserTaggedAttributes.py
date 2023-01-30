@@ -240,13 +240,14 @@ class testUsdExportUserTaggedAttributes(unittest.TestCase):
         }
         expectedPrimvarNames = set(expectedPrimvars.keys())
         # Getting all primvars will also include the built-in displayColor,
-        # displayOpacity, and the Maya default "map1" UV set.
-        expectedPrimvarNames.update(['displayColor', 'displayOpacity', 'map1'])
+        # displayOpacity, and the USD default "st" UV set.
+        expectedPrimvarNames.update(['displayColor', 'displayOpacity', 'st'])
 
         gprim = UsdGeom.Gprim(prim)
         self.assertTrue(gprim)
 
-        primvars = [primvar for primvar in gprim.GetPrimvars()
+        gprimPvAPI = UsdGeom.PrimvarsAPI(gprim)
+        primvars = [primvar for primvar in gprimPvAPI.GetPrimvars()
             if 'ri:attributes' not in primvar.GetNamespace()]
         self.assertEqual(len(primvars), 9)
 
@@ -254,7 +255,7 @@ class testUsdExportUserTaggedAttributes(unittest.TestCase):
         self.assertEqual(primvarNames, expectedPrimvarNames)
 
         for primvarName in expectedPrimvars:
-            primvar = gprim.GetPrimvar(primvarName)
+            primvar = gprimPvAPI.GetPrimvar(primvarName)
             self.assertTrue(primvar)
             self.assertTrue(UsdGeom.Primvar.IsPrimvar(primvar))
             self._assertAlmostEqualWithFallback(
@@ -395,7 +396,8 @@ class testUsdExportUserTaggedAttributes(unittest.TestCase):
         # Getting all primvars will also include the built-in displayColor,
         # displayOpacity, and st, so we add 3 to the length of the
         # exportedAttrsDict for that check.
-        primvars = gprim.GetPrimvars()
+        gprimPvAPI = UsdGeom.PrimvarsAPI(gprim)
+        primvars = gprimPvAPI.GetPrimvars()
         self.assertEqual(len(primvars), len(exportedAttrsDict)*2 + 3)
         riStatements = UsdRi.StatementsAPI(usdPrim)
         self.assertTrue(riStatements)
@@ -422,7 +424,7 @@ class testUsdExportUserTaggedAttributes(unittest.TestCase):
             self._assertAlmostEqualWithFallback(usdAttr.Get(), value)
 
             # Test primvars.
-            primvar = gprim.GetPrimvar('%sPrimvar' % attrPrefix)
+            primvar = gprimPvAPI.GetPrimvar('%sPrimvar' % attrPrefix)
             self.assertTrue(primvar)
             self.assertTrue(UsdGeom.Primvar.IsPrimvar(primvar))
             self._assertAlmostEqualWithFallback(primvar.Get(), value)

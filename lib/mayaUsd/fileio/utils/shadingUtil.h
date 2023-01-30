@@ -85,7 +85,22 @@ UsdShadeOutput CreateShaderOutputAndConnectMaterial(
 
 // Connects a place2dTexture to a texture node
 MAYAUSD_CORE_PUBLIC
+void ConnectPlace2dTexture(MObject textureNode, MObject uvNode);
+
+// Creates and connects a place2dTexture to a texture node
+MAYAUSD_CORE_PUBLIC
 MObject CreatePlace2dTextureAndConnectTexture(MObject textureNode);
+
+/// Computes a USD file name from a Maya file name.
+///
+/// Makes path relative to \p usdFileName and resolves issues with UDIM naming.
+MAYAUSD_CORE_PUBLIC void ResolveUsdTextureFileName(
+    std::string&       fileTextureName,
+    const std::string& usdFileName,
+    bool               isUDIM);
+
+/// Computes how many channels a texture file has by loading its header from disk
+MAYAUSD_CORE_PUBLIC int GetNumberOfChannels(const std::string& fileTextureName);
 
 } // namespace UsdMayaShadingUtil
 

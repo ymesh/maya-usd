@@ -17,13 +17,13 @@
 #define PXRUSDMAYA_READUTIL_H
 
 #include <mayaUsd/base/api.h>
+#include <mayaUsd/fileio/primReaderArgs.h>
+#include <mayaUsd/fileio/primReaderContext.h>
 
 #include <pxr/pxr.h>
 #include <pxr/usd/sdf/attributeSpec.h>
 #include <pxr/usd/usd/attribute.h>
 
-#include <maya/MDGModifier.h>
-#include <maya/MFnDependencyNode.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 
@@ -41,11 +41,6 @@ struct UsdMayaReadUtil
     /// sets is set to true
     MAYAUSD_CORE_PUBLIC
     static bool ReadFloat2AsUV();
-
-    /// Returns whether the environment setting for renaming st TexCoord to map1
-    /// is set to true
-    MAYAUSD_CORE_PUBLIC
-    static bool ReadSTAsMap1();
 
     /// Given the \p typeName and \p variability, try to create a Maya attribute
     /// on \p depNode with the name \p attrName.
@@ -86,7 +81,7 @@ struct UsdMayaReadUtil
         const std::string&   attrNiceName,
         MDGModifier&         modifier);
 
-    /// Sets a Maya plug using the value on a USD attribute at default time.
+    /// Sets a Maya plug using the value on a USD attribute at the requested \p time.
     /// If the variability of the USD attribute doesn't match the keyable state
     /// of the Maya plug, then the plug's keyable state will also be updated.
     /// Returns true if the plug was set.
@@ -94,8 +89,11 @@ struct UsdMayaReadUtil
     /// For plugs with color roles, the value will be converted from a linear
     /// color value before being set if \p unlinearizeColors is true.
     MAYAUSD_CORE_PUBLIC
-    static bool
-    SetMayaAttr(MPlug& attrPlug, const UsdAttribute& usdAttr, const bool unlinearizeColors = true);
+    static bool SetMayaAttr(
+        MPlug&              attrPlug,
+        const UsdAttribute& usdAttr,
+        const bool          unlinearizeColors = true,
+        UsdTimeCode         time = UsdTimeCode::Default());
 
     /// Sets a Maya plug using the given VtValue. The plug keyable state won't
     /// be affected.
@@ -159,6 +157,14 @@ struct UsdMayaReadUtil
         const UsdPrim&      prim,
         const MObject&      mayaObject);
 
+    /// Iterate on all newly created Maya objects in \p readCtx to see if they can receive one of
+    /// the API schemas found on the currently processed UsdPrim found in \p args.
+    /// This call must also register in \p readCtx any new object created via ApplySchema.
+    MAYAUSD_CORE_PUBLIC
+    static bool ReadAPISchemaAttributesFromPrim(
+        const UsdMayaPrimReaderArgs& args,
+        UsdMayaPrimReaderContext&    readCtx);
+
     /// \}
 
     /// \name Manually importing typed schema data
@@ -191,6 +197,15 @@ struct UsdMayaReadUtil
         const UsdTimeCode&          usdTime = UsdTimeCode::Default());
 
     /// \}
+
+    // Translates a USD attribute to a Maya MPlug, accounting for eventual animations
+    MAYAUSD_CORE_PUBLIC
+    static bool ReadUsdAttribute(
+        const UsdAttribute&          usdAttr,
+        const MFnDependencyNode&     depFn,
+        const TfToken&               plugName,
+        const UsdMayaPrimReaderArgs& args,
+        UsdMayaPrimReaderContext*    context);
 
     /// A cache to store pre-computed file texture hashes on import.
     MAYAUSD_CORE_PUBLIC

@@ -19,6 +19,7 @@
 
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
+#include <maya/MDGModifier.h>
 #include <maya/MDataBlock.h>
 #include <maya/MFnData.h>
 #include <maya/MFnIntArrayData.h>
@@ -36,13 +37,18 @@
 |:-----------------|:----------------------|:---------------------------------------------------------------|:------------------------|:-------------------|
 | Bool             | bool                  | MFnNumericData::kBoolean                                       | bool                    | MakeMayaSimpleData |
 | Int              | int                   | MFnNumericData::kInt                                           | int                     | MakeMayaSimpleData |
+| Float            | float                 | MFnNumericData::kFloat                                         | float                   | MakeMayaSimpleData |
+| Double           | double                | MFnNumericData::kDouble                                        | double                  | MakeMayaSimpleData |
 ||
 | String           | std::string           | MFnData::kString, MFn::kStringData                             | MString, MFnStringData  | MakeMayaFnData     |
+| Asset            | SdfAssetPath          | MFnData::kString, MFn::kStringData                             | MString, MFnStringData  | MakeMayaFnData     |
 ||
 | Float3           | GfVec3f               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Float  | float3,  MFnNumericData | MakeMayaFnData     |
 | Double3          | GfVec3d               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Double | double3, MFnNumericData | MakeMayaFnData     |
 | Color3f          | GfVec3f               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Float  | float3,  MFnNumericData | MakeMayaFnData     |
+| Vector3f         | GfVec3f               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Float  | float3,  MFnNumericData | MakeMayaFnData     |
 | Color3d          | GfVec3d               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Double | double3, MFnNumericData | MakeMayaFnData     |
+| Vector3d         | GfVec3d               | MFnData::kNumeric, MFn::kNumericData, MFnNumericData::k3Double | double3, MFnNumericData | MakeMayaFnData     |
 ||
 | Matrix4d         | GfMatrix4d            | MFnData::kMatrix,  MFn::kMatrixData                            | MMatrix, MFnMatrixData  | MakeMayaFnData     |
 ||
@@ -186,6 +192,46 @@ template <> struct MakeMayaSimpleData<int> : public std::true_type
     static void set(const MPlug& plug, MDGModifier& dst, const Type& value)
     {
         dst.newPlugValueInt(plug, value);
+    }
+};
+
+//! \brief  Type trait for Maya's float type providing get and set methods for data handle and
+//! plugs.
+template <> struct MakeMayaSimpleData<float> : public std::true_type
+{
+    using Type = float;
+    enum
+    {
+        kNumericType = MFnNumericData::kFloat
+    };
+
+    static void get(const MDataHandle& handle, Type& value) { value = handle.asFloat(); }
+
+    static void set(MDataHandle& handle, const Type& value) { handle.setFloat(value); }
+
+    static void set(const MPlug& plug, MDGModifier& dst, const Type& value)
+    {
+        dst.newPlugValueFloat(plug, value);
+    }
+};
+
+//! \brief  Type trait for Maya's double type providing get and set methods for data handle and
+//! plugs.
+template <> struct MakeMayaSimpleData<double> : public std::true_type
+{
+    using Type = double;
+    enum
+    {
+        kNumericType = MFnNumericData::kDouble
+    };
+
+    static void get(const MDataHandle& handle, Type& value) { value = handle.asDouble(); }
+
+    static void set(MDataHandle& handle, const Type& value) { handle.setDouble(value); }
+
+    static void set(const MPlug& plug, MDGModifier& dst, const Type& value)
+    {
+        dst.newPlugValueDouble(plug, value);
     }
 };
 
@@ -1007,10 +1053,15 @@ struct Converter::GenerateConverters
 
         createConverter<bool, bool>(converters, SdfValueTypeNames->Bool);
         createConverter<int, int32_t>(converters, SdfValueTypeNames->Int);
+        createConverter<float, float>(converters, SdfValueTypeNames->Float);
+        createConverter<double, double>(converters, SdfValueTypeNames->Double);
 
         createConverter<MString, std::string>(converters, SdfValueTypeNames->String);
+        createConverter<MString, SdfAssetPath>(converters, SdfValueTypeNames->Asset);
         createConverter<float3, GfVec3f>(converters, SdfValueTypeNames->Float3);
         createConverter<double3, GfVec3d>(converters, SdfValueTypeNames->Double3);
+        createConverter<float3, GfVec3f>(converters, SdfValueTypeNames->Vector3f);
+        createConverter<double3, GfVec3d>(converters, SdfValueTypeNames->Vector3d);
         createConverter<MMatrix, GfMatrix4d>(converters, SdfValueTypeNames->Matrix4d);
 
         createConverter<float3, GfVec3f, NeedsGammaCorrection::kYes>(

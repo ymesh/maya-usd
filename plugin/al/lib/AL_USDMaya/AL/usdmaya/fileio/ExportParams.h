@@ -23,6 +23,7 @@
 
 #include <maya/MSelectionList.h>
 #include <maya/MStringArray.h>
+#include <maya/MTypes.h> // For MAYA_APP_VERSION
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -53,12 +54,16 @@ struct ExporterParams
     bool m_mergeTransforms
         = true; ///< if true, shapes will be merged into their parent transforms in the exported
                 ///< data. If false, the transform and shape will be exported seperately
+#if MAYA_APP_VERSION > 2019
+    bool m_mergeOffsetParentMatrix
+        = false; ///< if true, offset parent matrix would be merged to produce local space matrix;
+                 ///< if false, offset parent matrix would be exported separately in USD.
+#endif
     bool m_animation = false;        ///< if true, animation will be exported.
     bool m_useTimelineRange = false; ///< if true, then the export uses Maya's timeline range.
     bool m_filterSample = false; ///< if true, duplicate sample of attribute will be filtered out
-    bool m_exportInWorldSpace
-        = false; ///< if true, transform hierarchies will be flattened to a single WS transform PRIM
-                 ///< (and no parents will be written out)
+    bool m_exportInWorldSpace = false; ///< if true, transform will be baked at the root prim,
+                                       ///< children under the root will be untouched.
     AnimationTranslator* m_animTranslator
         = 0; ///< the animation translator to help exporting the animation data
     bool m_extensiveAnimationCheck

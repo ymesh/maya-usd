@@ -29,7 +29,7 @@ target_link_libraries(${TARGET_NAME}
     tf
     vt
     plug
-    ${Boost_PYTHON_LIBRARY}
+    $<$<BOOL:${IS_LINUX}>:${Boost_PYTHON_LIBRARY}>
 )
 
 # install
@@ -43,6 +43,13 @@ if(IS_MACOSX OR IS_LINUX)
     endif()
     mayaUsd_add_rpath(rpath "../lib")
     mayaUsd_install_rpath(rpath ${TARGET_NAME})
+endif()
+
+if(IS_MACOSX)
+    # Create symbolic link to python framework
+    file(CREATE_LINK ${MAYA_LOCATION}/Frameworks ${CMAKE_CURRENT_BINARY_DIR}/../Frameworks SYMBOLIC)
+    file(MAKE_DIRECTORY ${AL_INSTALL_PREFIX})
+    file(CREATE_LINK ${MAYA_LOCATION}/Frameworks ${AL_INSTALL_PREFIX}/Frameworks SYMBOLIC)
 endif()
 
 # unit tests

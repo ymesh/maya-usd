@@ -7,12 +7,14 @@ target_sources(${PROJECT_NAME}
         translatorCamera.cpp
         translatorCurves.cpp
         translatorGprim.cpp
+        translatorLight.cpp
         translatorMaterial.cpp
         translatorMayaReference.cpp
         translatorMesh.cpp
         translatorNurbsPatch.cpp
         translatorPrim.cpp
         translatorRfMLight.cpp
+        translatorRfMLight_deprecated.cpp
         translatorSkel.cpp
         translatorUtil.cpp
         translatorXformable.cpp
@@ -24,6 +26,7 @@ set(HEADERS
     translatorCamera.h
     translatorCurves.h
     translatorGprim.h
+    translatorLight.h
     translatorMaterial.h
     translatorMayaReference.h
     translatorMesh.h

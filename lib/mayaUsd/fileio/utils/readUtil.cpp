@@ -16,6 +16,7 @@
 #include "readUtil.h"
 
 #include <mayaUsd/fileio/utils/adaptor.h>
+#include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/colorSpace.h>
 #include <mayaUsd/utils/converter.h>
 #include <mayaUsd/utils/util.h>
@@ -30,6 +31,7 @@
 
 #include <maya/MDoubleArray.h>
 #include <maya/MFloatArray.h>
+#include <maya/MFnAnimCurve.h>
 #include <maya/MFnAttribute.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDoubleArrayData.h>
@@ -47,6 +49,7 @@
 #include <maya/MPointArray.h>
 #include <maya/MString.h>
 #include <maya/MStringArray.h>
+#include <maya/MTimeArray.h>
 #include <maya/MVectorArray.h>
 
 using namespace MAYAUSD_NS_DEF;
@@ -66,18 +69,6 @@ bool UsdMayaReadUtil::ReadFloat2AsUV()
     return readFloat2AsUV;
 }
 
-TF_DEFINE_ENV_SETTING(
-    MAYAUSD_IMPORT_PRIMARY_UV_SET_AS_MAP1,
-    false,
-    "Translates the primary UV set in USD to the map1 UV set in Maya. "
-    "When disabled, UV set names are translated directly (st in USD becomes st in Maya).");
-
-bool UsdMayaReadUtil::ReadSTAsMap1()
-{
-    static const bool readSTAsMap1 = TfGetEnvSetting(MAYAUSD_IMPORT_PRIMARY_UV_SET_AS_MAP1);
-    return readSTAsMap1;
-}
-
 MObject UsdMayaReadUtil::FindOrCreateMayaAttr(
     const SdfValueTypeName& typeName,
     const SdfVariability    variability,
@@ -85,7 +76,7 @@ MObject UsdMayaReadUtil::FindOrCreateMayaAttr(
     const std::string&      attrName,
     const std::string&      attrNiceName)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic attribute find or creation");
     return FindOrCreateMayaAttr(typeName, variability, depNode, attrName, attrNiceName, modifier);
 }
 
@@ -365,6 +356,12 @@ MObject UsdMayaReadUtil::FindOrCreateMayaAttr(
     } else if (type.IsA<int>()) {
         return _FindOrCreateMayaNumericAttr(
             attrName, attrNiceName, MFnNumericData::kInt, keyable, usedAsColor, depNode, modifier);
+    } else if (type.IsA<unsigned int>()) {
+        return _FindOrCreateMayaNumericAttr(
+            attrName, attrNiceName, MFnNumericData::kInt, keyable, usedAsColor, depNode, modifier);
+    } else if (type.IsA<unsigned char>()) {
+        return _FindOrCreateMayaNumericAttr(
+            attrName, attrNiceName, MFnNumericData::kByte, keyable, usedAsColor, depNode, modifier);
     } else if (type.IsA<GfVec2i>()) {
         return _FindOrCreateMayaNumericAttr(
             attrName, attrNiceName, MFnNumericData::k2Int, keyable, usedAsColor, depNode, modifier);
@@ -471,10 +468,11 @@ template <typename T> T _ConvertVec(const MPlug& plug, const T& val)
 bool UsdMayaReadUtil::SetMayaAttr(
     MPlug&              attrPlug,
     const UsdAttribute& usdAttr,
-    const bool          unlinearizeColors)
+    const bool          unlinearizeColors,
+    UsdTimeCode         time)
 {
     VtValue val;
-    if (usdAttr.Get(&val)) {
+    if (usdAttr.Get(&val, time)) {
         if (SetMayaAttr(attrPlug, val, unlinearizeColors)) {
             SetMayaAttrKeyableState(attrPlug, usdAttr.GetVariability());
             return true;
@@ -489,7 +487,7 @@ bool UsdMayaReadUtil::SetMayaAttr(
     const VtValue& newValue,
     const bool     unlinearizeColors)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic Maya attribute modification");
     return SetMayaAttr(attrPlug, newValue, modifier, unlinearizeColors);
 }
 
@@ -671,10 +669,19 @@ bool UsdMayaReadUtil::SetMayaAttr(
             modifier.newPlugValueBool(attrPlug, b);
             ok = true;
         }
+    } else if (newValue.IsHolding<unsigned char>()) {
+        if (Converter::hasNumericType(attrPlug, MFnNumericData::kByte)) {
+            unsigned char b = newValue.Get<unsigned char>();
+            modifier.newPlugValueBool(attrPlug, b);
+            ok = true;
+        }
     } else if (
-        newValue.IsHolding<int>() || newValue.IsHolding<float>() || newValue.IsHolding<double>()) {
+        newValue.IsHolding<int>() || newValue.IsHolding<unsigned int>()
+        || newValue.IsHolding<float>() || newValue.IsHolding<double>()) {
         if (Converter::hasNumericType(attrPlug, MFnNumericData::kInt)) {
-            int i = VtValue::Cast<int>(newValue).Get<int>();
+            int i = newValue.IsHolding<unsigned int>()
+                ? int(VtValue::Cast<unsigned int>(newValue).Get<unsigned int>())
+                : VtValue::Cast<int>(newValue).Get<int>();
             modifier.newPlugValueInt(attrPlug, i);
             ok = true;
         } else if (Converter::hasNumericType(attrPlug, MFnNumericData::kFloat)) {
@@ -685,8 +692,12 @@ bool UsdMayaReadUtil::SetMayaAttr(
             double d = VtValue::Cast<double>(newValue).Get<double>();
             modifier.newPlugValueDouble(attrPlug, d);
             ok = true;
-        } else if (newValue.IsHolding<int>() && Converter::hasEnumType(attrPlug)) {
-            int i = VtValue::Cast<int>(newValue).Get<int>();
+        } else if (
+            (newValue.IsHolding<int>() || newValue.IsHolding<unsigned int>())
+            && Converter::hasEnumType(attrPlug)) {
+            int i = newValue.IsHolding<unsigned int>()
+                ? int(VtValue::Cast<unsigned int>(newValue).Get<unsigned int>())
+                : VtValue::Cast<int>(newValue).Get<int>();
             modifier.newPlugValueInt(attrPlug, i);
             ok = true;
         }
@@ -730,23 +741,33 @@ bool UsdMayaReadUtil::SetMayaAttr(
             ok = true;
         }
     } else if (newValue.IsHolding<GfVec2d>()) {
+        GfVec2d        v = newValue.Get<GfVec2d>();
+        MFnNumericData data;
         if (Converter::hasNumericType(attrPlug, MFnNumericData::k2Double)) {
-            GfVec2d        v = newValue.Get<GfVec2d>();
-            MFnNumericData data;
-            MObject        dataObj = data.create(MFnNumericData::k2Double);
+            MObject dataObj = data.create(MFnNumericData::k2Double);
             data.setData2Double(v[0], v[1]);
+            modifier.newPlugValue(attrPlug, dataObj);
+            ok = true;
+        } else if (Converter::hasNumericType(attrPlug, MFnNumericData::k2Float)) {
+            MObject dataObj = data.create(MFnNumericData::k2Float);
+            data.setData2Float(v[0], v[1]);
             modifier.newPlugValue(attrPlug, dataObj);
             ok = true;
         }
     } else if (newValue.IsHolding<GfVec3d>()) {
+        GfVec3d v = newValue.Get<GfVec3d>();
+        if (unlinearizeColors) {
+            v = _ConvertVec(attrPlug, v);
+        }
+        MFnNumericData data;
         if (Converter::hasNumericType(attrPlug, MFnNumericData::k3Double)) {
-            GfVec3d v = newValue.Get<GfVec3d>();
-            if (unlinearizeColors) {
-                v = _ConvertVec(attrPlug, v);
-            }
-            MFnNumericData data;
-            MObject        dataObj = data.create(MFnNumericData::k3Double);
+            MObject dataObj = data.create(MFnNumericData::k3Double);
             data.setData3Double(v[0], v[1], v[2]);
+            modifier.newPlugValue(attrPlug, dataObj);
+            ok = true;
+        } else if (Converter::hasNumericType(attrPlug, MFnNumericData::k3Float)) {
+            MObject dataObj = data.create(MFnNumericData::k3Float);
+            data.setData3Float(v[0], v[1], v[2]);
             modifier.newPlugValue(attrPlug, dataObj);
             ok = true;
         }
@@ -797,7 +818,7 @@ bool UsdMayaReadUtil::SetMayaAttr(
 
 void UsdMayaReadUtil::SetMayaAttrKeyableState(MPlug& attrPlug, const SdfVariability variability)
 {
-    MDGModifier modifier;
+    MDGModifier& modifier = MDGModifierUndoItem::create("Generic Maya attribute keyable state");
     SetMayaAttrKeyableState(attrPlug, variability, modifier);
 }
 
@@ -855,18 +876,51 @@ bool UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(
         if (includeAPINames.count(schemaName) == 0) {
             continue;
         }
-        if (UsdMayaAdaptor::SchemaAdaptor schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
-            for (const TfToken& attrName : schemaAdaptor.GetAttributeNames()) {
+        if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
+            for (const TfToken& attrName : schemaAdaptor->GetAttributeNames()) {
                 if (UsdAttribute attr = prim.GetAttribute(attrName)) {
                     VtValue               value;
                     constexpr UsdTimeCode t = UsdTimeCode::EarliestTime();
                     if (attr.HasAuthoredValue() && attr.Get(&value, t)) {
-                        schemaAdaptor.CreateAttribute(attrName).Set(value);
+                        schemaAdaptor->CreateAttribute(attrName).Set(value);
                     }
                 }
             }
         }
     }
+    return true;
+}
+
+bool UsdMayaReadUtil::ReadAPISchemaAttributesFromPrim(
+    const UsdMayaPrimReaderArgs& args,
+    UsdMayaPrimReaderContext&    context)
+{
+    const UsdPrim& usdPrim = args.GetUsdPrim();
+
+    UsdMayaAdaptor adaptor(args, context);
+    if (!adaptor) {
+        return false;
+    }
+
+    for (const TfToken& schemaName : usdPrim.GetAppliedSchemas()) {
+        if (args.GetIncludeAPINames().count(schemaName) == 0) {
+            continue;
+        }
+        if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.ApplySchemaByName(schemaName)) {
+            if (schemaAdaptor->CopyFromPrim(usdPrim, args, context)) {
+                continue;
+            }
+            for (const TfToken& attrName : schemaAdaptor->GetAttributeNames()) {
+                if (UsdAttribute attr = usdPrim.GetAttribute(attrName)) {
+                    if (attr.HasAuthoredValue()) {
+                        UsdMayaAttributeAdaptor mayaAttr = schemaAdaptor->CreateAttribute(attrName);
+                        mayaAttr.Set(attr, args, context);
+                    }
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -884,13 +938,12 @@ size_t UsdMayaReadUtil::ReadSchemaAttributesFromPrim(
     }
 
     size_t count = 0;
-    if (UsdMayaAdaptor::SchemaAdaptor schemaAdaptor
-        = adaptor.GetSchemaOrInheritedSchema(schemaType)) {
+    if (UsdMayaSchemaAdaptorPtr schemaAdaptor = adaptor.GetSchemaOrInheritedSchema(schemaType)) {
         for (const TfToken& attrName : attributeNames) {
             if (UsdAttribute attr = prim.GetAttribute(attrName)) {
                 VtValue value;
                 if (attr.HasAuthoredValue() && attr.Get(&value, usdTime)) {
-                    if (schemaAdaptor.CreateAttribute(attrName).Set(value)) {
+                    if (schemaAdaptor->CreateAttribute(attrName).Set(value)) {
                         count++;
                     }
                 }
@@ -899,6 +952,173 @@ size_t UsdMayaReadUtil::ReadSchemaAttributesFromPrim(
     }
 
     return count;
+}
+
+// Create an animation curve to be connected to a Maya MPlug,
+// in order to represent an animated attribute
+static bool _CreateAnimCurveForPlug(
+    MPlug                     plug,
+    MTimeArray&               timeArray,
+    MDoubleArray&             valueArray,
+    UsdMayaPrimReaderContext* context)
+{
+    MFnAnimCurve animFn;
+    MStatus      status;
+    MObject      animObj = animFn.create(plug, nullptr, &status);
+    CHECK_MSTATUS_AND_RETURN(status, false);
+
+    status = animFn.addKeys(&timeArray, &valueArray);
+    CHECK_MSTATUS_AND_RETURN(status, false);
+
+    if (context) {
+        // used for undo/redo
+        context->RegisterNewMayaNode(animFn.name().asChar(), animObj);
+    }
+
+    return true;
+}
+
+// Get the usd attribute values for a given time interval.
+template <class T>
+static bool _GetValuesInInterval(
+    const UsdAttribute&        usdAttr,
+    const std::vector<double>& timeSamples,
+    std::vector<T>&            values)
+{
+    size_t numTimeSamples = timeSamples.size();
+    values.resize(numTimeSamples);
+
+    for (size_t i = 0; i < numTimeSamples; ++i) {
+        const double timeSample = timeSamples[i];
+        T            attrValue;
+        if (!usdAttr.Get(&attrValue, timeSample)) {
+            return false;
+        }
+        values[i] = attrValue;
+    }
+    return true;
+}
+
+// Check if this usd attribute is animated and eventually connect an animation
+// curve if needed. Return true if the animation was imported properly.
+static bool _ReadAnimatedUsdAttribute(
+    const UsdAttribute&          usdAttr,
+    MPlug&                       plug,
+    const UsdMayaPrimReaderArgs& args,
+    UsdMayaPrimReaderContext*    context)
+{
+    const GfInterval& timeInterval = args.GetTimeInterval();
+    // If this attribute isn't varying in the time interval,
+    // we can early out and just let it be imported as a single value
+    if (timeInterval.IsEmpty() || !usdAttr.ValueMightBeTimeVarying()) {
+        return false;
+    }
+    // Get the list of time samples for the given time interval
+    std::vector<double> timeSamples;
+    if (!usdAttr.GetTimeSamplesInInterval(timeInterval, &timeSamples)) {
+        return false;
+    }
+    size_t numTimeSamples = timeSamples.size();
+    // if we have 1 or less samples, we can let this attribute
+    // be read as a single value
+    if (numTimeSamples <= 1) {
+        return false;
+    }
+
+    // Build the time array, for each of the time samples for this interval.
+    // Eventually consider the time sample multiplier from the reader context
+    MTimeArray timeArray;
+    timeArray.setLength(numTimeSamples);
+    MTime::Unit timeUnit = MTime::uiUnit();
+    float       timeSampleMultiplier = (context) ? context->GetTimeSampleMultiplier() : 1.0;
+    for (size_t i = 0; i < numTimeSamples; ++i) {
+        timeArray.set(MTime(timeSamples[i] * timeSampleMultiplier, timeUnit), i);
+    }
+
+    SdfValueTypeName typeName = usdAttr.GetTypeName();
+    if (typeName == SdfValueTypeNames->Float) {
+        // For float attributes, read the animation as a single animation curve.
+        std::vector<float> values;
+        if (!_GetValuesInInterval(usdAttr, timeSamples, values)) {
+            return false;
+        }
+        MDoubleArray valueArray(numTimeSamples);
+        for (size_t i = 0; i < numTimeSamples; ++i) {
+            valueArray.set(values[i], i);
+        }
+        if (!_CreateAnimCurveForPlug(plug, timeArray, valueArray, context)) {
+            return false;
+        }
+        return true;
+    } else if (typeName == SdfValueTypeNames->Float2) {
+        // For float2 attributes, we read them as 2 curves connected to each
+        // plug child (e.g. valueX, valueY)
+        std::vector<GfVec2f> values;
+        if (!_GetValuesInInterval(usdAttr, timeSamples, values)) {
+            return false;
+        }
+        MDoubleArray valueArrayX(numTimeSamples);
+        MDoubleArray valueArrayY(numTimeSamples);
+
+        for (size_t i = 0; i < numTimeSamples; ++i) {
+            valueArrayX.set(values[i][0], i);
+            valueArrayY.set(values[i][1], i);
+        }
+
+        if (!_CreateAnimCurveForPlug(plug.child(0), timeArray, valueArrayX, context)
+            || !_CreateAnimCurveForPlug(plug.child(1), timeArray, valueArrayY, context)) {
+            return false;
+        }
+        return true;
+    } else if (typeName == SdfValueTypeNames->Color3f || typeName == SdfValueTypeNames->Vector3f) {
+
+        // For Color3f and Vector3f attributes, we read them as 3 curves connected to
+        // each plug child (e.g. translateX, translateY, translateZ or colorR, colorG, colorB)
+
+        std::vector<GfVec3f> values;
+        if (!_GetValuesInInterval(usdAttr, timeSamples, values)) {
+            return false;
+        }
+        MDoubleArray valueArrayR(numTimeSamples);
+        MDoubleArray valueArrayG(numTimeSamples);
+        MDoubleArray valueArrayB(numTimeSamples);
+
+        for (size_t i = 0; i < numTimeSamples; ++i) {
+            valueArrayR.set(values[i][0], i);
+            valueArrayG.set(values[i][1], i);
+            valueArrayB.set(values[i][2], i);
+        }
+
+        if (!_CreateAnimCurveForPlug(plug.child(0), timeArray, valueArrayR, context)
+            || !_CreateAnimCurveForPlug(plug.child(1), timeArray, valueArrayG, context)
+            || !_CreateAnimCurveForPlug(plug.child(2), timeArray, valueArrayB, context)) {
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+/* static */
+bool UsdMayaReadUtil::ReadUsdAttribute(
+    const UsdAttribute&          usdAttr,
+    const MFnDependencyNode&     depFn,
+    const TfToken&               plugName,
+    const UsdMayaPrimReaderArgs& args,
+    UsdMayaPrimReaderContext*    context)
+{
+    MStatus status;
+    MPlug   plug = depFn.findPlug(plugName.GetText(), true, &status);
+    CHECK_MSTATUS_AND_RETURN(status, false);
+
+    // First check for and translate animation if there is any.
+    if (_ReadAnimatedUsdAttribute(usdAttr, plug, args, context)) {
+        return true;
+    }
+    // If no animation is needed, simply set the maya attribute as a single value.
+    // Note that we need to specify a time when getting the attribute, otherwise
+    // values with a single time sample can return an invalid value
+    return SetMayaAttr(plug, usdAttr, false, UsdTimeCode::EarliestTime());
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

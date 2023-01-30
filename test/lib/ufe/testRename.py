@@ -18,11 +18,14 @@
 
 import fixturesUtils
 import mayaUtils
+import testUtils
+import ufeUtils
 import usdUtils
+import mayaUsd_createStageWithNewLayer
 
 import mayaUsd.ufe
 
-from pxr import Usd
+from pxr import Usd, Tf, UsdShade, Sdf
 
 from maya import cmds
 from maya import standalone
@@ -119,9 +122,8 @@ class RenameTestCase(unittest.TestCase):
         # Boost Python for mayaUsd and USD), need to pass in strings to
         # mayaUsd functions.  Multi-segment UFE paths need to have
         # comma-separated segments.
-        def assertStageAndPrimAccess(
-                proxyShapeSegment, primUfePathStr, primSegment):
-            proxyShapePathStr = str(proxyShapeSegment)
+        def assertStageAndPrimAccess(proxyShapeSegment, primUfePathStr, primSegment):
+            proxyShapePathStr = ufe.PathString.string(ufe.Path(proxyShapeSegment))
 
             stage     = mayaUsd.ufe.getStage(proxyShapePathStr)
             prim      = mayaUsd.ufe.ufePathToPrim(primUfePathStr)
@@ -148,6 +150,9 @@ class RenameTestCase(unittest.TestCase):
         assertStageAndPrimAccess(mayaSegment, ball35PathStr, usdSegment)
 
     def testRename(self):
+        '''
+        Testing renaming a USD node.
+        '''
         # open tree.ma scene in testSamples
         mayaUtils.openTreeScene()
 
@@ -178,7 +183,7 @@ class RenameTestCase(unittest.TestCase):
         assert len(defaultPrim.GetChildren()) == 2
 
         # get prim spec for defaultPrim
-        primspec = stage.GetEditTarget().GetPrimSpecForScenePath(defaultPrim.GetPath());
+        primspec = stage.GetEditTarget().GetPrimSpecForScenePath(defaultPrim.GetPath())
 
         # set primspec name
         primspec.name = "TreeBase_potato"
@@ -187,7 +192,7 @@ class RenameTestCase(unittest.TestCase):
         renamedPrim = stage.GetPrimAtPath('/TreeBase_potato')
 
         # One must use the SdfLayer API for setting the defaultPrim when you rename the prim it identifies.
-        stage.SetDefaultPrim(renamedPrim);
+        stage.SetDefaultPrim(renamedPrim)
 
         # get defaultPrim again
         defaultPrim = stage.GetDefaultPrim()
@@ -206,7 +211,9 @@ class RenameTestCase(unittest.TestCase):
         self.assertEqual(leavesPrimSpec.GetName(), 'leaves')
 
     def testRenameUndo(self):
-        '''Rename USD node.'''
+        '''
+        Testing rename USD node undo/redo.
+        '''
 
         # open usdCylinder.ma scene in testSamples
         mayaUtils.openCylinderScene()
@@ -278,6 +285,113 @@ class RenameTestCase(unittest.TestCase):
         self.assertIn(pCylinder1RenName, propsChildrenNames)
         self.assertNotIn('pCylinder1', propsChildrenNames)
         self.assertEqual(len(propsChildren), len(propsChildrenPre))
+
+    def testRenamePreserveLoadRules(self):
+        '''
+        Testing that renaming a USD node preserve load rules targeting it.
+        '''
+
+        # open scene in testSamples. Relevant hierarchy is:
+        #    |transform1
+        #       |proxyShape1
+        #          /Ball_set
+        #             /Props
+        #                /Ball_1
+        #                /Ball_2
+        #                ...
+
+        mayaUtils.openGroupBallsScene()
+
+        # USD paths used in the test.
+        propsSdfPath = '/Ball_set/Props'
+        ball1SdfPath = '/Ball_set/Props/Ball_1'
+        ball2SdfPath = '/Ball_set/Props/Ball_2'
+
+        ball1SdfRenamedPath = '/Ball_set/Props/Round_1'
+        ball2SdfRenamedPath = '/Ball_set/Props/Round_2'
+
+        # Maya UFE segment and USD stage, needed in various places below.
+        mayaPathSegment = mayaUtils.createUfePathSegment('|transform1|proxyShape1')
+        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+
+        # Setup the load rules:
+        #     /Props is unloaded
+        #     /Props/Ball1 is loaded
+        #     /Props/Ball2 has no rule, so is governed by /Props
+        loadRules = stage.GetLoadRules()
+        loadRules.AddRule(propsSdfPath, loadRules.NoneRule)
+        loadRules.AddRule(ball1SdfPath, loadRules.AllRule)
+        stage.SetLoadRules(loadRules)
+
+        self.assertEqual(loadRules.OnlyRule, stage.GetLoadRules().GetEffectiveRuleForPath(propsSdfPath))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball1SdfPath))
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball2SdfPath))
+
+        def childrenNames(children):
+           return [str(child.path().back()) for child in children]
+
+        # Verify we can find the expected prims.
+        def verifyNames(expectedNames):
+            propsPathSegment = usdUtils.createUfePathSegment(propsSdfPath)
+            propsUfePath = ufe.Path([mayaPathSegment, propsPathSegment])
+            propsUfeItem = ufe.Hierarchy.createItem(propsUfePath)
+            propsHierarchy = ufe.Hierarchy.hierarchy(propsUfeItem)
+            propsChildren = propsHierarchy.children()
+            propsChildrenNames = childrenNames(propsChildren)
+            for name in expectedNames:
+                self.assertIn(name, propsChildrenNames)
+
+        verifyNames(['Ball_1', 'Ball_2'])
+
+        # Rename the balls.
+        def rename(sdfPath, newName):
+            ufePathSegment = usdUtils.createUfePathSegment(sdfPath)
+            ufePath = ufe.Path([mayaPathSegment, ufePathSegment])
+            ufeItem = ufe.Hierarchy.createItem(ufePath)
+            cmds.select(clear=True)
+            ufe.GlobalSelection.get().append(ufeItem)
+            cmds.rename(newName)
+
+        rename(ball1SdfPath, "Round_1")
+        rename(ball2SdfPath, "Round_2")
+
+        # Verify we can find the expected renamed prims.
+        verifyNames(['Round_1', 'Round_2'])
+
+        # Verify the load rules for each item has not changed.
+        self.assertEqual(loadRules.OnlyRule, stage.GetLoadRules().GetEffectiveRuleForPath(propsSdfPath))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball1SdfRenamedPath))
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball2SdfRenamedPath))
+
+        # Undo both rename commands and re-verify load rules.
+        # Note: each renaming does select + rename, so we need to undo four times.
+        cmds.undo()
+        cmds.undo()
+        cmds.undo()
+        cmds.undo()
+
+        # Verify we can find the expected renamed prims.
+        verifyNames(['Ball_1', 'Ball_2'])
+
+        # Verify the load rules for each item has not changed.
+        self.assertEqual(loadRules.OnlyRule, stage.GetLoadRules().GetEffectiveRuleForPath(propsSdfPath))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball1SdfPath))
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball2SdfPath))
+
+        # Redo both rename commands and re-verify load rules.
+        # Note: each renaming does select + rename, so we need to redo four times.
+        cmds.redo()
+        cmds.redo()
+        cmds.redo()
+        cmds.redo()
+        
+        # Verify we can find the expected renamed prims.
+        verifyNames(['Round_1', 'Round_2'])
+
+        # Verify the load rules for each item has not changed.
+        self.assertEqual(loadRules.OnlyRule, stage.GetLoadRules().GetEffectiveRuleForPath(propsSdfPath))
+        self.assertEqual(loadRules.AllRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball1SdfRenamedPath))
+        self.assertEqual(loadRules.NoneRule, stage.GetLoadRules().GetEffectiveRuleForPath(ball2SdfRenamedPath))
 
     def testRenameRestrictionSameLayerDef(self):
         '''Restrict renaming USD node. Cannot rename a prim defined on another layer.'''
@@ -357,10 +471,18 @@ class RenameTestCase(unittest.TestCase):
         self.assertTrue(usdPrim)
 
         # the new prim name is expected to be "leavesXform1"
-        assert ([x for x in stage.Traverse()] == [stage.GetPrimAtPath("/TreeBase"), 
-            stage.GetPrimAtPath("/TreeBase/leavesXform"), 
-            stage.GetPrimAtPath("/TreeBase/leavesXform/leaves"),
-            stage.GetPrimAtPath("/TreeBase/leavesXform1"),])
+        def verifyNames():
+            assert ([x for x in stage.Traverse()] == [stage.GetPrimAtPath("/TreeBase"), 
+                stage.GetPrimAtPath("/TreeBase/leavesXform"), 
+                stage.GetPrimAtPath("/TreeBase/leavesXform/leaves"),
+                stage.GetPrimAtPath("/TreeBase/leavesXform1"),])
+
+        verifyNames()
+
+        # rename `/TreeBase/leavesXform1` to `/TreeBase/leavesXform1`: should not affect the name.
+        cmds.rename("leavesXform1")
+
+        verifyNames()
 
     def testRenameSpecialCharacter(self):
         # open twoSpheres.ma scene in testSamples
@@ -396,11 +518,64 @@ class RenameTestCase(unittest.TestCase):
         regex = re.compile('[@!#$%^&*()<>?/\|}{~:]')
         self.assertFalse(regex.search(usdPrim.GetName()))
 
-        # prim names are not allowed to start with digits 
+        # rename starting with digits.
         newNameStartingWithDigit = '09123Potato'
+        self.assertFalse(Tf.IsValidIdentifier(newNameStartingWithDigit))
         cmds.rename(newNameStartingWithDigit)
 
-        self.assertFalse(usdPrim.GetName()[0].isdigit())
+        # get the prim
+        pSphereItem = ufe.GlobalSelection.get().front()
+        usdPrim = stage.GetPrimAtPath(str(pSphereItem.path().segments[1]))
+        self.assertTrue(usdPrim)
+
+        # prim names are not allowed to start with digits
+        newValidName = Tf.MakeValidIdentifier(newNameStartingWithDigit)
+        self.assertEqual(usdPrim.GetName(), newValidName)
+
+        # [GitHub #2150] renaming 2 usd items with illegal characters will cause Maya to crash
+        cmds.file(new=True, force=True)
+        psPathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+        x1 = stage.DefinePrim('/Xform1', 'Xform')
+        x2 = stage.DefinePrim('/Xform2', 'Xform')
+        cmds.select('|stage1|stageShape1,/Xform1', replace=True)
+        cmds.rename('test.') # Rename first object with illegal name
+        cmds.select('|stage1|stageShape1,/Xform2', replace=True)
+        cmds.rename('test.') # Rename second object with same illegal name
+
+        # Make sure they got renamed as we expect.
+        cmds.select('|stage1|stageShape1,/test_', '|stage1|stageShape1,/test_1', replace=True)
+        sel = ufe.GlobalSelection.get()
+        self.assertEqual(2, len(sel))
+
+    def testRenameAutoNumber(self):
+        '''Test that a trailing # is converted to a number that makes the name unique.'''
+
+        # Create stage with two xforms.
+        cmds.file(new=True, force=True)
+        psPathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+        stage.DefinePrim('/Xform1', 'Xform')
+        stage.DefinePrim('/Xform2', 'Xform')
+
+        # rename with trailing #
+        cmds.select('|stage1|stageShape1,/Xform1', replace=True)
+        cmds.rename('hello#')
+
+        # The prim # should have been changed to a number: hello1.
+        item = ufe.GlobalSelection.get().front()
+        usdPrim = stage.GetPrimAtPath(str(item.path().segments[1]))
+        self.assertTrue(usdPrim)
+        self.assertEqual(usdPrim.GetName(), "hello1")
+
+        cmds.select('|stage1|stageShape1,/Xform2', replace=True)
+        cmds.rename('hello#')
+
+        # The prim # should have been changed to a unique number: hello2.
+        item = ufe.GlobalSelection.get().front()
+        usdPrim = stage.GetPrimAtPath(str(item.path().segments[1]))
+        self.assertTrue(usdPrim)
+        self.assertEqual(usdPrim.GetName(), "hello2")
 
     def testRenameNotifications(self):
         '''Rename a USD node and test for the UFE notifications.'''
@@ -580,6 +755,128 @@ class RenameTestCase(unittest.TestCase):
 
         compQueryPrimC = CompositionQuery(stage.GetPrimAtPath('/objects_eggplant/geos_cucumber/cube_C'))
         self.assertTrue(list(compQueryPrimC.getData()[1].values()), ['specialize', '/objects_eggplant/geos_cucumber/cube_banana'])
+
+    def testRelationshipAndConnectionUpdatesOnRename(self):
+
+        '''
+        Verify that relationship targets and connection sources are properly
+        updated when renaming.
+        '''
+
+        cmds.file(new=True, force=True)
+        testFile = testUtils.getTestScene("MaterialX", "MtlxUVStreamTest.usda")
+        shapeNode,shapeStage = mayaUtils.createProxyFromFile(testFile)
+
+        def testPaths(self, shapeStage, cubeName):
+            # Test the Material assignment relationship on the Mesh:
+            pCube1Binding = UsdShade.MaterialBindingAPI(shapeStage.GetPrimAtPath('/{}'.format(cubeName)))
+            self.assertEqual(pCube1Binding.GetDirectBinding().GetMaterialPath(), Sdf.Path("/{}/Looks/standardSurface2SG".format(cubeName)))
+
+            # Test one connection inside the Material:
+            mix1Shader = UsdShade.ConnectableAPI(shapeStage.GetPrimAtPath('/{}/Looks/standardSurface2SG/MayaNG_standardSurface2SG/mix1'.format(cubeName)))
+            fgInput = mix1Shader.GetInput("fg")
+            srcConnectAPI = fgInput.GetConnectedSource()[0]
+            self.assertEqual(srcConnectAPI.GetPath(), Sdf.Path("/{}/Looks/standardSurface2SG/MayaNG_standardSurface2SG/ramp1".format(cubeName)))
+
+        testPaths(self, shapeStage, "pCube1")
+
+        # Rename /pCube1 to /banana
+        cubePath = ufe.PathString.path('|stage|stageShape,/pCube1')
+        cubeItem = ufe.Hierarchy.createItem(cubePath)
+        ufe.GlobalSelection.get().append(cubeItem)
+        cmds.rename("banana")
+
+        testPaths(self, shapeStage, "banana")
+
+        cmds.undo()
+
+        testPaths(self, shapeStage, "pCube1")
+
+    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4041', 'Test only available in UFE preview version 0.4.41 and greater')
+    def testUfeRenameCommandAPI(self):
+        '''Test that the rename command can be invoked using the 3 known APIs.'''
+
+        testFile = testUtils.getTestScene('MaterialX', 'BatchOpsTestScene.usda')
+        shapeNode,shapeStage = mayaUtils.createProxyFromFile(testFile)
+
+        # Test NoExecute API:
+        geomItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNotNone(geomItem)
+
+        renameCmd = ufe.SceneItemOps.sceneItemOps(geomItem).renameItemCmdNoExecute(ufe.PathComponent("carotte"))
+        self.assertIsNotNone(renameCmd)
+        renameCmd.execute()
+
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNone(nonExistentItem)
+
+        carotteItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNotNone(carotteItem)
+        self.assertEqual(carotteItem, renameCmd.sceneItem)
+
+        renameCmd.undo()
+
+        geomItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNotNone(geomItem)
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNone(nonExistentItem)
+
+        renameCmd.redo()
+
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNone(nonExistentItem)
+
+        carotteItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNotNone(carotteItem)
+        self.assertEqual(carotteItem, renameCmd.sceneItem)
+
+        renameCmd.undo()
+
+        # Test Exec but undoable API:
+        geomItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNotNone(geomItem)
+
+        renameCmd = ufe.SceneItemOps.sceneItemOps(geomItem).renameItemCmd(ufe.PathComponent("carotte"))
+        self.assertIsNotNone(renameCmd)
+
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNone(nonExistentItem)
+
+        carotteItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNotNone(carotteItem)
+        self.assertEqual(carotteItem, renameCmd.item)
+
+        renameCmd.undoableCommand.undo()
+
+        geomItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNotNone(geomItem)
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNone(nonExistentItem)
+
+        renameCmd.undoableCommand.redo()
+
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNone(nonExistentItem)
+
+        carotteItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNotNone(carotteItem)
+        self.assertEqual(carotteItem, renameCmd.item)
+
+        renameCmd.undoableCommand.undo()
+
+        # Test non-undoable API:
+        geomItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNotNone(geomItem)
+
+        renamedItem = ufe.SceneItemOps.sceneItemOps(geomItem).renameItem(ufe.PathComponent("carotte"))
+        self.assertIsNotNone(renameCmd)
+
+        nonExistentItem = ufeUtils.createUfeSceneItem(shapeNode, '/pPlane1')
+        self.assertIsNone(nonExistentItem)
+
+        carotteItem = ufeUtils.createUfeSceneItem(shapeNode, '/carotte')
+        self.assertIsNotNone(carotteItem)
+        self.assertEqual(carotteItem, renamedItem)
 
 
 if __name__ == '__main__':

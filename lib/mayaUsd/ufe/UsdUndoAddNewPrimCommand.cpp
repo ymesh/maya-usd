@@ -16,10 +16,13 @@
 #include "UsdUndoAddNewPrimCommand.h"
 
 #include "private/UfeNotifGuard.h"
+#include "private/Utils.h"
 
 #include <mayaUsd/ufe/Global.h>
 #include <mayaUsd/ufe/Utils.h>
 #include <mayaUsd/undo/UsdUndoBlock.h>
+
+#include <ufe/pathString.h>
 
 namespace {
 
@@ -105,6 +108,16 @@ void UsdUndoAddNewPrimCommand::redo()
 
     _undoableItem.redo();
 }
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4032)
+std::string UsdUndoAddNewPrimCommand::commandString() const
+{
+    return std::string("CreatePrim ") + _primToken.GetText() + " "
+        + Ufe::PathString::string(_newUfePath);
+}
+#endif
+#endif
 
 const Ufe::Path& UsdUndoAddNewPrimCommand::newUfePath() const { return _newUfePath; }
 

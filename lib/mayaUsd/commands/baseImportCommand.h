@@ -47,6 +47,7 @@ public:
     static constexpr auto kImportUSDZTexturesFilePathFlag = "itf";
     static constexpr auto kMetadataFlag = "md";
     static constexpr auto kApiSchemaFlag = "api";
+    static constexpr auto kJobContextFlag = "jc";
     static constexpr auto kExcludePrimvarFlag = "epv";
     static constexpr auto kUseAsAnimationCacheFlag = "uac";
     static constexpr auto kImportChaserFlag = "chr";
@@ -63,8 +64,10 @@ public:
     static constexpr auto kFrameRangeFlagLong = "frameRange";
     static constexpr auto kPrimPathFlag = "pp";
     static constexpr auto kPrimPathFlagLong = "primPath";
-    static constexpr auto kVariantFlag = "var";
-    static constexpr auto kVariantFlagLong = "variant";
+    static constexpr auto kRootVariantFlag = "var";
+    static constexpr auto kRootVariantFlagLong = "variant";
+    static constexpr auto kPrimVariantFlag = "pv";
+    static constexpr auto kPrimVariantFlagLong = "primVariant";
     static constexpr auto kVerboseFlag = "v";
     static constexpr auto kVerboseFlagLong = "verbose";
 

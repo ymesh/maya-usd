@@ -23,6 +23,8 @@ import unittest
 from maya import cmds
 from maya import standalone
 
+import mayaUsd.lib as mayaUsdLib
+
 from pxr import Usd
 
 import fixturesUtils
@@ -49,28 +51,30 @@ class testUsdExportStripNamespaces(unittest.TestCase):
 
         node1 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube1" )
         cmds.namespace(add="foo")
-        cmds.namespace(set="foo");
+        cmds.namespace(set="foo")
         node2 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube1" )
-        cmds.namespace(set=":");
+        cmds.namespace(set=":")
 
         usdFilePath = os.path.abspath('UsdExportStripNamespaces_EXPORTED.usda')
 
-        errorRegexp = "Multiple dag nodes map to the same prim path" \
-            ".+|cube1 - |foo:cube1.*"
+        errorRegexp = "(Multiple dag nodes map to the same prim path" \
+            ".+|cube1 - |foo:cube1.*)|(Maya command error)"
 
         with self.assertRaisesRegex(RuntimeError, errorRegexp) as cm:
-            cmds.usdExport(mergeTransformAndShape=True,
-                           selection=False,
-                           stripNamespaces=True,
-                           file=usdFilePath,
-                           shadingMode='none')
+            with mayaUsdLib.DiagnosticBatchContext(0) as bc:
+                cmds.usdExport(mergeTransformAndShape=True,
+                            selection=False,
+                            stripNamespaces=True,
+                            file=usdFilePath,
+                            shadingMode='none')
 
         with self.assertRaisesRegex(RuntimeError,errorRegexp) as cm:
-            cmds.usdExport(mergeTransformAndShape=False,
-                           selection=False,
-                           stripNamespaces=True,
-                           file=usdFilePath,
-                           shadingMode='none')
+            with mayaUsdLib.DiagnosticBatchContext(1000) as bc:
+                cmds.usdExport(mergeTransformAndShape=False,
+                            selection=False,
+                            stripNamespaces=True,
+                            file=usdFilePath,
+                            shadingMode='none')
 
     def testExportWithStripAndMerge(self):
         mayaFilePath = os.path.abspath('UsdExportStripNamespaces.ma')
@@ -80,11 +84,11 @@ class testUsdExportStripNamespaces(unittest.TestCase):
         cmds.namespace(add=":bar")
 
         node1 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube1" )
-        cmds.namespace(set=":foo");
+        cmds.namespace(set=":foo")
         node2 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube2" )
-        cmds.namespace(set=":bar");
+        cmds.namespace(set=":bar")
         node3 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube3" )
-        cmds.namespace(set=":");
+        cmds.namespace(set=":")
 
         usdFilePath = os.path.abspath('UsdExportStripNamespaces_EXPORTED.usda')
 
@@ -111,11 +115,11 @@ class testUsdExportStripNamespaces(unittest.TestCase):
         cmds.namespace(add=":bar")
 
         node1 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube1" )
-        cmds.namespace(set=":foo");
+        cmds.namespace(set=":foo")
         node2 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube2" )
-        cmds.namespace(set=":bar");
+        cmds.namespace(set=":bar")
         node3 = cmds.polyCube( sx=5, sy=5, sz=5, name="cube3" )
-        cmds.namespace(set=":");
+        cmds.namespace(set=":")
 
         usdFilePath = os.path.abspath('UsdExportStripNamespaces_EXPORTED.usda')
 

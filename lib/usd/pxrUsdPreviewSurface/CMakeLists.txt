@@ -30,6 +30,7 @@ add_library(${TARGET_NAME} SHARED)
 # -----------------------------------------------------------------------------
 target_sources(${TARGET_NAME} 
     PRIVATE
+        cpvColor.cpp
         usdPreviewSurface.cpp
         usdPreviewSurfacePlugin.cpp
         usdPreviewSurfaceReader.cpp
@@ -105,6 +106,10 @@ endif()
 #------------------------------------------------------------------------------
 # install
 #------------------------------------------------------------------------------
+install(FILES api.h usdPreviewSurface.h usdPreviewSurfacePlugin.h
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/include/${TARGET_NAME}
+)
+
 install(
     TARGETS ${TARGET_NAME}
     LIBRARY

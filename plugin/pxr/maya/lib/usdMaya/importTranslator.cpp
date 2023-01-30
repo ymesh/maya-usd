@@ -29,6 +29,7 @@
 #include <maya/MStringArray.h>
 
 #include <map>
+#include <mutex>
 #include <string>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -80,7 +81,7 @@ MStatus UsdMayaImportTranslator::reader(
                 timeInterval.SetMax(theOption[1].asDouble());
             } else {
                 userArgs[argName] = UsdMayaUtil::ParseArgumentValue(
-                    argName, theOption[1].asChar(), UsdMayaJobImportArgs::GetDefaultDictionary());
+                    argName, theOption[1].asChar(), UsdMayaJobImportArgs::GetGuideDictionary());
             }
         }
     }

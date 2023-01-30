@@ -43,6 +43,8 @@
 #include <maya/MObjectHandle.h>
 #include <maya/MString.h>
 
+#include <algorithm>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
@@ -53,6 +55,12 @@ void _nodeAdded(MObject& obj, void* clientData)
     // dag will be empty and not initialized properly.
     auto* delegate = reinterpret_cast<HdMayaSceneDelegate*>(clientData);
     delegate->NodeAdded(obj);
+}
+
+void _nodeRemoved(MObject& obj, void* clientData)
+{
+    auto* delegate = reinterpret_cast<HdMayaSceneDelegate*>(clientData);
+    delegate->NodeRemoved(obj);
 }
 
 const MString defaultLightSet("defaultLightSet");
@@ -225,6 +233,10 @@ void HdMayaSceneDelegate::Populate()
     }
     MStatus status;
     auto    id = MDGMessage::addNodeAddedCallback(_nodeAdded, "dagNode", this, &status);
+    if (status) {
+        _callbacks.push_back(id);
+    }
+    id = MDGMessage::addNodeRemovedCallback(_nodeRemoved, "dagNode", this, &status);
     if (status) {
         _callbacks.push_back(id);
     }
@@ -552,6 +564,15 @@ void HdMayaSceneDelegate::InsertDag(const MDagPath& dag)
         return;
     }
 
+    // Skip UFE nodes coming from USD runtime
+    // Those will be handled by USD Imaging delegate
+    MStatus              status;
+    static const MString ufeRuntimeStr = "ufeRuntime";
+    MPlug                ufeRuntimePlug = dagNode.findPlug(ufeRuntimeStr, false, &status);
+    if ((status == MS::kSuccess) && ufeRuntimePlug.asString() == "USD") {
+        return;
+    }
+
     // Custom lights don't have MFn::kLight.
     if (GetLightsEnabled()) {
         if (Create(dag, HdMayaAdapterRegistry::GetLightAdapterCreator(dag), _lightAdapters, true))
@@ -585,6 +606,13 @@ void HdMayaSceneDelegate::InsertDag(const MDagPath& dag)
 }
 
 void HdMayaSceneDelegate::NodeAdded(const MObject& obj) { _addedNodes.push_back(obj); }
+
+void HdMayaSceneDelegate::NodeRemoved(const MObject& obj)
+{
+    const auto newEnd = std::remove_if(
+        _addedNodes.begin(), _addedNodes.end(), [&obj](const auto& item) { return item == obj; });
+    _addedNodes.erase(newEnd, _addedNodes.end());
+}
 
 void HdMayaSceneDelegate::UpdateLightVisibility(const MDagPath& dag)
 {
@@ -963,6 +991,13 @@ HdMayaSceneDelegate::GetInstanceIndices(const SdfPath& instancerId, const SdfPat
         },
         _shapeAdapters);
 }
+
+#if defined(HD_API_VERSION) && HD_API_VERSION >= 39
+SdfPathVector HdMayaSceneDelegate::GetInstancerPrototypes(SdfPath const& instancerId)
+{
+    return { instancerId.GetPrimPath() };
+}
+#endif
 
 #if defined(HD_API_VERSION) && HD_API_VERSION >= 36
 SdfPath HdMayaSceneDelegate::GetInstancerId(const SdfPath& primId)

@@ -18,6 +18,7 @@
 #include <mayaUsd/base/debugCodes.h>
 #include <mayaUsd/fileio/functorPrimWriter.h>
 #include <mayaUsd/fileio/registryHelper.h>
+#include <mayaUsd/fileio/shading/shadingModeRegistry.h>
 
 #include <pxr/base/tf/debug.h>
 #include <pxr/base/tf/diagnostic.h>
@@ -58,6 +59,10 @@ _Registry::const_iterator _Find(const TfToken& usdInfoId, const UsdMayaJobExport
 {
     using ContextSupport = UsdMayaShaderWriter::ContextSupport;
 
+    TfToken    conversion = exportArgs.convertMaterialsTo;
+    const bool noFallback
+        = UsdMayaShadingModeRegistry::GetMaterialConversionInfo(conversion).noFallbackExport;
+
     _Registry::const_iterator ret = _reg.cend();
     _Registry::const_iterator first, last;
     std::tie(first, last) = _reg.equal_range(usdInfoId);
@@ -66,7 +71,7 @@ _Registry::const_iterator _Find(const TfToken& usdInfoId, const UsdMayaJobExport
         if (support == ContextSupport::Supported) {
             ret = first;
             break;
-        } else if (support == ContextSupport::Fallback && ret == _reg.end()) {
+        } else if (!noFallback && support == ContextSupport::Fallback && ret == _reg.end()) {
             ret = first;
         }
         ++first;
@@ -80,7 +85,8 @@ _Registry::const_iterator _Find(const TfToken& usdInfoId, const UsdMayaJobExport
 void UsdMayaShaderWriterRegistry::Register(
     const TfToken&                                  mayaTypeName,
     UsdMayaShaderWriterRegistry::ContextPredicateFn pred,
-    UsdMayaShaderWriterRegistry::WriterFactoryFn    fn)
+    UsdMayaShaderWriterRegistry::WriterFactoryFn    fn,
+    bool                                            fromPython)
 {
     int index = _indexCounter++;
     TF_DEBUG(PXRUSDMAYA_REGISTRY)
@@ -93,16 +99,18 @@ void UsdMayaShaderWriterRegistry::Register(
 
     // The unloader uses the index to know which entry to erase when there are
     // more than one for the same mayaTypeName.
-    UsdMaya_RegistryHelper::AddUnloader([mayaTypeName, index]() {
-        _Registry::const_iterator it, itEnd;
-        std::tie(it, itEnd) = _reg.equal_range(mayaTypeName);
-        for (; it != itEnd; ++it) {
-            if (it->second._index == index) {
-                _reg.erase(it);
-                break;
+    UsdMaya_RegistryHelper::AddUnloader(
+        [mayaTypeName, index]() {
+            _Registry::const_iterator it, itEnd;
+            std::tie(it, itEnd) = _reg.equal_range(mayaTypeName);
+            for (; it != itEnd; ++it) {
+                if (it->second._index == index) {
+                    _reg.erase(it);
+                    break;
+                }
             }
-        }
-    });
+        },
+        fromPython);
 }
 
 /* static */

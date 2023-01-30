@@ -18,22 +18,29 @@
 
 #include <pxr/pxr.h>
 #include <pxr/usd/usd/prim.h>
-#include <pxr/usd/usdGeom/scope.h>
-#include <pxr/usd/usdShade/connectableAPI.h>
+#include <pxr/usd/usdShade/material.h>
 
 #include <maya/MObject.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+static bool _IsShadingNode(const UsdPrim& prim)
+{
+    // Note, UsdShadeShader prims are used in other contexts that aren't just
+    // surface shading, so we just look for UsdShadeMaterial nodes.
+    return prim.IsA<UsdShadeMaterial>();
+}
+
 PXRUSDMAYA_DEFINE_READER(UsdGeomScope, args, context)
 {
     const UsdPrim& usdPrim = args.GetUsdPrim();
 
-    // If this scope contains only UsdShade nodes, just skip.
+    // If this scope contains only "shading" nodes (as in the "Looks" or
+    // "Material" scopes that is often in assets), just skip.
     bool hasShadingData = false;
     bool hasNonShadingData = false;
     for (const auto& child : usdPrim.GetChildren()) {
-        if (UsdShadeConnectableAPI(child)) {
+        if (_IsShadingNode(child)) {
             hasShadingData = true;
         } else {
             hasNonShadingData = true;
@@ -44,7 +51,7 @@ PXRUSDMAYA_DEFINE_READER(UsdGeomScope, args, context)
         return false;
     }
 
-    MObject parentNode = context->GetMayaNode(usdPrim.GetPath().GetParentPath(), true);
+    MObject parentNode = context.GetMayaNode(usdPrim.GetPath().GetParentPath(), true);
 
     MStatus status;
     MObject mayaNode;
@@ -53,7 +60,7 @@ PXRUSDMAYA_DEFINE_READER(UsdGeomScope, args, context)
         parentNode,
         /*importTypeName*/ true,
         args,
-        context,
+        &context,
         &status,
         &mayaNode);
 }

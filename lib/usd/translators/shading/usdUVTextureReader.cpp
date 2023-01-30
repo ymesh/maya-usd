@@ -59,7 +59,7 @@ class PxrMayaUsdUVTexture_Reader : public UsdMayaShaderReader
 public:
     PxrMayaUsdUVTexture_Reader(const UsdMayaPrimReaderArgs&);
 
-    bool Read(UsdMayaPrimReaderContext* context) override;
+    bool Read(UsdMayaPrimReaderContext& context) override;
 
     TfToken GetMayaNameForUsdAttrName(const TfToken& usdAttrName) const override;
 };
@@ -72,7 +72,7 @@ PxrMayaUsdUVTexture_Reader::PxrMayaUsdUVTexture_Reader(const UsdMayaPrimReaderAr
 }
 
 /* virtual */
-bool PxrMayaUsdUVTexture_Reader::Read(UsdMayaPrimReaderContext* context)
+bool PxrMayaUsdUVTexture_Reader::Read(UsdMayaPrimReaderContext& context)
 {
     const auto&    prim = _GetArgs().GetUsdPrim();
     UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -90,7 +90,7 @@ bool PxrMayaUsdUVTexture_Reader::Read(UsdMayaPrimReaderContext* context)
               &status,
               &mayaObject)
           && depFn.setObject(mayaObject))) {
-        // we need to make sure assumes those types are loaded..
+        // we need to make sure those types are loaded..
         TF_RUNTIME_ERROR(
             "Could not create node of type '%s' for shader '%s'.\n",
             TrMayaTokens->file.GetText(),
@@ -98,7 +98,7 @@ bool PxrMayaUsdUVTexture_Reader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
 
     // Create place2dTexture:
     MObject           uvObj = UsdMayaShadingUtil::CreatePlace2dTextureAndConnectTexture(mayaObject);

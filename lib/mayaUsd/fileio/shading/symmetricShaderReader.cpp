@@ -37,16 +37,13 @@
 #include <pxr/usd/usdShade/utils.h>
 
 #include <maya/MFnDependencyNode.h>
-#include <maya/MGlobal.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 #include <maya/MStatus.h>
 #include <maya/MString.h>
-#include <maya/MStringArray.h>
 
 #include <string>
 #include <utility>
-#include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -62,7 +59,8 @@ TF_DEFINE_PRIVATE_TOKENS(
 void UsdMayaSymmetricShaderReader::RegisterReader(
     const TfToken& usdShaderId,
     const TfToken& mayaNodeTypeName,
-    const TfToken& materialConversion)
+    const TfToken& materialConversion,
+    bool           fromPython)
 {
     UsdMayaShaderReaderRegistry::Register(
         usdShaderId,
@@ -71,7 +69,8 @@ void UsdMayaSymmetricShaderReader::RegisterReader(
         },
         [mayaNodeTypeName](const UsdMayaPrimReaderArgs& readerArgs) {
             return std::make_shared<UsdMayaSymmetricShaderReader>(readerArgs, mayaNodeTypeName);
-        });
+        },
+        fromPython);
 }
 
 /* static */
@@ -88,63 +87,18 @@ UsdMayaShaderReader::ContextSupport UsdMayaSymmetricShaderReader::CanImport(
     return ContextSupport::Unsupported;
 }
 
-static UsdMayaShadingNodeType
-_ComputeShadingNodeTypeForMayaTypeName(const TfToken& mayaNodeTypeName)
-{
-    // Use NonShading as a fallback.
-    UsdMayaShadingNodeType shadingNodeType = UsdMayaShadingNodeType::NonShading;
-
-    MStatus status;
-    MString cmd;
-    status = cmd.format("getClassification ^1s", mayaNodeTypeName.GetText());
-    CHECK_MSTATUS_AND_RETURN(status, shadingNodeType);
-
-    MStringArray compoundClassifications;
-    status = MGlobal::executeCommand(cmd, compoundClassifications, false, false);
-    CHECK_MSTATUS_AND_RETURN(status, shadingNodeType);
-
-    static const std::vector<std::pair<std::string, UsdMayaShadingNodeType>> _classificationsToTypes
-        = { { "texture/", UsdMayaShadingNodeType::Texture },
-            { "utility/", UsdMayaShadingNodeType::Utility },
-            { "shader/", UsdMayaShadingNodeType::Shader } };
-
-    // The docs for getClassification() are pretty confusing. You'd think that
-    // the string array returned would give you each "classification", but
-    // instead, it's a list of "single compound classification string by
-    // joining the individual classifications with ':'".
-
-    // Loop over the compoundClassifications, though I believe
-    // compoundClassifications will always have size 0 or 1.
-#if MAYA_API_VERSION >= 20190000
-    for (const MString& compoundClassification : compoundClassifications) {
-#else
-    for (unsigned int i = 0u; i < compoundClassifications.length(); ++i) {
-        const MString& compoundClassification = compoundClassifications[i];
-#endif
-        const std::string compoundClassificationStr(compoundClassification.asChar());
-        for (const std::string& classification : TfStringSplit(compoundClassificationStr, ":")) {
-            for (const auto& classPrefixAndType : _classificationsToTypes) {
-                if (TfStringStartsWith(classification, classPrefixAndType.first)) {
-                    return classPrefixAndType.second;
-                }
-            }
-        }
-    }
-
-    return shadingNodeType;
-}
-
 UsdMayaSymmetricShaderReader::UsdMayaSymmetricShaderReader(
     const UsdMayaPrimReaderArgs& readerArgs,
     const TfToken&               mayaNodeTypeName)
     : UsdMayaShaderReader(readerArgs)
     , _mayaNodeTypeName(mayaNodeTypeName)
-    , _mayaShadingNodeType(_ComputeShadingNodeTypeForMayaTypeName(mayaNodeTypeName))
+    , _mayaShadingNodeType(
+          UsdMayaTranslatorUtil::ComputeShadingNodeTypeForMayaTypeName(mayaNodeTypeName))
 {
 }
 
 /* override */
-bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext* context)
+bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext& context)
 {
     const UsdPrim&       prim = _GetArgs().GetUsdPrim();
     const UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -175,7 +129,7 @@ bool UsdMayaSymmetricShaderReader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
 
     for (const UsdShadeInput& input : shaderSchema.GetInputs()) {
         const UsdAttribute& usdAttr = input.GetAttr();

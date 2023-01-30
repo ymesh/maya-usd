@@ -20,6 +20,8 @@
 #include "private/UfeNotifGuard.h"
 #include "private/Utils.h"
 
+#include <mayaUsd/utils/editRouter.h>
+#include <mayaUsd/utils/loadRules.h>
 #include <mayaUsdUtils/util.h>
 
 #include <pxr/base/tf/token.h>
@@ -27,8 +29,12 @@
 #include <pxr/usd/usd/editContext.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/gprim.h>
+#include <pxr/usd/usdShade/material.h>
+#include <pxr/usd/usdShade/nodeGraph.h>
+#include <pxr/usd/usdShade/shader.h>
 
 #include <ufe/log.h>
+#include <ufe/pathString.h>
 #include <ufe/scene.h>
 #include <ufe/sceneNotification.h>
 
@@ -59,6 +65,7 @@ UsdUndoInsertChildCommand::UsdUndoInsertChildCommand(
     : Ufe::InsertChildCommand()
     , _ufeDstItem(nullptr)
     , _ufeSrcPath(child->path())
+    , _ufeParentPath(parent->path())
     , _usdSrcPath(child->prim().GetPath())
 {
     const auto& childPrim = child->prim();
@@ -76,30 +83,68 @@ UsdUndoInsertChildCommand::UsdUndoInsertChildCommand(
         throw std::runtime_error(err.c_str());
     }
 
+    // UsdShadeShader can only have UsdShadeNodeGraph and UsdShadeMaterial as parent.
+    if (childPrim.IsA<UsdShadeShader>() && !parentPrim.IsA<UsdShadeNodeGraph>()) {
+        std::string err = TfStringPrintf(
+            "Parenting Shader prim [%s] under %s prim [%s] is not allowed. "
+            "Shader prims can only be parented under NodeGraphs and Materials.",
+            childPrim.GetName().GetString().c_str(),
+            parentPrim.GetTypeName().GetString().c_str(),
+            parentPrim.GetName().GetString().c_str());
+        throw std::runtime_error(err.c_str());
+    }
+
+    // UsdShadeNodeGraph can only have a UsdShadeNodeGraph and UsdShadeMaterial as parent.
+    if (childPrim.IsA<UsdShadeNodeGraph>() && !childPrim.IsA<UsdShadeMaterial>()
+        && !parentPrim.IsA<UsdShadeNodeGraph>()) {
+        std::string err = TfStringPrintf(
+            "Parenting NodeGraph prim [%s] under %s prim [%s] is not allowed. "
+            "NodeGraph prims can only be parented under NodeGraphs and Materials.",
+            childPrim.GetName().GetString().c_str(),
+            parentPrim.GetTypeName().GetString().c_str(),
+            parentPrim.GetName().GetString().c_str());
+        throw std::runtime_error(err.c_str());
+    }
+
+    // UsdShadeMaterial cannot have UsdShadeShader, UsdShadeNodeGraph or UsdShadeMaterial as parent.
+    if (childPrim.IsA<UsdShadeMaterial>()
+        && (parentPrim.IsA<UsdShadeShader>() || parentPrim.IsA<UsdShadeNodeGraph>())) {
+        std::string err = TfStringPrintf(
+            "Parenting Material prim [%s] under %s prim [%s] is not allowed.",
+            childPrim.GetName().GetString().c_str(),
+            parentPrim.GetTypeName().GetString().c_str(),
+            parentPrim.GetName().GetString().c_str());
+        throw std::runtime_error(err.c_str());
+    }
+
+    // Reparenting directly under an instance prim is disallowed
+    if (parentPrim.IsInstance()) {
+        std::string err = TfStringPrintf(
+            "Parenting geometric prim [%s] under instance prim [%s] is not allowed.",
+            childPrim.GetName().GetString().c_str(),
+            parentPrim.GetName().GetString().c_str());
+        throw std::runtime_error(err.c_str());
+    }
+
     // Apply restriction rules
     ufe::applyCommandRestriction(childPrim, "reparent");
     ufe::applyCommandRestriction(parentPrim, "reparent");
 
-    // First, check if we need to rename the child.
-    const auto childName = uniqueChildName(parent->prim(), child->path().back().string());
-
-    // Create a new segment if parent and child are in different run-times.
-    // parenting a USD node to the proxy shape node implies two different run-times
-    auto cRtId = child->path().runTimeId();
-    if (parent->path().runTimeId() == cRtId) {
-        _ufeDstPath = parent->path() + childName;
-    } else {
-        auto cSep = child->path().getSegments().back().separator();
-        _ufeDstPath = parent->path() + Ufe::PathSegment(Ufe::PathComponent(childName), cRtId, cSep);
-    }
-    _usdDstPath = parentPrim.GetPath().AppendChild(TfToken(childName));
-
     _childLayer = childPrim.GetStage()->GetEditTarget().GetLayer();
-
-    _parentLayer = parentPrim.GetStage()->GetEditTarget().GetLayer();
+    _parentLayer = getEditRouterLayer(PXR_NS::TfToken("parent"), parentPrim);
 }
 
 UsdUndoInsertChildCommand::~UsdUndoInsertChildCommand() { }
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#if (UFE_PREVIEW_VERSION_NUM >= 4032)
+std::string UsdUndoInsertChildCommand::commandString() const
+{
+    return std::string("InsertChild ") + Ufe::PathString::string(_ufeSrcPath) + " "
+        + Ufe::PathString::string(_ufeParentPath);
+}
+#endif
+#endif
 
 /*static*/
 UsdUndoInsertChildCommand::Ptr UsdUndoInsertChildCommand::create(
@@ -115,21 +160,47 @@ UsdUndoInsertChildCommand::Ptr UsdUndoInsertChildCommand::create(
     if (parent->path().startsWith(child->path())) {
         return nullptr;
     }
+
     return std::make_shared<MakeSharedEnabler<UsdUndoInsertChildCommand>>(parent, child, pos);
 }
 
 bool UsdUndoInsertChildCommand::insertChildRedo()
 {
+    if (_usdDstPath.IsEmpty()) {
+        const auto& parentPrim = ufePathToPrim(_ufeParentPath);
+
+        // First, check if we need to rename the child.
+        const auto childName = uniqueChildName(parentPrim, _ufeSrcPath.back().string());
+
+        // Create a new segment if parent and child are in different run-times.
+        // parenting a USD node to the proxy shape node implies two different run-times
+        auto cRtId = _ufeSrcPath.runTimeId();
+        if (_ufeParentPath.runTimeId() == cRtId) {
+            _ufeDstPath = _ufeParentPath + childName;
+        } else {
+            auto cSep = _ufeSrcPath.getSegments().back().separator();
+            _ufeDstPath
+                = _ufeParentPath + Ufe::PathSegment(Ufe::PathComponent(childName), cRtId, cSep);
+        }
+        _usdDstPath = parentPrim.GetPath().AppendChild(TfToken(childName));
+    }
+
+    // we shouldn't rely on UsdSceneItem to access the UsdPrim since
+    // it could be stale. Instead we should get the USDPrim from the Ufe::Path
+    const auto& usdSrcPrim = ufePathToPrim(_ufeSrcPath);
+    auto        stage = usdSrcPrim.GetStage();
+
+    // Make sure the load state of the reparented prim will be preserved.
+    // We copy all rules that applied to it specifically and remove the rules
+    // that applied to it specifically.
+    duplicateLoadRules(*stage, _usdSrcPath, _usdDstPath);
+    removeRulesForPath(*stage, _usdSrcPath);
+
     bool status = SdfCopySpec(_childLayer, _usdSrcPath, _parentLayer, _usdDstPath);
     if (status) {
         // remove all scene description for the given path and
         // its subtree in the current UsdEditTarget
         {
-            // we shouldn't rely on UsdSceneItem to access the UsdPrim since
-            // it could be stale. Instead we should get the USDPrim from the Ufe::Path
-            const auto& usdSrcPrim = ufePathToPrim(_ufeSrcPath);
-
-            auto           stage = usdSrcPrim.GetStage();
             UsdEditContext ctx(stage, _childLayer);
             status = stage->RemovePrim(_usdSrcPath);
         }
@@ -149,16 +220,22 @@ bool UsdUndoInsertChildCommand::insertChildRedo()
 
 bool UsdUndoInsertChildCommand::insertChildUndo()
 {
+    // we shouldn't rely on UsdSceneItem to access the UsdPrim since
+    // it could be stale. Instead we should get the USDPrim from the Ufe::Path
+    const auto& usdDstPrim = ufePathToPrim(_ufeDstPath);
+    auto        stage = usdDstPrim.GetStage();
+
+    // Make sure the load state of the reparented prim will be preserved.
+    // We copy all rules that applied to it specifically and remove the rules
+    // that applied to it specifically.
+    duplicateLoadRules(*stage, _usdDstPath, _usdSrcPath);
+    removeRulesForPath(*stage, _usdDstPath);
+
     bool status = SdfCopySpec(_parentLayer, _usdDstPath, _childLayer, _usdSrcPath);
     if (status) {
         // remove all scene description for the given path and
         // its subtree in the current UsdEditTarget
         {
-            // we shouldn't rely on UsdSceneItem to access the UsdPrim since
-            // it could be stale. Instead we should get the USDPrim from the Ufe::Path
-            const auto& usdDstPrim = ufePathToPrim(_ufeDstPath);
-
-            auto           stage = usdDstPrim.GetStage();
             UsdEditContext ctx(stage, _parentLayer);
             status = stage->RemovePrim(_usdDstPath);
         }

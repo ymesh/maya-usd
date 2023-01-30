@@ -1,4 +1,4 @@
-// Copyright 2020 Autodesk
+// Copyright 2022 Autodesk
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -110,6 +110,24 @@ proc string mayaUSD_getSelectionKind() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// mayaUSD_setPointInstancesPickMode
+// Helper function to set the point instances pick mode.
+global proc mayaUSD_setPointInstancesPickMode(string $mode) {
+    optionVar -stringValue "mayaUsd_PointInstancesPickMode" $mode;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// mayaUSD_getPointInstancesPickMode
+// Helper function to get the point instances pick mode.
+proc string mayaUSD_getPointInstancesPickMode() {
+    string $mode = "";
+    if (`optionVar -exists "mayaUsd_PointInstancesPickMode"`) {
+        $mode = `optionVar -q "mayaUsd_PointInstancesPickMode"`;
+    }
+    return $mode;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // mayaUSD_isSelectionKindValid
 // return true if the current selection kind is valid
 proc int mayaUSD_isSelectionKindValid() {
@@ -179,44 +197,77 @@ proc initRuntimeCommands() {
             mayaUsdSelectKindNone;
     }
     if (!`runTimeCommand -exists mayaUsdSelectKindModel`) {
+        string $lbl = capitalizeString(`python "from pxr import Kind; Kind.Tokens.model"`);
         runTimeCommand -default true -plugin "mayaUsdPlugin"
-            -label      `python "from pxr import Kind; Kind.Tokens.model"`
+            -label      $lbl
             -annotation `getMayaUsdString("kUSDSelectionModeModelAnn")`
             -category   "Menu items.Maya USD"
             -command    ("mayaUSD_setSelectionKind(\"model\")")
             mayaUsdSelectKindModel; 
     }
     if (!`runTimeCommand -exists mayaUsdSelectKindGroup`) {
+        string $lbl = capitalizeString(`python "from pxr import Kind; Kind.Tokens.group"`);
         runTimeCommand -default true -plugin "mayaUsdPlugin"
-            -label      `python "from pxr import Kind; Kind.Tokens.group"`
+            -label      $lbl
             -annotation `getMayaUsdString("kUSDSelectionModeGroupAnn")`
             -category   "Menu items.Maya USD"
             -command    ("mayaUSD_setSelectionKind(\"group\")")
             mayaUsdSelectKindGroup; 
     }
     if (!`runTimeCommand -exists mayaUsdSelectKindAssembly`) {
+        string $lbl = capitalizeString(`python "from pxr import Kind; Kind.Tokens.assembly"`);
         runTimeCommand -default true -plugin "mayaUsdPlugin"
-            -label      `python "from pxr import Kind; Kind.Tokens.assembly"`
+            -label      $lbl
             -annotation `getMayaUsdString("kUSDSelectionModeAssemblyAnn")`
             -category   "Menu items.Maya USD"
             -command    ("mayaUSD_setSelectionKind(\"assembly\")")
             mayaUsdSelectKindAssembly;
     }
     if (!`runTimeCommand -exists mayaUsdSelectKindComponent`) {
+        string $lbl = capitalizeString(`python "from pxr import Kind; Kind.Tokens.component"`);
         runTimeCommand -default true -plugin "mayaUsdPlugin"
-            -label      `python "from pxr import Kind; Kind.Tokens.component"`
+            -label      $lbl
             -annotation `getMayaUsdString("kUSDSelectionModeComponentAnn")`
             -category   "Menu items.Maya USD"
             -command    ("mayaUSD_setSelectionKind(\"component\")")
             mayaUsdSelectKindComponent; 
     }
     if (!`runTimeCommand -exists mayaUsdSelectKindSubComponent`) {
+        string $lbl = capitalizeString(`python "from pxr import Kind; Kind.Tokens.subcomponent"`);
         runTimeCommand -default true -plugin "mayaUsdPlugin"
-            -label      `python "from pxr import Kind; Kind.Tokens.subcomponent"`
+            -label      $lbl
             -annotation `getMayaUsdString("kUSDSelectionModeSubComponentAnn")`
             -category   "Menu items.Maya USD"
             -command    ("mayaUSD_setSelectionKind(\"subcomponent\")")
             mayaUsdSelectKindSubComponent; 
+    }
+
+    //
+    // runTimeCommand for Point Instances Pick Mode
+    //
+    if (!`runTimeCommand -exists mayaUsdPointInstancesPickMode_PointInstancer`) {
+        runTimeCommand -default true -plugin "mayaUsdPlugin"
+            -label      `getMayaUsdString("kUSDPointInstancesPickMode_PointInstancer")`
+            -annotation `getMayaUsdString("kUSDPointInstancesPickMode_PointInstancerAnn")`
+            -category   "Menu items.Maya USD"
+            -command    ("mayaUSD_setPointInstancesPickMode(\"PointInstancer\")")
+        mayaUsdPointInstancesPickMode_PointInstancer;
+    }
+    if (!`runTimeCommand -exists mayaUsdPointInstancesPickMode_Instances`) {
+        runTimeCommand -default true -plugin "mayaUsdPlugin"
+            -label      `getMayaUsdString("kUSDPointInstancesPickMode_Instances")`
+            -annotation `getMayaUsdString("kUSDPointInstancesPickMode_InstancesAnn")`
+            -category   "Menu items.Maya USD"
+            -command    ("mayaUSD_setPointInstancesPickMode(\"Instances\")")
+        mayaUsdPointInstancesPickMode_Instances;
+    }
+    if (!`runTimeCommand -exists mayaUsdPointInstancesPickMode_Prototypes`) {
+        runTimeCommand -default true -plugin "mayaUsdPlugin"
+            -label      `getMayaUsdString("kUSDPointInstancesPickMode_Prototypes")`
+            -annotation `getMayaUsdString("kUSDPointInstancesPickMode_PrototypesAnn")`
+            -category   "Menu items.Maya USD"
+            -command    ("mayaUSD_setPointInstancesPickMode(\"Prototypes\")")
+        mayaUsdPointInstancesPickMode_Prototypes;
     }
 
     source "mayaUsd_createStageFromFile.mel";
@@ -239,7 +290,7 @@ global proc mayaUsdMenu_createMenuCallback() {
 
     if ($gMayaUsdCreateSubMenu == "") {    
         global string $gMainCreateMenu; // maya's create menu
-
+        
         string $mayaVersion = getMayaMajorVersion();
         // find the insertion point, after the Scene Management separator
         $sceneManagementDivider = findDividerByLabel($gMainCreateMenu, uiRes("m_ModCreateMenu.kCreateSceneMgt"));
@@ -254,17 +305,25 @@ global proc mayaUsdMenu_createMenuCallback() {
             menuItem -runTimeCommand mayaUsdCreateStageWithNewLayer;
             menuItem -runTimeCommand mayaUsdCreateStageFromFile;
             menuItem -runTimeCommand mayaUsdCreateStageFromFileOptions -optionBox true;
+
+            // Important: don't forget to reset the menu parent back to the create menu otherwise
+            //            another menu callback would add items to our menu.
+            setParent -menu ..;
         } else {
             error `getMayaUsdString("kMenuStageCreateMenuError")`;
         }
     }
+
+    removeMenuCallback(`setParent -q -menu`, "mayaUsdMenu_createMenuCallback");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // mayaUsd_updateSelectionKindMenuItem
 // Update the menuItem radio button in the Selection Mode menu
 global proc mayaUsd_updateSelectionKindMenuItem() {
-    string $selectionKind = mayaUSD_getSelectionKind();
+    // Note: we do all string compares as case-insenstive (lowercase)
+    //       as the menu labels are capitalized.
+    string $selectionKind = `tolower(mayaUSD_getSelectionKind())`;
     switch($selectionKind) {
         case "":
             menuItem -e -radioButton on selectKindNone;
@@ -274,8 +333,33 @@ global proc mayaUsd_updateSelectionKindMenuItem() {
             global string $gMayaUsdSelectModeSubMenu;
             $menuItems = `menu -q -itemArray $gMayaUsdSelectModeSubMenu`;
             for($i = 0; $i < size($menuItems); $i++) {
-                $label = `menuItem -q -label $menuItems[$i]`;
-                if($label == $selectionKind) {
+                string $label = `menuItem -q -label $menuItems[$i]`;
+                if(`tolower($label)` == $selectionKind) {
+                    menuItem -e -radioButton on $menuItems[$i];
+                    break;
+                }
+            }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// mayaUsd_updatePointInstancesPickModeMenuItem
+// Update the menu item radio buttons in the Point Instances Pick Mode menu
+global proc mayaUsd_updatePointInstancesPickModeMenuItem() {
+    // Note: we do all string compares as case-insenstive (lowercase)
+    //       as the menu labels are capitalized.
+    string $pickMode = `tolower(mayaUSD_getPointInstancesPickMode())`;
+    switch($pickMode) {
+        case "":
+            menuItem -e -radioButton on pointInstancesPickMode_PointInstancer;
+            break;
+        default:
+            // Enable the menu item based on the label.
+            global string $gMayaUsdSelectModeSubMenu;
+            $menuItems = `menu -q -itemArray $gMayaUsdSelectModeSubMenu`;
+            for($i = 0; $i < size($menuItems); $i++) {
+                string $label = `menuItem -q -label $menuItems[$i]`;
+                if(`tolower($label)` == $pickMode) {
                     menuItem -e -radioButton on $menuItems[$i];
                     break;
                 }
@@ -302,7 +386,7 @@ global proc mayaUsdMenu_selectMenuCallback() {
         string $ann = `getMayaUsdString("kUSDSelectionModeAnn")`;
         $gMayaUsdSelectModeSubMenu = `menuItem -label $label -annotation $ann -subMenu true -tearOff true -version $mayaVersion`;
 
-        $label = `getMayaUsdString("kKind")`;
+        $label = getMayaUsdString("kKinds");
         menuItem -divider true -dividerLabel $label;
         radioMenuItemCollection;
 
@@ -319,28 +403,44 @@ global proc mayaUsdMenu_selectMenuCallback() {
 
         // sort the kinds in alphabetic order
         $allKinds = `sort $allKinds`;
+        string $strFormat = `getMayaUsdString("kUSDSelectionModeCustom")`;
 
         for($i = 0; $i < size($allKinds); $i++) {
-            $currentKind = $allKinds[$i];
-            $index = stringArrayFind($currentKind, 0, $builtInKinds);
+            string $currentKind = $allKinds[$i];
+            int $index = stringArrayFind($currentKind, 0, $builtInKinds);
             if($index == -1) {
-                $strFormat = `getMayaUsdString("kUSDSelectionModeCustom")`;
                 $ann = `format -stringArg $currentKind $strFormat`;
                 menuItem
-                    -label $currentKind
+                    -label `capitalizeString($currentKind)`
                     -command ("mayaUSD_setSelectionKind " + $currentKind)
                     -annotation $ann
                     -radioButton off;
             }
         }
 
+        $label = getMayaUsdString("kPointInstances");
+        menuItem -divider true -dividerLabel $label;
+
+        // Add the default (built-in) point instances pick mode
+        radioMenuItemCollection;
+        menuItem -radioButton on -runTimeCommand ("mayaUsdPointInstancesPickMode_PointInstancer") pointInstancesPickMode_PointInstancer;
+        menuItem -radioButton off -runTimeCommand ("mayaUsdPointInstancesPickMode_Instances") pointInstancesPickMode_Instances;
+        menuItem -radioButton off -runTimeCommand ("mayaUsdPointInstancesPickMode_Prototypes") pointInstancesPickMode_Prototypes;
+
         // make sure the radio button are sync with the option var.
         mayaUsd_updateSelectionKindMenuItem();
+        mayaUsd_updatePointInstancesPickModeMenuItem();
 
-        // Attach a script job to the mayaUsd_SelectionKind optionVar to update the menu item menuItem radio button state.
+        // Important: don't forget to reset the menu parent back to the select menu otherwise
+        //            another menu hook would add items to our menu.
+        setParent -menu ..;
+
+        // Attach a script job to the optionVars to update the menu item menuItem radio button state.
         // This is required because the menu is tearable. So, if the user tear off the menu (menu always visible) we need to
         // update the menu item if the option var change for any reason.
-        // The script job will be delete when the menu is deleted.
+        // The script job will be automatically deleted when the menu is deleted.
+        scriptJob -parent $gMayaUsdSelectModeSubMenu
+            -optionVarChanged "mayaUsd_PointInstancesPickMode" "mayaUsd_updatePointInstancesPickModeMenuItem";
         scriptJob -parent $gMayaUsdSelectModeSubMenu
             -optionVarChanged "mayaUsd_SelectionKind" "mayaUsd_updateSelectionKindMenuItem";
     }
@@ -421,10 +521,12 @@ proc termCreateMenu() {
         deleteUI -mi $gMayaUsdCreateSubMenu;
         $gMayaUsdCreateSubMenu = "";
     }
+    removeMenuCallback($gMainCreateMenu, "mayaUsdMenu_createMenuCallback");
     global string $gMayaUsdOpenUsdLayerEditorMenuItem;
     if ($gMayaUsdOpenUsdLayerEditorMenuItem != "") {
         deleteUI -mi $gMayaUsdOpenUsdLayerEditorMenuItem;
     }
+    removeMenuCallback($gMainCreateMenu, "mayaUsdMenu_windowMenuCallback");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -445,12 +547,15 @@ proc termSelectMenu() {
     if (`menuItem -q -exists $gMayaUsdSelectMenuDivider`) {
         deleteUI -mi $gMayaUsdSelectMenuDivider;
     }
+    global string $gMainSelectMenu; // maya's select menu
+    removeMenuCallback($gMainSelectMenu, "mayaUsdMenu_selectMenuCallback");
 
     // remove our selection mode sub menu
     global string $gMayaUsdSelectModeSubMenu;
     if (`menuItem -q -exists $gMayaUsdSelectModeSubMenu`) {
         deleteUI -mi $gMayaUsdSelectModeSubMenu;
     }
+    removeMenuCallback($gMainSelectMenu, "mayaUsdMenu_selectMenuCallback");
 }
 
 proc initAEShowMenu()
@@ -463,6 +568,238 @@ proc termAEShowMenu()
 {
     string $aeShowMenu = findAEMenu(uiRes("m_showEditor.kShow"));
     removeMenuCallback($aeShowMenu, "mayaUsdMenu_aeShowMenuCallback");
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// initPullMenu
+// Marking menu with USD options for DAG objects
+
+proc string getPulledUsdObject(string $dagObject) {
+    string $root = "";
+    string $pulledDagObject = "";
+    
+    if (`objExists $dagObject`) {
+        // For some reason, outliner will provide a set instead of real
+        // selection when populating the menu under set. We go back to read the
+        // real selection
+        if (size(`ls -set $dagObject`) > 0) {
+            string $selection[] = `ls -sl`;
+            $dagObject = $selection[0];
+        }
+        if (size(`ls -dagObjects $dagObject`) > 0) {
+            for (;;) {
+                string $parents[] = `listRelatives -parent -fullPath $dagObject`;
+                if (size($parents) == 0) {
+                    $root = longNameOf($dagObject);
+                    break;
+                }
+                
+                // Not root, then maybe it's pulled object. Look for "metadata" attribute
+                if (`attributeExists "Pull_UfePath" $dagObject`) {
+                    string $pullAttribute = ( $dagObject + ".Pull_UfePath" );
+                    string $ufePath = `getAttr $pullAttribute`;
+                    if ($ufePath != "") {
+                        $pulledDagObject = $dagObject;
+                    }
+                }
+                
+                $dagObject = $parents[0];
+            }
+        }
+    }
+    
+    if ($root == "|__mayaUsd__" && $pulledDagObject != "") {
+        return $pulledDagObject;
+    }
+    
+    return "";
+}
+
+proc int isObjectSelected(string $obj)
+{
+    if (size($obj)) {
+        string $sel[] = `ls -sl`;
+        return stringArrayContains($obj, $sel);
+    }
+    return 0;
+}
+
+global proc mayaUsdMenu_pushBackToUSD(string $obj)
+{
+    if (!hasPrimUpdater())
+        return;
+
+    if (size($obj) == 0) {
+        string $sel[] = `ls -sl`;
+        if (size($sel)) {
+            $obj = $sel[0];
+        }
+    }
+    if (size($obj)) {
+        string $exportOptions = `python("import mayaUsdMergeToUSDOptions; import mayaUsdOptions; mayaUsdOptions.setAnimateOption('''" + $obj + "''', mayaUsdMergeToUSDOptions.getMergeToUSDOptionsText())")`;
+        mayaUsdMergeToUsd -exportOptions $exportOptions $obj;
+    }
+}
+
+global proc mayaUsdMenu_pushBackToUSDOptions(string $obj)
+{
+    if (!hasPrimUpdater())
+        return;
+
+    if (size($obj) == 0) {
+        string $sel[] = `ls -sl`;
+        if (size($sel)) {
+            $obj = $sel[0];
+        }
+    }
+    if (size($obj)) {
+        python("import mayaUsdMergeToUSDOptions; mayaUsdMergeToUSDOptions.showMergeToUSDOptions('''" + $obj + "''')");
+    }
+}
+
+global proc mayaUsdMenu_duplicateToUSD( string $proxy, string $obj )
+{
+    if (!hasPrimUpdater())
+        return;
+
+    if (size($obj) == 0) {
+        string $sel[] = `ls -sl`;
+        if (size($sel)) {
+            $obj = $sel[0];
+        }
+    }
+    string $objLong[] = `ls -l $obj`;
+    string $proxyLong[] = `ls -l $proxy`;
+    if (size($objLong) && size($proxyLong)) {
+        string $exportOptions = `python("import mayaUsdDuplicateAsMayaDataOptions; import mayaUsdOptions; mayaUsdOptions.setAnimateOption('''" + $obj + "''', mayaUsdDuplicateAsMayaDataOptions.getDuplicateAsMayaDataOptionsText())")`;
+        mayaUsdDuplicate -exportOptions $exportOptions $objLong[0] $proxyLong[0];
+    }
+}
+
+global proc mayaUsdMenu_duplicateAsUsdDataOptions(string $obj)
+{
+    if (!hasPrimUpdater())
+        return;
+
+    python("import mayaUsdDuplicateAsMayaDataOptions; mayaUsdDuplicateAsMayaDataOptions.showDuplicateAsMayaDataOptions()");
+}
+
+global proc mayaUsdMenu_markingMenuCallback( string $obj )
+{
+    if (!hasPrimUpdater())
+        return;
+    
+    string $pulledObject = getPulledUsdObject($obj);
+    if ($pulledObject != "") {
+        string $label = getMayaUsdString("kContextMenuLayerEditor");
+        string $icon = "USD_generic.png";
+        string $layerEditor = `menuItem -label $label -insertAfter "" -image $icon -command ("mayaUsdLayerEditorWindow -proxyShape " + $pulledObject + " mayaUsdLayerEditor")`;
+
+        string $pushback = python("import mayaUsdMergeToUsd; mayaUsdMergeToUsd.createMenuItem('" + $pulledObject + "', '"+ $layerEditor +"')");
+        
+        int $isMayaRef = python("import mayaUsdUtils; mayaUsdUtils.isPulledMayaReference('''" + $pulledObject + "''')");
+
+        if ($isMayaRef) {
+            $label = getMayaUsdString("kMayaRefDiscardEdits");
+            $icon = "discard_edits.png";
+        } else {
+            $label = getMayaUsdString("kMayaDiscardEdits");
+            $icon = "discard_edits.png";
+        }
+        string $pushclear = `menuItem -label $label -insertAfter $pushback -image $icon -command ("mayaUsdDiscardEdits " + $pulledObject)`;
+        
+        menuItem -divider true -insertAfter $pushclear;
+    }
+    else {
+        string $proxyShapes[] = `ls -type mayaUsdProxyShape`;
+        if (size($proxyShapes) > 0) {
+            menuItem -divider true -insertAfter "";
+            menuItem -label `getMayaUsdString("kMayaRefDuplicateAsUsdData")` -subMenu true -insertAfter "";
+            menuItem -divider true -dividerLabel `getMayaUsdString("kMayaRefDuplicateAsUsdDataDiv")`;
+            for ($proxy in $proxyShapes) {
+                menuItem -label $proxy -command ("mayaUsdMenu_duplicateToUSD " + $proxy + " " + $obj);
+            }
+            menuItem -divider true;
+            menuItem -label `getMayaUsdString("kMayaRefDuplicateAsUsdDataOptions")` -command ("mayaUsdMenu_duplicateAsUsdDataOptions " + $obj);
+
+            // Important: don't forget to reset the menu parent back to the context menu otherwise
+            //            another menu hook would add items to our menu.
+            setParent -menu ..;
+        }
+    }
+}
+
+proc initPullMenu()
+{
+    if (!hasPrimUpdater())
+        return;
+
+    callbacks -addCallback mayaUsdMenu_markingMenuCallback -hook addRMBBakingMenuItems -owner mayaUsdPlugin;
+}
+
+proc tearPullMenu()
+{
+    if (!hasPrimUpdater())
+        return;
+
+    callbacks -removeCallback mayaUsdMenu_markingMenuCallback -hook addRMBBakingMenuItems -owner mayaUsdPlugin;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Outliner Popup Menu
+//
+proc initOutlinerPopupMenu()
+{
+    callbacks -addCallback mayaUsdMenu_OutlinerPopupCallback -hook addItemsToOutlinerNodePopupMenu -owner mayaUsdPlugin;
+}
+
+proc termOutlinerPopupMenu()
+{
+    callbacks -removeCallback mayaUsdMenu_OutlinerPopupCallback -hook addItemsToOutlinerNodePopupMenu -owner mayaUsdPlugin;
+}
+
+proc int isMayaUsdProxyShape(string $nodeName)
+{
+    if (size($nodeName)) {
+        // We use inherited here to find the proxy shape base so this will
+        // work on other derived proxy shape types.
+        string $inher[] = `nodeType -inherited $nodeName`;
+        if (stringArrayContains("mayaUsdProxyShapeBase", $inher)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+global proc mayaUsdMenu_OutlinerPopupCallback( string $nodeName )
+{
+    if ((size($nodeName) == 0) || !`objExists $nodeName`) {
+        return;
+    }
+
+    int $isProxyNode = 0;
+    if (`nodeType $nodeName` == "transform") {
+        string $shapes[] = `listRelatives -shapes -fullPath $nodeName`;
+        if (`size($shapes)` > 0) {
+            string $shapeNode = $shapes[0];
+            if (isMayaUsdProxyShape($shapeNode)) {
+                $isProxyNode = 1;
+                if (`exists mayaUsdLayerEditorWindow`) {
+                    string $command = "mayaUsdLayerEditorWindow -proxyShape \"" + $shapeNode + "\" mayaUsdLayerEditor";
+                    menuItem -divider true -insertAfter "";
+                    menuItem -enableCommandRepeat false
+                        -label `getMayaUsdString("kContextMenuLayerEditor")`
+                        -insertAfter ""
+                        -command $command openUsdLayerEditor;
+                }
+            }
+        }
+    }
+
+    // Don't add the "Push..." menu items for the proxy node or the shape.
+    if (!$isProxyNode && !isMayaUsdProxyShape($nodeName)) {
+        mayaUsdMenu_markingMenuCallback($nodeName);
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -482,6 +819,9 @@ global proc mayaUsdMenu_loadui() {
     if(!mayaUSD_isSelectionKindValid()) {
         mayaUsdSelectKindNone();
     }
+
+    initPullMenu();
+    initOutlinerPopupMenu();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -491,6 +831,8 @@ global proc mayaUsdMenu_unloadui() {
     termCreateMenu();
     termSelectMenu();
     termAEShowMenu();
+    tearPullMenu();
+    termOutlinerPopupMenu();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -518,58 +860,60 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
     int $isSessionLayer = `mayaUsdLayerEditorWindow -q -isSessionLayer $panelName`;
     int $isAnonymousLayer = `mayaUsdLayerEditorWindow -q -isAnonymousLayer $panelName`;
     int $needsSaving = `mayaUsdLayerEditorWindow -q -layerNeedsSaving $panelName`;
-    int $singleSelect = `mayaUsdLayerEditorWindow -q -selectionLength $panelName` == 1;  
+    int $singleSelect = `mayaUsdLayerEditorWindow -q -selectionLength $panelName` == 1;
     int $appearsMuted = `mayaUsdLayerEditorWindow -q -layerAppearsMuted $panelName`;
     int $isSubLayer = `mayaUsdLayerEditorWindow -q -isSubLayer $panelName`;
     int $isMuted = `mayaUsdLayerEditorWindow -q -layerIsMuted $panelName`;
-    
+    int $isReadOnly = `mayaUsdLayerEditorWindow -q -layerIsReadOnly $panelName`;
+    int $isIncoming = `mayaUsdLayerEditorWindow -q -isIncomingLayer $panelName`;
+    string $proxyShape = `mayaUsdLayerEditorWindow -q -proxyShape $panelName`;
+
     string $label;
     int $enabled;
 
     if (!$isSessionLayer) {
         if ($isAnonymousLayer)
             $label = getMayaUsdString("kMenuSaveAs");
-        else 
+        else
             $label = getMayaUsdString("kMenuSaveEdits");
         $enabled = $singleSelect && $needsSaving;
         $cmd = makeCommand($panelName, "saveEdits");
         menuItem -label $label -enable $enabled -c $cmd;
-        
-
     }
 
     if (!$isAnonymousLayer) {
         $label = getMayaUsdString("kMenuRevertToFile");
         $cmd = makeCommand($panelName, "discardEdits");
-        menuItem -label $label -c $cmd;
-    }    
+        $enabled = $needsSaving;
+        menuItem -label $label -enable $enabled -c $cmd;
+    }
 
     menuItem -divider 1;
 
     $label = getMayaUsdString("kMenuAddSublayer");
     $cmd = makeCommand($panelName, "addAnonymousSublayer");
-    $enabled = $appearsMuted == 0;
+    $enabled = $appearsMuted == 0 && !$isReadOnly;
     menuItem -label $label -enable $enabled -c $cmd;
 
     $label = getMayaUsdString("kMenuAddParentLayer");
     $cmd = makeCommand($panelName, "addParentLayer");
-    $enabled = $isSubLayer && $appearsMuted == 0;
+    $enabled = $isSubLayer && $appearsMuted == 0 && !$isReadOnly;
     menuItem -label $label -enable $enabled -c $cmd;
 
     $label = getMayaUsdString("kMenuLoadSublayers");
     $cmd = makeCommand($panelName, "loadSubLayers");
-    $enabled = $singleSelect && !$appearsMuted;
+    $enabled = $singleSelect && !$appearsMuted && !$isReadOnly;
     menuItem -label $label -enable $enabled -c $cmd;
 
     menuItem -divider 1;
-    
+
     if ($isSubLayer) {
-        if ($isMuted) 
+        if ($isMuted)
             $label = getMayaUsdString("kMenuUnmute");
         else
             $label = getMayaUsdString("kMenuMute");
         $cmd = makeCommand($panelName, "muteLayer");
-        $enabled = 1;    	
+        $enabled = 1;
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
@@ -585,21 +929,42 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
     $enabled = 1;
     menuItem -label $label -enable $enabled -c $cmd;
 
+    if($isIncoming) {
+        // Find the incoming node from the connections
+        $incoming = `listConnections -s true -d false -c true $proxyShape`;
+        string $incomingNode = "";
+        for($i=0;$i<size($incoming);$i+=2) {
+            $j = $i+1;
+            // The instageData connection wins over StageCatchId so check that first
+            if($incoming[$i] == $proxyShape+".inStageData") {
+                $incomingNode = $incoming[$j];
+            }
+            else if($incomingNode == "" && $incoming[$i] ==  $proxyShape+".stageCacheId") {
+                $incomingNode = $incoming[$j];
+            }
+        }
+        // If we found an incoming node we set the label
+        if($incomingNode != "") {
+            $label = "Select Incoming Node "+$incomingNode;
+            $cmd = "select "+$incomingNode;
+            menuItem -label $label -enable 1 -c $cmd;
+        }
+    }
+
     // if we add any more menus, add a divider
-    if ($isSubLayer || !$isAnonymousLayer) 
+    if ($isSubLayer || !$isAnonymousLayer)
         menuItem -divider 1;
 
     if ($isSubLayer) {
         $label = getMayaUsdString("kMenuRemove");
         $cmd = makeCommand($panelName, "removeSubLayer");
-        $enabled = 1;
+        $enabled = !$isReadOnly;
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
 
     $label = getMayaUsdString("kMenuClear");
     $cmd = makeCommand($panelName, "clearLayer");
-    $enabled = 1;
+    $enabled = !$isReadOnly;
     menuItem -label $label -enable $enabled -c $cmd;
 }
-

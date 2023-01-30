@@ -17,6 +17,7 @@
 
 #include <pxr/base/plug/plugin.h>
 #include <pxr/base/plug/thisPlugin.h>
+#include <pxr/base/tf/envSetting.h>
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/usdImaging/usdImaging/tokens.h>
 
@@ -32,6 +33,13 @@
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
+
+// In a near future, light API v2 will be reactivated in an oncoming PR. Still allow going back to
+// light API V1 in case the results are different enough to cause a regression.
+TF_DEFINE_ENV_SETTING(
+    MAYAUSD_VP2_USE_V1_LIGHT_API,
+    false,
+    "This env flag allows going back to the old shading code based on the V1 light API of Maya.");
 
 TF_DEFINE_PUBLIC_TOKENS(HdVP2ShaderFragmentsTokens, MAYAUSD_CORE_PUBLIC_USD_PREVIEW_SURFACE_TOKENS);
 
@@ -54,6 +62,10 @@ TF_DEFINE_PRIVATE_TOKENS(
     (BasisCurvesLinearFallbackShader)
     (BasisCurvesLinearHull)
 
+    (PointsFallbackCPVShader)
+    (PointsFallbackShader)
+    (PointsGeometry)
+
     (FallbackCPVShader)
     (FallbackShader)
 
@@ -70,14 +82,15 @@ TF_DEFINE_PRIVATE_TOKENS(
     (scaledDiffusePassThrough)
     (scaledSpecularPassThrough)
     (opacityToTransparency)
-    (UsdDrawModeCards)
     (usdPreviewSurfaceLightingAPI1)
     (usdPreviewSurfaceLightingAPI2)
+    (usdPreviewSurfaceLightingAPI3)
     (usdPreviewSurfaceCombiner)
 
     (UsdPrimvarColor)
 
     (UsdUVTexture)
+    (UsdTransform2d)
 
     (UsdPrimvarReader_color)
     (UsdPrimvarReader_float)
@@ -89,6 +102,10 @@ TF_DEFINE_PRIVATE_TOKENS(
     // Graph:
     (UsdPreviewSurfaceLightAPI1)
     (UsdPreviewSurfaceLightAPI2)
+    (UsdPreviewSurfaceLightAPI3)
+
+    // XXX Deprecated in PXR_VERSION > 2211
+    (UsdDrawModeCards)
 );
 // clang-format on
 
@@ -106,6 +123,8 @@ static const TfTokenVector _FragmentNames = { _tokens->BasisCurvesCubicColorDoma
 
                                               _tokens->UsdPrimvarColor,
 
+                                              _tokens->UsdTransform2d,
+
                                               _tokens->UsdPrimvarReader_color,
                                               _tokens->UsdPrimvarReader_float,
                                               _tokens->UsdPrimvarReader_float2,
@@ -122,19 +141,25 @@ static const TfTokenVector _FragmentNames = { _tokens->BasisCurvesCubicColorDoma
 
                                               _tokens->NwFaceCameraIfNAN,
 
+                                              _tokens->PointsGeometry,
+
                                               _tokens->lightingContributions,
                                               _tokens->scaledDiffusePassThrough,
                                               _tokens->scaledSpecularPassThrough,
                                               _tokens->opacityToTransparency,
+#if PXR_VERSION <= 2211
                                               _tokens->UsdDrawModeCards,
+#endif
                                               _tokens->usdPreviewSurfaceLightingAPI1,
                                               _tokens->usdPreviewSurfaceLightingAPI2,
+                                              _tokens->usdPreviewSurfaceLightingAPI3,
                                               _tokens->usdPreviewSurfaceCombiner };
 
 static const TfTokenVector _FragmentGraphNames
     = { _tokens->BasisCurvesCubicCPVShader,  _tokens->BasisCurvesCubicFallbackShader,
         _tokens->BasisCurvesLinearCPVShader, _tokens->BasisCurvesLinearFallbackShader,
-        _tokens->FallbackCPVShader,          _tokens->FallbackShader };
+        _tokens->FallbackCPVShader,          _tokens->FallbackShader,
+        _tokens->PointsFallbackCPVShader,    _tokens->PointsFallbackShader };
 
 namespace {
 //! Get the file path of the shader fragment.
@@ -214,7 +239,12 @@ MString HdVP2ShaderFragments::getUsdUVTextureFragmentName(const MString& working
         return it->second.c_str();
     }
 
-    // Default to linrec 709, which only does the gamma correction part from sRGB.
+    MGlobal::displayError(TfStringPrintf(
+                              "Could not find a UsdUVTexture shader that outputs to working color "
+                              "space %s. Will default to scene-linear Rec 709/sRGB conversion.",
+                              workingColorSpace.asChar())
+                              .c_str());
+
     return "UsdUVTexture_to_linrec709";
 }
 
@@ -321,8 +351,22 @@ MStatus HdVP2ShaderFragments::registerFragments()
     // Register a UsdPreviewSurface shader graph:
     {
         const MString fragGraphName(HdVP2ShaderFragmentsTokens->SurfaceFragmentGraphName.GetText());
-#ifdef MAYA_LIGHTAPI_VERSION_2
-        const MString fragGraphFileName(_tokens->UsdPreviewSurfaceLightAPI2.GetText());
+#if MAYA_LIGHTAPI_VERSION_2 == 3
+        const bool    useV1Lighting = TfGetEnvSetting(MAYAUSD_VP2_USE_V1_LIGHT_API);
+        const MString fragGraphFileName(
+            useV1Lighting ? _tokens->UsdPreviewSurfaceLightAPI1.GetText()
+                          : _tokens->UsdPreviewSurfaceLightAPI3.GetText());
+        MString shadingInfo = (useV1Lighting ? "Using V1 Lighting API" : "Using V3 Lighting API");
+        shadingInfo += " for UsdPreviewSurface shading.";
+        MGlobal::displayInfo(shadingInfo);
+#elif MAYA_LIGHTAPI_VERSION_2 == 2
+        const bool    useV1Lighting = TfGetEnvSetting(MAYAUSD_VP2_USE_V1_LIGHT_API);
+        const MString fragGraphFileName(
+            useV1Lighting ? _tokens->UsdPreviewSurfaceLightAPI1.GetText()
+                          : _tokens->UsdPreviewSurfaceLightAPI2.GetText());
+        MString shadingInfo = (useV1Lighting ? "Using V1 Lighting API" : "Using V2 Lighting API");
+        shadingInfo += " for UsdPreviewSurface shading.";
+        MGlobal::displayInfo(shadingInfo);
 #else
         const MString fragGraphFileName(_tokens->UsdPreviewSurfaceLightAPI1.GetText());
 #endif
@@ -345,6 +389,20 @@ MStatus HdVP2ShaderFragments::registerFragments()
     }
 
     {
+        // This is a temporary fix for Maya 2022 that is quite fragile and will need to be revisited
+        // in the near future. It will not handle the custom color space some large scale clients
+        // use. It will also not handle any custom OCIO config that could change the color
+        // interpolation algorithm.
+        //
+        // Note: Because the supported color spaces are hard-coded (i.e names and color
+        // transformation implementation) it can only support few color spaces from the Maya default
+        // configs and it will definitively fail on any custom configs. So, this is a temporary fix
+        // for Maya that is quite fragile and will need to be revisited in the near future.
+        //
+        // TODO: Integrate OCIO in MayaUSD plugin, use the same config file as Maya, and request
+        //       custom GPU color correction code to be generated by OCIO to match whichever
+        //       rendering space is currently in use by Maya.
+
         // Register UVTexture readers for some common working spaces:
         std::string uvTextureFile = TfStringPrintf("%s.xml", _tokens->UsdUVTexture.GetText());
         uvTextureFile = _GetResourcePath(uvTextureFile);
@@ -372,31 +430,33 @@ MStatus HdVP2ShaderFragments::registerFragments()
         //     GLSL: outColor = mat4( ... ) * outColor;
         //     HLSL: outColor = mul(outColor, float4x4( ... ));
         //       CG: outColor = mul(float4x4( transpose( ... ) ), outColor);
-        //    Where the ... denotes a 4x4 matrix expanded from the 3x3 matrix passed in as parameter
-        //    to the function (alpha is always left untouched).
+        //    Where the ... denotes a 4x4 matrix passed in as parameter to the function. These
+        //    matrices will already have correct OpenGL/Dx11 element ordering.
         //
-        auto registerSpace = [&](const std::string& spaceName,
+        auto registerSpace = [&](const std::string& ocioName,
+                                 const std::string& synColorName,
                                  const std::string& fragName,
                                  const float*       convMatrix) {
             if (!fragmentManager->hasFragment(fragName.c_str())) {
                 std::string xmlFinal = std::regex_replace(xmlString, RE_FRAG, fragName.c_str());
                 if (convMatrix) {
-                    std::stringstream op_glsl, op_hlsl, op_cg;
+                    std::stringstream op_glsl, op_hlsl, op_cg, op_matrix;
                     op_glsl << "outColor = mat4(";
                     op_hlsl << "outColor = mul(outColor, float4x4(";
-                    op_cg << "outColor = mul(float4x4(";
-                    for (int i = 0; i < 3; ++i) {
-                        op_glsl << convMatrix[3 * i] << ", " << convMatrix[3 * i + 1] << ", "
-                                << convMatrix[3 * i + 2] << ", " << 0.0 << ", ";
-                        op_hlsl << convMatrix[3 * i] << ", " << convMatrix[3 * i + 1] << ", "
-                                << convMatrix[3 * i + 2] << ", " << 0.0 << ", ";
-                        // Cg needs transposed matrix:
-                        op_cg << convMatrix[i] << ", " << convMatrix[3 + i] << ", "
-                              << convMatrix[6 + i] << ", " << 0.0 << ", ";
+                    op_matrix << convMatrix[0];
+                    for (int i = 1; i < 16; ++i) {
+                        op_matrix << ", " << convMatrix[i];
                     }
-                    op_glsl << 0.0 << ", " << 0.0 << ", " << 0.0 << ", " << 1.0 << ") * outColor;";
-                    op_hlsl << 0.0 << ", " << 0.0 << ", " << 0.0 << ", " << 1.0 << "));";
-                    op_cg << 0.0 << ", " << 0.0 << ", " << 0.0 << ", " << 1.0 << "), outColor);";
+                    op_glsl << op_matrix.str() << ") * outColor;";
+                    op_hlsl << op_matrix.str() << "));";
+                    op_cg << "outColor = mul(float4x4(";
+                    for (int i = 0; i < 4; ++i) {
+                        // Cg needs transposed matrix:
+                        op_cg << convMatrix[i] << ", " << convMatrix[4 + i] << ", "
+                              << convMatrix[8 + i] << ", " << convMatrix[12 + i]
+                              << ((i < 3) ? ", " : "");
+                    }
+                    op_cg << "), outColor);";
                     xmlFinal = std::regex_replace(xmlFinal, RE_GLSL, op_glsl.str().c_str());
                     xmlFinal = std::regex_replace(xmlFinal, RE_HLSL, op_hlsl.str().c_str());
                     xmlFinal = std::regex_replace(xmlFinal, RE_CG, op_cg.str().c_str());
@@ -408,55 +468,71 @@ MStatus HdVP2ShaderFragments::registerFragments()
                 const MString addedName
                     = fragmentManager->addShadeFragmentFromBuffer(xmlFinal.c_str(), false);
                 if (addedName == fragName.c_str()) {
-                    _textureFragNames.emplace(spaceName, fragName);
+                    _textureFragNames.emplace(ocioName, fragName);
+                    if (!synColorName.empty()) {
+                        _textureFragNames.emplace(synColorName, fragName);
+                    }
                 } else {
                     MGlobal::displayError(
                         TfStringPrintf(
                             "Failed to register UsdUVTexture fragment graph for color space: %s",
-                            spaceName.c_str())
+                            ocioName.c_str())
                             .c_str());
                 }
             }
         };
 
-        // LINEAR is equivalent to "scene-linear Rec 709/sRGB", so we do not need a transformation
-        registerSpace("scene-linear Rec 709/sRGB", "UsdUVTexture_to_linrec709", nullptr);
+        // OpenGL linear is equivalent to "scene-linear Rec 709/sRGB", so we do not need a
+        // transformation
+        registerSpace(
+            "scene-linear Rec.709-sRGB", // OCIO v2
+            "scene-linear Rec 709/sRGB", // synColor
+            "UsdUVTexture_to_linrec709",
+            nullptr);
 
         // clang-format off
-        const float LINEAR_TO_ACESCG[9]
-            = { 0.61309740, 0.07019372, 0.02061559,
-                0.33952315, 0.91635388, 0.10956977,
-                0.04737945, 0.01345240, 0.86981463 };
+        const float LINREC709_TO_ACESCG[16]
+            = { 0.61309740, 0.07019372, 0.02061559, 0.0,
+                0.33952315, 0.91635388, 0.10956977, 0.0,
+                0.04737945, 0.01345240, 0.86981463, 0.0,
+                0.0,        0.0,        0.0,        1.0 };
         // clang-format on
-        registerSpace("ACEScg", "UsdUVTexture_to_ACEScg", LINEAR_TO_ACESCG);
+        registerSpace("ACEScg", "", "UsdUVTexture_to_ACEScg", LINREC709_TO_ACESCG);
 
         // clang-format off
-        const float LINEAR_TO_ACES2065_1[9]
-            = { 0.43963298, 0.08977644, 0.01754117,
-                0.38298870, 0.81343943, 0.11154655,
-                0.17737832, 0.09678413, 0.87091228 };
+        const float LINREC709_TO_ACES2065_1[16]
+            = { 0.43963298, 0.08977644, 0.01754117, 0.0,
+                0.38298870, 0.81343943, 0.11154655, 0.0,
+                0.17737832, 0.09678413, 0.87091228, 0.0,
+                0.0,        0.0,        0.0,        1.0 };
         // clang-format on
-        registerSpace("ACES2065-1", "UsdUVTexture_to_ACES2065_1", LINEAR_TO_ACES2065_1);
+        registerSpace("ACES2065-1", "", "UsdUVTexture_to_ACES2065_1", LINREC709_TO_ACES2065_1);
 
         // clang-format off
-        const float LINEAR_TO_SCENE_LINEAR_DCI_P3_D65[9]
-            = { 0.82246197, 0.03319420, 0.01708263,
-                0.17753803, 0.96680580, 0.07239744,
-                0.,         0.,         0.91051993 };
+        const float LINREC709_TO_SCENE_LINREC709_DCI_P3_D65[16]
+            = { 0.82246197, 0.03319420, 0.01708263, 0.0,
+                0.17753803, 0.96680580, 0.07239744, 0.0,
+                0.,         0.,         0.91051993, 0.0,
+                0.0,        0.0,        0.0,        1.0 };
         // clang-format on
         registerSpace(
             "scene-linear DCI-P3 D65",
+            "scene-linear DCI-P3",
             "UsdUVTexture_to_lin_DCI_P3_D65",
-            LINEAR_TO_SCENE_LINEAR_DCI_P3_D65);
+            LINREC709_TO_SCENE_LINREC709_DCI_P3_D65);
 
         // clang-format off
-        const float LINEAR_TO_SCENE_LINEAR_REC_2020[9]
-            = { 0.62740389, 0.06909729, 0.01639144,
-                0.32928304, 0.91954039, 0.08801331,
-                0.04331307, 0.01136232, 0.89559525 };
+        const float LINREC709_TO_SCENE_LINREC709_REC_2020[16]
+            = { 0.62740389, 0.06909729, 0.01639144, 0.0,
+                0.32928304, 0.91954039, 0.08801331, 0.0,
+                0.04331307, 0.01136232, 0.89559525, 0.0,
+                0.0,        0.0,        0.0,        1.0 };
         // clang-format on
         registerSpace(
-            "scene-linear Rec.2020", "UsdUVTexture_to_linrec2020", LINEAR_TO_SCENE_LINEAR_REC_2020);
+            "scene-linear Rec.2020",
+            "scene-linear Rec 2020",
+            "UsdUVTexture_to_linrec2020",
+            LINREC709_TO_SCENE_LINREC709_REC_2020);
     }
 
 #if MAYA_API_VERSION >= 20210000

@@ -33,6 +33,9 @@
 #include <maya/MObject.h>
 #include <maya/MString.h>
 
+#include <utility>
+#include <vector>
+
 PXR_NAMESPACE_OPEN_SCOPE
 
 class UsdGeomMesh;
@@ -73,6 +76,19 @@ void assignInvisibleFaces(const UsdGeomMesh& mesh, const MObject& meshObj);
 
 MAYAUSD_CORE_PUBLIC
 MStatus assignSubDivTagsToMesh(const UsdGeomMesh&, MObject&, MFnMesh&);
+
+#if MAYA_API_VERSION >= 20220000
+
+MAYAUSD_CORE_PUBLIC
+MStatus createComponentTags(const UsdGeomMesh& mesh, const MObject& meshObj);
+
+// Pair of component tag name and data.
+using ComponentTagData = std::pair<MString, MObject>;
+
+MAYAUSD_CORE_PUBLIC
+MStatus getComponentTags(const UsdGeomMesh& mesh, std::vector<ComponentTagData>& tags);
+
+#endif
 
 } // namespace UsdMayaMeshReadUtils
 

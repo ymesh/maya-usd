@@ -30,6 +30,7 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/types.h>
 #include <pxr/usd/sdf/path.h>
+#include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/scope.h>
@@ -45,6 +46,7 @@
 #include <maya/MDagPathArray.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnSet.h>
 #include <maya/MGlobal.h>
 #include <maya/MItMeshPolygon.h>
 #include <maya/MNamespace.h>
@@ -68,6 +70,7 @@ TF_DEFINE_PRIVATE_TOKENS(
     (volumeShader)
     (displacementShader)
     (varname)
+    (varnameStr)
     (map1)
 );
 // clang-format on
@@ -88,17 +91,38 @@ UsdMayaShadingModeExportContext::UsdMayaShadingModeExportContext(
         // if none specified, push back '/' which encompasses all
         _bindableRoots.insert(SdfPath::AbsoluteRootPath());
     } else {
+        const bool hasExportRootsMapping = !GetExportArgs().rootMapFunction.IsNull();
+        auto       findBindableRootFn
+            = [this, hasExportRootsMapping](const MDagPath& inDagPath, SdfPath& outPath) {
+                  auto iter = _dagPathToUsdMap.find(inDagPath);
+                  if (iter != _dagPathToUsdMap.end()) {
+                      outPath = iter->second;
+                      return true;
+                  }
+
+                  // We may be only exporting some roots from under the selected hierarchy.
+                  // Search for root but only if export root mapping is set to save time.
+                  if (hasExportRootsMapping) {
+                      for (auto pair : _dagPathToUsdMap) {
+                          if (MFnDagNode(pair.first).hasParent(inDagPath.node())) {
+                              outPath = pair.second;
+                              return true;
+                          }
+                      }
+                  }
+
+                  return false;
+              };
+
         TF_FOR_ALL(bindableRootIter, GetExportArgs().dagPaths)
         {
             const MDagPath& bindableRootDagPath = *bindableRootIter;
 
-            auto iter = _dagPathToUsdMap.find(bindableRootDagPath);
-            if (iter == _dagPathToUsdMap.end()) {
+            SdfPath usdPath;
+            if (!findBindableRootFn(bindableRootDagPath, usdPath)) {
                 // Geometry w/ this material bound doesn't seem to exist in USD.
                 continue;
             }
-
-            SdfPath usdPath = iter->second;
 
             // If usdModelRootOverridePath is not empty, replace the root
             // namespace with it.
@@ -208,6 +232,21 @@ UsdMayaShadingModeExportContext::GetAssignments() const
         return ret;
     }
 
+#if MAYA_HAS_GET_MEMBER_PATHS
+    MFnSet fnSet(_shadingEngine, &status);
+    if (!status) {
+        return ret;
+    }
+
+    // Get all the dagPaths using this shadingEngine...
+    MDagPathArray dagPaths;
+    fnSet.getMemberPaths(dagPaths, true); // get all the dagPath related to shading
+    SdfPathSet seenBoundPrimPaths;
+
+    for (auto& dagPath : dagPaths) {
+        unsigned int instanceNumber = dagPath.instanceNumber();
+#else
+    // Maya 2022 and older use this version
     MPlug dsmPlug = seDepNode.findPlug("dagSetMembers", true, &status);
     if (!status) {
         return ret;
@@ -215,9 +254,8 @@ UsdMayaShadingModeExportContext::GetAssignments() const
 
     SdfPathSet seenBoundPrimPaths;
     for (unsigned int i = 0; i < dsmPlug.numConnectedElements(); i++) {
-        MPlug   dsmElemPlug(dsmPlug.connectionByPhysicalIndex(i));
-        MStatus status = MS::kFailure;
-        MPlug   connectedPlug = UsdMayaUtil::GetConnected(dsmElemPlug);
+        MPlug dsmElemPlug(dsmPlug.connectionByPhysicalIndex(i));
+        MPlug connectedPlug = UsdMayaUtil::GetConnected(dsmElemPlug);
 
         // Maya connects shader bindings for instances based on element indices
         // of the instObjGroups[x] or instObjGroups[x].objectGroups[y] plugs.
@@ -248,6 +286,8 @@ UsdMayaShadingModeExportContext::GetAssignments() const
 
         MDagPath dagPath = allDagPaths[instanceNumber];
         TF_VERIFY(dagPath.instanceNumber() == instanceNumber);
+#endif
+
         MFnDagNode dagNode(dagPath, &status);
         if (!status) {
             continue;
@@ -459,15 +499,17 @@ UsdPrim UsdMayaShadingModeExportContext::MakeStandardMaterialPrim(
 }
 
 namespace {
-/// We can have multiple mesh with differing UV channel names and we need to make sure the
-/// exported material has varname inputs that match the texcoords exported by the shape
+/// We can have multiple mesh with differing UV channel names and we need to make sure the exported
+/// material has varname or varnameStr inputs that match the texcoords exported by the shape
 class _UVMappingManager
 {
 public:
     _UVMappingManager(
         const UsdShadeMaterial&                                  material,
-        const UsdMayaShadingModeExportContext::AssignmentVector& assignmentsToBind)
+        const UsdMayaShadingModeExportContext::AssignmentVector& assignmentsToBind,
+        const UsdMayaJobExportArgs&                              exportArgs)
         : _material(material)
+        , _exportArgs(exportArgs)
     {
         // Find out the nodes requiring mapping:
         //
@@ -475,6 +517,7 @@ public:
         // shader nodes contained in the material that have UV inputs that requires mapping:
         //
         //      token inputs:node_with_uv_input:varname = "st"
+        //      string inputs:node_with_uv_input:varnameStr = "st"
         //
         // The "node_with_uv_input" is a dependency node which is a valid target for the Maya
         // "uvLink" command, which describes UV linkage for all shapes in the scene that reference
@@ -485,7 +528,8 @@ public:
         for (const UsdShadeInput& input : material.GetInputs()) {
             const UsdAttribute&      usdAttr = input.GetAttr();
             std::vector<std::string> splitName = usdAttr.SplitName();
-            if (splitName.back() != _tokens->varname.GetString()) {
+            if (splitName.back() != _tokens->varname.GetString()
+                && splitName.back() != _tokens->varnameStr.GetString()) {
                 continue;
             }
 
@@ -521,51 +565,37 @@ public:
                 "stringArrayToString(`uvLink -q -t \"^1s\"`, \" \");", nodeName.GetText());
             std::string uvLinkResult = MGlobal::executeCommandStringResult(uvLinkCmd).asChar();
             for (std::string uvSetRef : TfStringTokenize(uvLinkResult)) {
-                TfToken shapeName(uvSetRef.substr(0, uvSetRef.find('.')).c_str());
+                // NOTE: If the mesh shape has the same name as the transform, then we will get a
+                //       complete path like
+                //           |mesh|mesh.uvSet[0].uvSetName
+                //       the best way to prevent confusion is to move to the object model
+                //       immediately and process from there.
+                MSelectionList selList;
+                selList.add(uvSetRef.c_str());
+                MPlug uvNamePlug;
+                selList.getPlug(0, uvNamePlug);
+
+                MFnMesh meshFn(uvNamePlug.node());
+
+                TfToken shapeName(meshFn.name().asChar());
                 if (!exportedShapes.count(shapeName)) {
                     continue;
                 }
-                MString getAttrCmd;
-                getAttrCmd.format("getAttr \"^1s\";", uvSetRef.c_str());
-                MCommandResult mayaCmdResult;
-                TfToken        getAttrResult;
-                MGlobal::executeCommand(getAttrCmd, mayaCmdResult, false, false);
-                // NOTE: (yliangsiew) We do this because if you have a mesh shape in Maya named the
-                // same as its parent transform, you get back the result `map1 map1` instead of just
-                // `map1`. Why? Refer to the issue here:
-                // https://github.com/Autodesk/maya-usd/issues/1079
-                switch (mayaCmdResult.resultType()) {
-                case MCommandResult::kStringArray: {
-                    MStringArray cmdResult;
-                    mayaCmdResult.getResult(cmdResult);
-                    if (cmdResult.length() == 0) {
-                        TF_RUNTIME_ERROR(
-                            "No valid UV set names could be determined! The command run was: %s",
-                            getAttrCmd.asChar());
-                        continue;
+
+                MString uvSetName = uvNamePlug.asString();
+
+                // UV set renaming still exists. See if the UV was renamed:
+                MStringArray uvSets;
+                meshFn.getUVSetNames(uvSets);
+                for (unsigned int i = 0; i < uvSets.length(); i++) {
+                    if (uvSets[i] == uvSetName) {
+                        uvSetName = UsdMayaWriteUtil::UVSetExportedName(
+                            uvSets, _exportArgs.preserveUVSetNames, _exportArgs.remapUVSetsTo, i);
+                        break;
                     }
-                    getAttrResult = TfToken(cmdResult[0].asChar());
-                    break;
-                }
-                case MCommandResult::kString: {
-                    MString cmdResult;
-                    mayaCmdResult.getResult(cmdResult);
-                    getAttrResult = TfToken(cmdResult.asChar());
-                    break;
-                }
-                default:
-                    TF_RUNTIME_ERROR(
-                        "The UV set name could not be determined; the result was of an "
-                        "unrecognized type! The command run was: %s",
-                        getAttrCmd.asChar());
-                    continue;
-                }
-                // Check if map1 should export as st:
-                if (getAttrResult == _tokens->map1 && UsdMayaWriteUtil::WriteMap1AsST()) {
-                    getAttrResult = UsdUtilsGetPrimaryUVSetName();
                 }
 
-                _shapeNameToUVNames[shapeName].push_back(getAttrResult);
+                _shapeNameToUVNames[shapeName].push_back(TfToken(uvSetName.asChar()));
             }
         }
 
@@ -593,14 +623,23 @@ public:
             TfTokenVector::const_iterator itNode = _nodesWithUVInput.cbegin();
             TfTokenVector::const_iterator itName = largestSet.cbegin();
             for (; itNode != _nodesWithUVInput.cend(); ++itNode, ++itName) {
-                TfToken inputName(
-                    TfStringPrintf("%s:%s", itNode->GetText(), _tokens->varname.GetText()));
-                UsdShadeInput materialInput = material.GetInput(inputName);
                 TF_VERIFY(itName != largestSet.cend());
-                if (materialInput.GetTypeName() == SdfValueTypeNames->Token) {
-                    materialInput.Set(*itName);
-                } else if (materialInput.GetTypeName() == SdfValueTypeNames->String) {
-                    materialInput.Set((*itName).GetString());
+                std::string inputName(
+                    TfStringPrintf("%s:%s", itNode->GetText(), _tokens->varname.GetText()));
+                UsdShadeInput materialInput = material.GetInput(TfToken(inputName.c_str()));
+                if (materialInput) {
+                    // varname becomes a std::string in USD 20.11
+                    if (materialInput.GetTypeName() == SdfValueTypeNames->Token) {
+                        materialInput.Set(*itName);
+                    } else {
+                        materialInput.Set(itName->GetString());
+                    }
+                }
+                inputName
+                    = TfStringPrintf("%s:%s", itNode->GetText(), _tokens->varnameStr.GetText());
+                materialInput = material.GetInput(TfToken(inputName.c_str()));
+                if (materialInput) {
+                    materialInput.Set(itName->GetString());
                 }
             }
             _uvNamesToMaterial[largestSet] = material;
@@ -640,14 +679,21 @@ public:
         TfTokenVector::const_iterator itNode = _nodesWithUVInput.cbegin();
         TfTokenVector::const_iterator itName = uvNames.cbegin();
         for (; itNode != _nodesWithUVInput.cend(); ++itNode, ++itName) {
-            TfToken inputName(
+            std::string inputName(
                 TfStringPrintf("%s:%s", itNode->GetText(), _tokens->varname.GetText()));
-            UsdShadeInput materialInput
-                = newMaterial.CreateInput(inputName, SdfValueTypeNames->Token);
-            if (materialInput.GetTypeName() == SdfValueTypeNames->Token) {
-                materialInput.Set(*itName);
-            } else if (materialInput.GetTypeName() == SdfValueTypeNames->String) {
-                materialInput.Set((*itName).GetString());
+            UsdShadeInput materialInput = newMaterial.GetInput(TfToken(inputName.c_str()));
+            if (materialInput) {
+                // varname becomes a std::string in USD 20.11
+                if (materialInput.GetTypeName() == SdfValueTypeNames->Token) {
+                    materialInput.Set(*itName);
+                } else {
+                    materialInput.Set(itName->GetString());
+                }
+            }
+            inputName = TfStringPrintf("%s:%s", itNode->GetText(), _tokens->varnameStr.GetText());
+            materialInput = newMaterial.GetInput(TfToken(inputName.c_str()));
+            if (materialInput) {
+                materialInput.Set(itName->GetString());
             }
         }
         auto insertResult
@@ -658,6 +704,8 @@ public:
 private:
     /// The original material:
     const UsdShadeMaterial& _material;
+    /// The export args (for UV set remapping)
+    const UsdMayaJobExportArgs& _exportArgs;
     /// Helper structures for UV set mappings:
     TfTokenVector _nodesWithUVInput;
     using ShapeToStreams = std::map<TfToken, TfTokenVector>;
@@ -678,7 +726,7 @@ void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
         return;
     }
 
-    _UVMappingManager uvMappingManager(material, assignmentsToBind);
+    _UVMappingManager uvMappingManager(material, assignmentsToBind, GetExportArgs());
 
     UsdStageRefPtr stage = GetUsdStage();
     TfToken        materialNameToken(materialPrim.GetName());

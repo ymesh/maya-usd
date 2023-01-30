@@ -2,7 +2,9 @@ import os.path
 import maya.cmds as cmds
 import ufe
 import mayaUsd.ufe
+import mayaUsd.lib as mayaUsdLib
 from mayaUSDRegisterStrings import getMayaUsdString
+from mayaUsdUtils import getUSDDialogFileFilters
 
 def debugMessage(msg):
     DEBUG = False
@@ -58,6 +60,9 @@ def GetStageFromProxyShapeAttr(attr):
     proxyStage = mayaUsd.ufe.getStage(fullStageName)
 
     return(stageName, proxyStage)
+
+def RequireUsdPathsRelativeToMayaSceneFile():
+    return cmds.optionVar(exists="mayaUsd_MakePathRelativeToSceneFile") and cmds.optionVar(query="mayaUsd_MakePathRelativeToSceneFile")
 
 def ProxyShapeFilePathChanged(filePathAttr, newFilePath=None):
     # Function called from the MayaUsd Proxy Shape template when the file path
@@ -123,12 +128,24 @@ def ProxyShapeFilePathChanged(filePathAttr, newFilePath=None):
             # Pop the file open dialog for user to load new usd file.
             title = getMayaUsdString("kLoadUSDFile")
             okCaption = getMayaUsdString("kLoad")
-            fileFilter = getMayaUsdString("kAllUsdFiles") + ' (*.usd *.usda *.usdc *.usdz );;*.usd;;*.usda;;*.usdc;;*.usdz';
-            res = cmds.fileDialog2(caption=title, fileMode=1, ff=fileFilter, okc=okCaption)
+            fileFilter = getUSDDialogFileFilters()
+
+            startDir = ''
+            if cmds.file(q=True, exists=True):
+                fullPath = cmds.file(q=True, loc=True)
+                startDir = os.path.dirname(fullPath)
+
+            res = cmds.fileDialog2(caption=title, fileMode=1, ff=fileFilter, okc=okCaption,
+                                   optionsUICreate='mayaUsd_USDRootFileRelative_UICreate',
+                                   optionsUIInit='mayaUsd_USDRootFileRelative_UIInit',
+                                   optionsUICommit2='mayaUsd_USDRootFileRelative_UICommit',
+                                   startingDirectory=startDir)
             if res and len(res) == 1:
                 debugMessage('    User picked USD file, setting file path attribute')
                 # Simply set the file path attribute. The proxy shape will load the file.
                 usdFileToLoad = res[0]
+                if RequireUsdPathsRelativeToMayaSceneFile():
+                    usdFileToLoad = mayaUsdLib.Util.getPathRelativeToMayaSceneFile(usdFileToLoad)
                 cmds.setAttr(filePathAttr, usdFileToLoad, type='string')
                 return True
         elif newFilePath is not None:

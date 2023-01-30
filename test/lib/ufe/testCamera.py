@@ -28,6 +28,7 @@ from maya import cmds
 from maya import standalone
 from maya.api import OpenMaya as om
 
+import os
 import ufe
 
 from functools import partial
@@ -94,14 +95,16 @@ class CameraTestCase(unittest.TestCase):
         self.inchesToCm = 2.54
         self.mmToCm = 0.1
 
-    def _StartTest(self, testName):
+        # load the file and get ready to test!
         cmds.file(force=True, new=True)
         mayaUtils.loadPlugin("mayaUsdPlugin")
-        self._testName = testName
-        testFile = testUtils.getTestScene("camera", self._testName + ".usda")
+        testFile = testUtils.getTestScene("camera", 'TranslateRotate_vs_xform.usda')
         mayaUtils.createProxyFromFile(testFile)
         globalSelection = ufe.GlobalSelection.get()
         globalSelection.clear()
+
+        # create some strings
+        self.camera2PathString = '|stage|stageShape,/cameras/cam2/camera2'
 
     def _TestCameraAttributes(self, ufeCamera, usdCamera):
         # Trust that the USD API works correctly, validate that UFE gives us
@@ -124,12 +127,12 @@ class CameraTestCase(unittest.TestCase):
         self.assertAlmostEqual(ufeCamera.nearClipPlane(), clippingRange[0])
         self.assertAlmostEqual(ufeCamera.farClipPlane(), clippingRange[1])
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
-        # ufeCamera.nearClipPlane(10)
-        # ufeCamera.farClipPlane(20)
-        # clippingRange = clippingAttr.Get()
-        # self.assertAlmostEqual(10, clippingRange[0])
-        # self.assertAlmostEqual(20, clippingRange[1])
+        # set the clipping planes using UFE
+        ufeCamera.nearClipPlane(10)
+        ufeCamera.farClipPlane(20)
+        clippingRange = clippingAttr.Get()
+        self.assertAlmostEqual(10, clippingRange[0])
+        self.assertAlmostEqual(20, clippingRange[1])
 
         # set the clipping planes using USD
         clippingAttr.Set(Gf.Vec2f(1, 50))
@@ -146,8 +149,11 @@ class CameraTestCase(unittest.TestCase):
         # the ufeCamera gives us inches
         self.assertAlmostEqual(self.mmToCm * horizontalAperture, self.inchesToCm * ufeCamera.horizontalAperture())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the horizontal aperture using UFE
+        ufeCamera.horizontalAperture(0.9)
+        self.assertAlmostEqual(0.9, ufeCamera.horizontalAperture())
 
+        # set the horizontal aperture using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.inchesToCm * ufeCamera.horizontalAperture())
     
@@ -157,8 +163,11 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertAlmostEqual(self.mmToCm * verticalAperture, self.inchesToCm * ufeCamera.verticalAperture())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the vertical aperture using UFE
+        ufeCamera.verticalAperture(0.3)
+        self.assertAlmostEqual(0.3, ufeCamera.verticalAperture())
 
+        # set the vertical aperture using UFE
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.inchesToCm * ufeCamera.verticalAperture())
 
@@ -168,8 +177,11 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertAlmostEqual(self.mmToCm * horizontalApertureOffset, self.inchesToCm * ufeCamera.horizontalApertureOffset())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the horizontal aperture offset using UFE
+        ufeCamera.horizontalApertureOffset(0.2)
+        self.assertAlmostEqual(0.2, ufeCamera.horizontalApertureOffset())
 
+        # set the horizontal aperture offset using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.inchesToCm * ufeCamera.horizontalApertureOffset())
     
@@ -179,8 +191,11 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertAlmostEqual(self.mmToCm * verticalApertureOffset, self.inchesToCm * ufeCamera.verticalApertureOffset())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the vertical aperture offset using UFE
+        ufeCamera.verticalApertureOffset(0.1)
+        self.assertAlmostEqual(0.1, ufeCamera.verticalApertureOffset())
 
+        # set the vertical aperture offset using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.inchesToCm * ufeCamera.verticalApertureOffset())
     
@@ -191,8 +206,11 @@ class CameraTestCase(unittest.TestCase):
         # precision error here from converting units so use a less precise comparison, 6 digits instead of 7
         self.assertAlmostEqual(fStop, self.mmToCm * ufeCamera.fStop(), 6)
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the f-stop offset using UFE
+        ufeCamera.fStop(8.)
+        self.assertAlmostEqual(8., ufeCamera.fStop())
 
+        # set the f-stop offset using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(0.5, self.mmToCm * ufeCamera.fStop(), 6)
 
@@ -202,8 +220,11 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertAlmostEqual(self.mmToCm * focalLength, self.mmToCm * ufeCamera.focalLength())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the focal length offset using UFE
+        ufeCamera.focalLength(12.)
+        self.assertAlmostEqual(12., ufeCamera.focalLength())
 
+        # set the focal length offset using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.mmToCm * ufeCamera.focalLength())
 
@@ -213,8 +234,11 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertAlmostEqual(self.mmToCm * focusDistance, self.mmToCm * ufeCamera.focusDistance())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
+        # set the focus distance offset using UFE
+        ufeCamera.focusDistance(9.)
+        self.assertAlmostEqual(9., ufeCamera.focusDistance())
 
+        # set the focus distance offset using USD
         usdAttr.Set(0.5)
         self.assertAlmostEqual(self.mmToCm * 0.5, self.mmToCm * ufeCamera.focusDistance())
 
@@ -224,23 +248,65 @@ class CameraTestCase(unittest.TestCase):
 
         self.assertEqual(ufe.Camera.Perspective, ufeCamera.projection())
 
-        # setting camera values through Ufe is not yet implemented in MayaUSD
-
-        usdAttr.Set("orthographic")
+        # set the projection offset using UFE
+        ufeCamera.projection(ufe.Camera.Orthographic)
         self.assertAlmostEqual(ufe.Camera.Orthographic, ufeCamera.projection())
 
-    @unittest.skipIf(mayaUtils.previewReleaseVersion() <= 124, 'Missing Python API for Ufe::Camera before Maya Preview Release 125.')
-    def testUsdCamera(self):
-        self._StartTest('TranslateRotate_vs_xform')
-        mayaPathSegment = mayaUtils.createUfePathSegment('|stage|stageShape')
-        cam2UsdPathSegment = usdUtils.createUfePathSegment('/cameras/cam2/camera2')
-        cam2Path = ufe.Path([mayaPathSegment, cam2UsdPathSegment])
-        cam2Item = ufe.Hierarchy.createItem(cam2Path)
+        # set the projection offset using USD
+        usdAttr.Set("perspective")
+        self.assertAlmostEqual(ufe.Camera.Perspective, ufeCamera.projection())
 
+    @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Python API only available in Maya 2023 or greater.')
+    def testUsdCamera(self):
+        cam2Item = ufeUtils.createItem(self.camera2PathString)
         cam2Camera = ufe.Camera.camera(cam2Item)
         cameraPrim = usdUtils.getPrimFromSceneItem(cam2Item)
         self._TestCameraAttributes(cam2Camera, cameraPrim)
 
+    @unittest.skipUnless(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') >= '4012', 'Requires Ufe Preview Version at least 4013.')
+    def testUsdCameraHandler(self):
+        # Test that the camera handlers can find USD cameras in a scene segment
+        camera2Path = ufe.PathString.path(self.camera2PathString)
+        camera1Path = ufe.PathString.path('|stage|stageShape,/cameras/cam1/camera1')
+
+        proxyShapePath = ufe.PathString.path('|stage|stageShape')
+        proxyShapeParentPath = ufe.PathString.path('|stage')
+        camerasParentPath = ufe.PathString.path('|stage|stageShape,/cameras')
+        camera2ParentPath = ufe.PathString.path('|stage|stageShape,/cameras/cam2')
+        geoPath = ufe.PathString.path('|stage|stageShape,/GEO')
+
+        # searching on a gateway item should give all cameras in the scene segment
+        # this will test ProxyShapeCameraHandler
+        result = ufe.CameraHandler.findAll(proxyShapePath)
+        self.assertTrue(result.contains(camera1Path))
+        self.assertTrue(result.contains(camera2Path))
+        self.assertEqual(len(result), 2)
+
+        # searching the the parent of a gateway item searches the Maya scene segment
+        # for cameras and searches nested scene segments. This doesn't find any Maya
+        # cameras because the Maya camera handler is not implemented, and there are no
+        # Maya cameras which are children of proxyShapeParentPath.
+        result = ufe.CameraHandler.findAll(proxyShapeParentPath)
+        self.assertTrue(result.contains(camera1Path))
+        self.assertTrue(result.contains(camera2Path))
+        self.assertEqual(len(result), 2)
+
+        # searching for the USD parent of both cameras should find both cameras.
+        # this will test UsdCameraHandler
+        result = ufe.CameraHandler.findAll(camerasParentPath)
+        self.assertTrue(result.contains(camera1Path))
+        self.assertTrue(result.contains(camera2Path))
+        self.assertEqual(len(result), 2)
+        
+        # searching for the parent of only camera2 should find just camera2
+        result = ufe.CameraHandler.findAll(camera2ParentPath)
+        self.assertFalse(result.contains(camera1Path))
+        self.assertTrue(result.contains(camera2Path))
+        self.assertEqual(len(result), 1)
+
+        # search for the parent of neither camera should find no cameras
+        result = ufe.CameraHandler.findAll(geoPath)
+        self.assertTrue(result.empty())
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

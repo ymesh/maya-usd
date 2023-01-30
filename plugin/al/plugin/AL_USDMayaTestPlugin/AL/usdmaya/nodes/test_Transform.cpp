@@ -138,31 +138,39 @@ TEST(Transform, animationWithTransform)
     ASSERT_TRUE(status == MStatus::kSuccess);
     MString proxyName = cmdResults[0];
 
-    MString selectCommand
-        = "AL_usdmaya_ProxyShapeSelect -primPath \"/pCube1\" -proxy \"" + proxyName + "\"";
-    cmdResults.clear();
-    status = MGlobal::executeCommand(selectCommand, cmdResults, true);
-    ASSERT_TRUE(status == MStatus::kSuccess);
-    MString xformName = cmdResults[0];
-
-    MSelectionList sel;
-    sel.add(proxyName);
-    sel.add(xformName);
+    MSelectionList sl;
+    sl.add(proxyName);
     MDagPath proxyDagPath;
-    MDagPath xformDagPath;
-    sel.getDagPath(0, proxyDagPath);
-    sel.getDagPath(1, xformDagPath);
+    sl.getDagPath(0, proxyDagPath);
     MFnDagNode proxyMFn(proxyDagPath, &status);
-    ASSERT_TRUE(status == MStatus::kSuccess);
-    MFnDagNode xformMFn(xformDagPath, &status);
     ASSERT_TRUE(status == MStatus::kSuccess);
 
     auto proxy = dynamic_cast<ProxyShape*>(proxyMFn.userNode(&status));
     ASSERT_TRUE(status == MStatus::kSuccess);
-
     auto stage = proxy->getUsdStage();
     ASSERT_TRUE(stage);
-    auto prim = stage->GetPrimAtPath(SdfPath("/pCube1"));
+
+    MString xformName("pCube1");
+    SdfPath xformPath(("/" + xformName).asChar());
+
+    MDagModifier modifier1;
+    MDGModifier  modifier2;
+    proxy->makeUsdTransformChain(
+        stage->GetPrimAtPath(xformPath),
+        modifier1,
+        AL::usdmaya::nodes::ProxyShape::kSelection,
+        &modifier2);
+    EXPECT_EQ(MStatus(MS::kSuccess), modifier1.doIt());
+    EXPECT_EQ(MStatus(MS::kSuccess), modifier2.doIt());
+
+    MSelectionList sel;
+    sel.add(xformName);
+    MDagPath xformDagPath;
+    sel.getDagPath(0, xformDagPath);
+    MFnDagNode xformMFn(xformDagPath, &status);
+    ASSERT_TRUE(status == MStatus::kSuccess);
+
+    auto prim = stage->GetPrimAtPath(xformPath);
     ASSERT_TRUE(prim.IsValid());
 
     UsdGeomXformable xformable(prim);
@@ -208,6 +216,73 @@ TEST(Transform, animationWithTransform)
         SCOPED_TRACE("");
         assertTranslate(0.0, 2.0, -20.0);
     }
+
+    MGlobal::setOptionVarValue("AL_usdmaya_readAnimatedValues", optionVarValue);
+}
+
+TEST(Transform, animatedTransformOnDefaultTimecode)
+{
+    MStatus status;
+    MFileIO::newFile(true);
+    MGlobal::viewFrame(0);
+
+    int optionVarValue = MGlobal::optionVarIntValue("AL_usdmaya_readAnimatedValues");
+    // Explicitly set the value to be false to force using default timecode
+    MGlobal::setOptionVarValue("AL_usdmaya_readAnimatedValues", false);
+
+    MString importCommand = "AL_usdmaya_ProxyShapeImport -f \"" + MString(AL_USDMAYA_TEST_DATA)
+        + "/animated_camera.usda\"";
+
+    MStringArray cmdResults;
+    status = MGlobal::executeCommand(importCommand, cmdResults, true);
+    ASSERT_TRUE(status == MStatus::kSuccess);
+
+    MString camAName = "|AL_usdmaya_Proxy|root|cameraA";
+    MString camBName = "|AL_usdmaya_Proxy|root|cameraB";
+
+    MSelectionList sel;
+    sel.add(camAName);
+    sel.add(camBName);
+    MDagPath camADagPath;
+    MDagPath camBDagPath;
+    sel.getDagPath(0, camADagPath);
+    sel.getDagPath(1, camBDagPath);
+    MFnDagNode camAFn(camADagPath, &status);
+    ASSERT_TRUE(status == MStatus::kSuccess);
+    MFnDagNode camBFn(camBDagPath, &status);
+    ASSERT_TRUE(status == MStatus::kSuccess);
+
+    camAFn.findPlug("readAnimatedValues").setBool(false);
+    camBFn.findPlug("readAnimatedValues").setBool(false);
+    MGlobal::viewFrame(1);
+
+    // The camera A xform should be identical at frame 1
+    ASSERT_FLOAT_EQ(camAFn.findPlug("translateX").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("translateY").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("translateZ").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("rotateX").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("rotateY").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("rotateZ").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("scaleX").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("scaleY").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("scaleZ").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("shearX").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("shearY").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camAFn.findPlug("shearZ").asDouble(), 0.f);
+
+    // The camera B xform should be read from default timecode at frame 1
+    ASSERT_FLOAT_EQ(camBFn.findPlug("translateX").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("translateY").asDouble(), 2.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("translateZ").asDouble(), 3.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("rotateX").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("rotateY").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("rotateZ").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("scaleX").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("scaleY").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("scaleZ").asDouble(), 1.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("shearX").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("shearY").asDouble(), 0.f);
+    ASSERT_FLOAT_EQ(camBFn.findPlug("shearZ").asDouble(), 0.f);
 
     MGlobal::setOptionVarValue("AL_usdmaya_readAnimatedValues", optionVarValue);
 }

@@ -11,8 +11,26 @@
 # MAYA_INCLUDE_DIRS   Path to the devkit's include directories
 # MAYA_API_VERSION    Maya version (6-8 digits)
 # MAYA_APP_VERSION    Maya app version (4 digits)
-# MAYA_LIGHTAPI_VERSION Maya light API version (1 or 2)
+# MAYA_LIGHTAPI_VERSION Maya light API version (1 or 2 or 3)
+# MAYA_PREVIEW_RELEASE_VERSION Preview Release number (3 or more digits) in preview releases, 0 in official releases
 #
+# Cache variables:
+# MAYA_HAS_DEFAULT_MATERIAL_API Presence of a default material API on MRenderItem.
+# MAYA_NEW_POINT_SNAPPING_SUPPORT Presence of point new snapping support.
+# MAYA_CURRENT_UFE_CAMERA_SUPPORT Presence of MFrameContext::getCurrentUfeCameraPath.
+# MAYA_HAS_CRASH_DETECTION Presence of isInCrashHandler API
+# MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT Presence of MPxSubSceneOverride::setUfeIdentifier.
+# MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT Presence of MPxSubSceneOverride::updateUfeIdentifier.
+# MAYA_ENABLE_NEW_PRIM_DELETE Enable new delete behaviour for delete command
+# MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS Presence of MFrameContext::getDisplayStyleOfAllViewports.
+# MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT Presence of maya array iterator difference_type trait
+# MAYA_HAS_GET_MEMBER_PATHS Presence of MFnSet::getMemberPaths
+# MAYA_HAS_DISPLAY_LAYER_API Presence of MFnDisplayLayer
+# MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API Presence of MDisplayLayerMemberChangedFunction
+# MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API Presence of MRenderItem has HideOnPlayback API
+# MAYA_CAMERA_GIZMO_SUPPORT Support for drawing Ufe cameras and lights in the viewport.
+# MAYA_LINUX_BUILT_WITH_CXX11_ABI Maya Linux was built with new cxx11 ABI.
+# MAYA_MACOSX_BUILT_WITH_UB2 Maya OSX was built with Universal Binary 2.
 
 #=============================================================================
 # Copyright 2011-2012 Francisco Requena <frarees@gmail.com>
@@ -260,6 +278,15 @@ if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MTypes.h")
     endif()
 endif()
 
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MDefines.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MDefines.h MAYA_PREVIEW_RELEASE_VERSION REGEX "#define MAYA_PREVIEW_RELEASE_VERSION.*$")
+    if(MAYA_PREVIEW_RELEASE_VERSION)
+        string(REGEX MATCHALL "[0-9]+" MAYA_PREVIEW_RELEASE_VERSION ${MAYA_PREVIEW_RELEASE_VERSION})
+    else()
+        set(MAYA_PREVIEW_RELEASE_VERSION 0)
+    endif()
+endif()
+
 # Determine the Python version and switch between mayapy and mayapy2.
 set(MAYAPY_EXE mayapy)
 set(MAYA_PY_VERSION 2)
@@ -323,14 +350,183 @@ find_file(MAYA_OGSDEVICES_LIBRARY
     # Maya's Foundation library and OSX's framework.
     NO_CMAKE_SYSTEM_PATH
 )
-message(INFO " Got MAYA_OGSDEVICES_LIBRARY = ${MAYA_OGSDEVICES_LIBRARY}")
 if (MAYA_OGSDEVICES_LIBRARY)
-    file(STRINGS ${MAYA_OGSDEVICES_LIBRARY} HAS_LIGHTAPI_2 REGEX "InitializeLightShader")
+    # Delaying the activation of Light API V2 until the shadow and SSAO issues are fixed. The
+    # update, to be found in a future PR, will contain this keyword, which is not present in 2022.1:
+    file(STRINGS ${MAYA_OGSDEVICES_LIBRARY} HAS_LIGHTAPI_2 REGEX "ConnectColorInFragments")
     if (HAS_LIGHTAPI_2)
         set(MAYA_LIGHTAPI_VERSION 2)
     endif()
+    # In some future Maya updates, there might also be a function to get the ambient light, very
+    # useful to implement flat shading.
+    file(STRINGS ${MAYA_OGSDEVICES_LIBRARY} HAS_LIGHTAPI_3 REGEX "AddAmbientLight")
+    if (HAS_LIGHTAPI_3)
+        set(MAYA_LIGHTAPI_VERSION 3)
+    endif()
 endif()
-message(INFO " Got MAYA_LIGHTAPI_VERSION = ${MAYA_LIGHTAPI_VERSION}")
+message(STATUS "Using Maya Light API Version ${MAYA_LIGHTAPI_VERSION}")
+
+set(MAYA_HAS_DEFAULT_MATERIAL_API FALSE CACHE INTERNAL "setDefaultMaterialHandling")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MHWGeometry.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MHWGeometry.h MAYA_HAS_API REGEX "setDefaultMaterialHandling")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_DEFAULT_MATERIAL_API TRUE CACHE INTERNAL "setDefaultMaterialHandling")
+        message(STATUS "Maya has setDefaultMaterialHandling API")
+    endif()
+endif()
+
+set(MAYA_NEW_POINT_SNAPPING_SUPPORT FALSE CACHE INTERNAL "snapToActive")
+if (MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MSelectionContext.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MSelectionContext.h MAYA_HAS_API REGEX "snapToActive")
+    if(MAYA_HAS_API)
+        set(MAYA_NEW_POINT_SNAPPING_SUPPORT TRUE CACHE INTERNAL "snapToActive")
+        message(STATUS "Maya has new point snapping API")
+    endif()
+endif()
+
+set(MAYA_CURRENT_UFE_CAMERA_SUPPORT FALSE CACHE INTERNAL "getCurrentUfeCameraPath")
+if (MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFrameContext.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MFrameContext.h MAYA_HAS_API REGEX "getCurrentUfeCameraPath")
+    if(MAYA_HAS_API)
+        set(MAYA_CURRENT_UFE_CAMERA_SUPPORT TRUE CACHE INTERNAL "getCurrentUfeCameraPath")
+        message(STATUS "Maya has getCurrentUfeCameraPath")
+    endif()
+endif()
+
+set(MAYA_HAS_CRASH_DETECTION FALSE CACHE INTERNAL "isInCrashHandler")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MGlobal.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MGlobal.h MAYA_HAS_API REGEX "isInCrashHandler")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_CRASH_DETECTION TRUE CACHE INTERNAL "isInCrashHandler")
+        message(STATUS "Maya has isInCrashHandler API")
+    endif()
+endif()
+
+set(MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT FALSE CACHE INTERNAL "setUfeIdentifiers")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MPxSubSceneOverride.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MPxSubSceneOverride.h MAYA_HAS_API REGEX "setUfeIdentifiers")
+    if(MAYA_HAS_API)
+        set(MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT TRUE CACHE INTERNAL "setUfeIdentifiers")
+        message(STATUS "Maya has setUfeIdentifiers API")
+    endif()
+endif()
+
+set(MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT FALSE CACHE INTERNAL "updateUfeIdentifiers")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MPxSubSceneOverride.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MPxSubSceneOverride.h MAYA_HAS_API REGEX "updateUfeIdentifiers")
+    if(MAYA_HAS_API)
+        set(MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT TRUE CACHE INTERNAL "updateUfeIdentifiers")
+        message(STATUS "Maya has updateUfeIdentifiers API")
+    endif()
+endif()
+
+set(MAYA_ENABLE_NEW_PRIM_DELETE FALSE CACHE INTERNAL "enableNewPrimDelete")
+if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20230000)
+    set(MAYA_ENABLE_NEW_PRIM_DELETE TRUE CACHE INTERNAL "enableNewPrimDelete")
+endif()
+
+set(MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS FALSE CACHE INTERNAL "DisplayStyleOfAllViewports")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFrameContext.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MFrameContext.h MAYA_HAS_API REGEX "getDisplayStyleOfAllViewports")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS TRUE CACHE INTERNAL "DisplayStyleOfAllViewports")
+        message(STATUS "Maya has getDisplayStyleOfAllViewports API")
+    endif()
+endif()
+
+set(MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT FALSE CACHE INTERNAL "hasArrayIteratorDifferenceType")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MArrayIteratorTemplate.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MArrayIteratorTemplate.h MAYA_HAS_API REGEX "difference_type")
+    if(MAYA_HAS_API)
+        set(MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT TRUE CACHE INTERNAL "hasArrayIteratorDifferenceType")
+        message(STATUS "Maya array iterator has difference_type trait")
+    endif()
+endif()
+
+set(MAYA_HAS_GET_MEMBER_PATHS FALSE CACHE INTERNAL "hasGetMemberPaths")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFnSet.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MFnSet.h MAYA_HAS_API REGEX "getMemberPaths")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_GET_MEMBER_PATHS TRUE CACHE INTERNAL "hasGetMemberPaths")
+        message(STATUS "MFnSet has getMemberPaths function")
+    endif()
+endif()
+
+set(MAYA_HAS_DISPLAY_LAYER_API FALSE CACHE INTERNAL "hasDisplayLayerAPI")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFnDisplayLayer.h")
+    set(MAYA_HAS_DISPLAY_LAYER_API TRUE CACHE INTERNAL "hasDisplayLayerAPI")
+    message(STATUS "MFnDisplayLayer exists")
+endif()
+
+set(MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API FALSE CACHE INTERNAL "hasDisplayLayerMemberChangedFunction")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MDisplayLayerMessage.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MDisplayLayerMessage.h MAYA_HAS_API REGEX "MDisplayLayerMemberChangedFunction")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API TRUE CACHE INTERNAL "hasDisplayLayerMemberChangedFunction")
+        message(STATUS "MDisplayLayerMessage has MDisplayLayerMemberChangedFunction")
+    endif()
+endif()
+
+set(MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API FALSE CACHE INTERNAL "hasRenderItemHideOnPlaybackFunction")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MHWGeometry.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MHWGeometry.h MAYA_HAS_API REGEX "isHideOnPlayback")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API TRUE CACHE INTERNAL "hasRenderItemHideOnPlaybackFunction")
+        message(STATUS "MRenderItem has HideOnPlayback API")
+    endif()
+endif()
+
+set(MAYA_CAMERA_GIZMO_SUPPORT FALSE CACHE INTERNAL "ufeCameraGizmos")
+if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20230200)
+    set(MAYA_CAMERA_GIZMO_SUPPORT TRUE CACHE INTERNAL "ufeCameraGizmos")
+    message(STATUS "Maya has UFE gizmo drawing")
+endif()
+
+set(MAYA_LINUX_BUILT_WITH_CXX11_ABI FALSE CACHE INTERNAL "MayaLinuxBuiltWithCxx11ABI")
+if(IS_LINUX AND MAYA_Foundation_LIBRARY)
+    # Determine if Maya (on Linux) was built using the new CXX11 ABI.
+    # If yes, then MayaUsd MUST also be built with new ABI.
+    execute_process(
+        COMMAND
+            nm "${MAYA_Foundation_LIBRARY}"
+        COMMAND
+            grep findVariableReplacement
+        COMMAND
+            grep " T "
+        WORKING_DIRECTORY
+            ${MAYA_LIBRARY_DIR}
+        OUTPUT_VARIABLE
+            maya_cxx11_abi)
+    if (NOT ("${maya_cxx11_abi}" STREQUAL ""))
+        string(FIND ${maya_cxx11_abi} "__cxx1112basic_string" maya_cxx11_abi_index)
+        if(NOT (${maya_cxx11_abi_index} STREQUAL "-1"))
+            set(MAYA_LINUX_BUILT_WITH_CXX11_ABI TRUE CACHE INTERNAL "MayaLinuxBuiltWithCxx11ABI")
+            message(STATUS "Linux: Maya was built with new cxx11 ABI")
+        endif()
+    endif()
+endif()
+
+set(MAYA_MACOSX_BUILT_WITH_UB2 FALSE CACHE INTERNAL "MayaMacOSXBuiltWithUB2")
+if(IS_MACOSX AND MAYA_Foundation_LIBRARY)
+    # Determine if Maya (on OSX) was built with Universal Binary 2 (x86_64 & arm64).
+    # If yes, then MayaUsd can be built with either: Intel, Arm or both.
+    execute_process(
+        COMMAND
+            lipo -archs "${MAYA_Foundation_LIBRARY}"
+        WORKING_DIRECTORY
+            ${MAYA_LIBRARY_DIR}
+        OUTPUT_VARIABLE
+            maya_lipo_output)
+    string(REGEX MATCHALL "(x86_64|arm64)" maya_ub2_match ${maya_lipo_output})
+    if (maya_ub2_match)
+        list(FIND maya_ub2_match "x86_64" ub2_index1)
+        list(FIND maya_ub2_match "arm64" ub2_index2)
+        if((NOT (${ub2_index1} STREQUAL "-1")) AND (NOT (${ub2_index2} STREQUAL "-1")))
+            set(MAYA_MACOSX_BUILT_WITH_UB2 TRUE CACHE INTERNAL "MayaMacOSXBuiltWithUB2")
+            message(STATUS "MacOSX: Maya was built with Universal Binary 2 (x86_64/arm64)")
+        endif()
+    endif()
+endif()
 
 # handle the QUIETLY and REQUIRED arguments and set MAYA_FOUND to TRUE if
 # all listed variables are TRUE

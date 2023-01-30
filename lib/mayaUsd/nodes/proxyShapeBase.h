@@ -75,6 +75,7 @@ class MayaUsdProxyShapeBase
     , public ProxyStageProvider
     , public UsdMayaUsdPrimProvider
 {
+
 public:
     typedef MayaUsdProxyShapeBase ThisClass;
 
@@ -98,6 +99,8 @@ public:
     MAYAUSD_CORE_PUBLIC
     static MObject loadPayloadsAttr;
     MAYAUSD_CORE_PUBLIC
+    static MObject shareStageAttr;
+    MAYAUSD_CORE_PUBLIC
     static MObject timeAttr;
     MAYAUSD_CORE_PUBLIC
     static MObject complexityAttr;
@@ -118,6 +121,8 @@ public:
     static MObject sessionLayerNameAttr;
     MAYAUSD_CORE_PUBLIC
     static MObject rootLayerNameAttr;
+    MAYAUSD_CORE_PUBLIC
+    static MObject mutedLayersAttr;
 
     // Output attributes
     MAYAUSD_CORE_PUBLIC
@@ -195,6 +200,12 @@ public:
     int getComplexity() const;
 
     MAYAUSD_CORE_PUBLIC
+    std::vector<std::string> getMutedLayers() const;
+
+    MAYAUSD_CORE_PUBLIC
+    MStatus setMutedLayers(const std::vector<std::string>& muted);
+
+    MAYAUSD_CORE_PUBLIC
     UsdTimeCode getTime() const override;
     MAYAUSD_CORE_PUBLIC
     UsdStageRefPtr getUsdStage() const override;
@@ -269,9 +280,20 @@ public:
     /// should be represented as assembly edits.
     bool isUfeSelectionEnabled() const { return _isUfeSelectionEnabled; }
 
+    MAYAUSD_CORE_PUBLIC
+    bool isShareableStage() const;
+
+    MAYAUSD_CORE_PUBLIC
+    bool isStageIncoming() const;
+
+    MAYAUSD_CORE_PUBLIC
+    bool isIncomingLayer(const std::string& layerIdentifier) const;
+
 protected:
     MAYAUSD_CORE_PUBLIC
-    MayaUsdProxyShapeBase(const bool enableUfeSelection = true);
+    MayaUsdProxyShapeBase(
+        const bool enableUfeSelection = true,
+        const bool useLoadRulesHandling = true);
 
     MAYAUSD_CORE_PUBLIC
     ~MayaUsdProxyShapeBase() override;
@@ -325,6 +347,15 @@ protected:
     void copyInternalData(MPxNode* srcNode) override;
 
 private:
+    // The possible the shared mode of the stage.
+    // The 'Unknown' mode is when the proxy shape is created and has not yet been computed.
+    enum class ShareMode
+    {
+        Unknown,
+        Shared,
+        Unshared
+    };
+
     MayaUsdProxyShapeBase(const MayaUsdProxyShapeBase&);
     MayaUsdProxyShapeBase& operator=(const MayaUsdProxyShapeBase&);
 
@@ -332,6 +363,19 @@ private:
     MStatus computeInStageDataCached(MDataBlock& dataBlock);
     MStatus computeOutStageData(MDataBlock& dataBlock);
     MStatus computeOutStageCacheId(MDataBlock& dataBlock);
+
+    void updateShareMode(
+        const UsdStageRefPtr&    sharedUsdStage,
+        const UsdStageRefPtr&    unsharedUsdStage,
+        UsdStage::InitialLoadSet loadSet);
+
+    void transferSessionLayer(
+        ShareMode                currentMode,
+        const UsdStageRefPtr&    sharedUsdStage,
+        const UsdStageRefPtr&    unsharedUsdStage,
+        UsdStage::InitialLoadSet loadSet);
+
+    UsdStageRefPtr getUnsharedStage(UsdStage::InitialLoadSet loadSet);
 
     SdfPathVector _GetExcludePrimPaths(MDataBlock dataBlock) const;
     int           _GetComplexity(MDataBlock dataBlock) const;
@@ -345,6 +389,7 @@ private:
 
     void _OnStageContentsChanged(const UsdNotice::StageContentsChanged& notice);
     void _OnStageObjectsChanged(const UsdNotice::ObjectsChanged& notice);
+    void _OnLayerMutingChanged(const UsdNotice::LayerMutingChanged& notice);
 
     UsdMayaStageNoticeListener _stageNoticeListener;
 
@@ -358,6 +403,27 @@ private:
 
     // Whether or not the proxy shape has enabled UFE/subpath selection
     const bool _isUfeSelectionEnabled;
+
+    // Track the shared mode of the stage as seen in the last compute.
+    // Starts off as Unknown when the proxy shape is first created.
+    ShareMode _previousShareMode { ShareMode::Unknown };
+
+    // Anonymous layer that was created when a new proxy shape is created without a named layer.
+    SdfLayerRefPtr _anonymousRootLayer;
+
+    // For unshared composition
+    SdfLayerRefPtr _unsharedStageSessionLayer;
+    SdfLayerRefPtr _unsharedStageRootLayer;
+
+    // We need to keep track of unshared sublayers (otherwise they get removed)
+    std::vector<SdfLayerRefPtr> _unsharedStageRootSublayers;
+
+    // Keep track of the incoming layers
+    std::set<std::string> _incomingLayers;
+
+public:
+    // Counter for the number of times compute is re-entered
+    static std::atomic<int> in_compute;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

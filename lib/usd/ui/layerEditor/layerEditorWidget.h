@@ -17,7 +17,6 @@
 #ifndef LAYEREDITORWIDGET_H
 #define LAYEREDITORWIDGET_H
 
-#include "generatedIconButton.h"
 #include "layerTreeItem.h"
 #include "layerTreeView.h"
 
@@ -30,7 +29,6 @@ class QPushButton;
 
 namespace UsdLayerEditor {
 class DirtyLayersCountBadge;
-class GeneratedIconButton;
 class LayerTreeView;
 class SessionState;
 
@@ -52,7 +50,7 @@ public Q_SLOTS:
     void onNewLayerButtonClicked();
     void onLoadLayersButtonClicked();
     void onSaveStageButtonClicked();
-    void updateDirtyCountBadgeOnIdle();
+    void updateButtonsOnIdle();
 
 public:
     LayerTreeView* layerTree() { return _treeView.data(); }
@@ -61,19 +59,20 @@ protected:
     void          setupLayout();
     QLayout*      setupLayout_toolbar();
     SessionState& _sessionState;
+    QWidget*      _saveButtonParent { nullptr };
     struct
     {
-        GeneratedIconButton*   _newLayer;
-        GeneratedIconButton*   _loadLayer;
+        QPushButton*           _newLayer;
+        QPushButton*           _loadLayer;
         QPushButton*           _saveStageButton;
         DirtyLayersCountBadge* _dirtyCountBadge;
     } _buttons;
     void updateNewLayerButton();
-    void updateDirtyCountBadge();
+    void updateButtons();
 
     QPointer<LayerTreeView> _treeView;
 
-    bool _updateDirtyCountOnIdle = false; // true if request to update on idle is pending
+    bool _updateButtonsOnIdle = false; // true if request to update on idle is pending
 };
 
 } // namespace UsdLayerEditor

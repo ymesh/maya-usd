@@ -16,12 +16,18 @@
 #pragma once
 
 #include <mayaUsd/base/api.h>
+
+#include <ufe/ufe.h>
+#ifdef UFE_V2_FEATURES_AVAILABLE
+#include <mayaUsd/ufe/UsdAttribute.h>
+#endif
 #include <mayaUsd/ufe/UsdSceneItem.h>
 
 #include <pxr/base/tf/hashset.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/usd/sdf/layer.h>
 #include <pxr/usd/sdf/path.h>
+#include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/timeCode.h>
 #include <pxr/usdImaging/usdImaging/delegate.h>
@@ -43,6 +49,10 @@ UFE_NS_DEF
     class Selection;
 }
 
+PXR_NAMESPACE_OPEN_SCOPE
+class MayaUsdProxyShapeBase;
+PXR_NAMESPACE_CLOSE_SCOPE
+
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
@@ -50,7 +60,7 @@ namespace ufe {
 // Helper functions
 //------------------------------------------------------------------------------
 
-//! Get USD stage corresponding to argument Maya Dag path.
+//! Get USD stage corresponding to argument UFE path.
 MAYAUSD_CORE_PUBLIC
 PXR_NS::UsdStageWeakPtr getStage(const Ufe::Path& path);
 
@@ -115,6 +125,20 @@ Ufe::Path dagPathToUfe(const MDagPath& dagPath);
 MAYAUSD_CORE_PUBLIC
 Ufe::PathSegment dagPathToPathSegment(const MDagPath& dagPath);
 
+//! Convert a single-segment Maya UFE path to a Dag path.  If the argument path
+//! is not for a Maya object, or if it has more than one segment, returns an
+//! invalid MDagPath.
+MAYAUSD_CORE_PUBLIC
+MDagPath ufeToDagPath(const Ufe::Path& ufePath);
+
+//! Verify if the UFE path is the Maya world (root) path.
+MAYAUSD_CORE_PUBLIC
+bool isMayaWorldPath(const Ufe::Path& ufePath);
+
+//! Return the gateway node (i.e. proxy shape)
+MAYAUSD_CORE_PUBLIC
+PXR_NS::MayaUsdProxyShapeBase* getProxyShape(const Ufe::Path& path);
+
 //! Get the time along the argument path.  A gateway node (i.e. proxy shape)
 //! along the path can transform Maya's time (e.g. with scale and offset).
 MAYAUSD_CORE_PUBLIC
@@ -126,20 +150,19 @@ PXR_NS::UsdTimeCode getTime(const Ufe::Path& path);
 MAYAUSD_CORE_PUBLIC
 PXR_NS::TfTokenVector getProxyShapePurposes(const Ufe::Path& path);
 
-//! Check if an attribute value is allowed to be changed.
-//! \return True, if the attribute value is allowed to be edited in the stage's local Layer Stack.
+#ifdef UFE_V2_FEATURES_AVAILABLE
 MAYAUSD_CORE_PUBLIC
-bool isAttributeEditAllowed(const PXR_NS::UsdAttribute& attr, std::string* errMsg = nullptr);
+Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::UsdAttribute& usdAttr);
 
 MAYAUSD_CORE_PUBLIC
-bool isAttributeEditAllowed(const PXR_NS::UsdPrim& prim, const PXR_NS::TfToken& attrName);
+Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::SdrShaderPropertyConstPtr& shaderProperty);
 
-//! Check if the edit target in the stage is allowed to be changed.
-//! \return True, if the edit target layer in the stage is allowed to be changed
 MAYAUSD_CORE_PUBLIC
-bool isEditTargetLayerModifiable(
-    const PXR_NS::UsdStageWeakPtr stage,
-    std::string*                  errMsg = nullptr);
+PXR_NS::SdfValueTypeName ufeTypeToUsd(const Ufe::Attribute::Type ufeType);
+
+PXR_NS::VtValue
+vtValueFromString(const PXR_NS::SdfValueTypeName& typeName, const std::string& strValue);
+#endif
 
 //! Send notification for data model changes
 template <class T>
@@ -188,6 +211,100 @@ Ufe::Selection removeDescendants(const Ufe::Selection& src, const Ufe::Path& fil
 //! of filterPath to the destination, and re-creating the others into the
 //! destination using the source scene item path.
 Ufe::Selection recreateDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath);
+
+//! Splits a string by each specified separator.
+MAYAUSD_CORE_PUBLIC
+std::vector<std::string> splitString(const std::string& str, const std::string& separators);
+
+std::string pathSegmentSeparator();
+
+class ReplicateExtrasFromUSD
+{
+public:
+    // Prepares the replication operation for the subtree starting with the given scene item
+    void initRecursive(Ufe::SceneItem::Ptr) const;
+
+    // Replicates extra features from the USD item defined by 'path' to the maya object
+    void processItem(const Ufe::Path& path, const MObject& mayaObject) const;
+
+private:
+    mutable std::unordered_map<Ufe::Path, MObject> _displayLayerMap;
+};
+
+class ReplicateExtrasToUSD
+{
+public:
+    // Processes replication from a maya object defined by 'dagPath'
+    // to the usd item defined by 'usdPath'
+    void processItem(const MDagPath& dagPath, const PXR_NS::SdfPath& usdPath) const;
+
+    // Prepares the replication operation for the subtree starting at the given scene item.
+    void initRecursive(const Ufe::SceneItem::Ptr& item) const;
+
+    // Finalizes the replication operation to the USD stage defined by 'stagePath'
+    // with a possibility to rename the old usd prefix to a new one
+    void finalize(
+        const Ufe::Path&       stagePath,
+        const PXR_NS::SdfPath* oldPrefix = nullptr,
+        const PXR_NS::SdfPath* newPrefix = nullptr) const;
+
+private:
+    mutable std::map<PXR_NS::SdfPath, MObject> _primToLayerMap;
+};
+
+//------------------------------------------------------------------------------
+// Verify edit restrictions.
+//------------------------------------------------------------------------------
+
+//! Check if an attribute value is allowed to be changed.
+//! \return True, if the attribute value is allowed to be edited in the stage's local Layer Stack.
+MAYAUSD_CORE_PUBLIC
+bool isAttributeEditAllowed(const PXR_NS::UsdAttribute& attr, std::string* errMsg = nullptr);
+
+MAYAUSD_CORE_PUBLIC
+bool isAttributeEditAllowed(const PXR_NS::UsdPrim& prim, const PXR_NS::TfToken& attrName);
+
+//! Check if a prim metadata is allowed to be changed.
+//! Can check a specific key in a metadata dictionary, optionally, if keyPaty is not empty.
+//! \return True, if the metadata value is allowed to be edited in the stage's local Layer Stack.
+MAYAUSD_CORE_PUBLIC
+bool isPrimMetadataEditAllowed(
+    const PXR_NS::UsdPrim& prim,
+    const PXR_NS::TfToken& metadataName,
+    const PXR_NS::TfToken& keyPath,
+    std::string*           errMsg);
+
+//! Check if a property metadata is allowed to be changed.
+//! Can check a specific key in a metadata dictionary, optionally, if keyPaty is not empty.
+//! \return True, if the metadata value is allowed to be edited in the stage's local Layer Stack.
+MAYAUSD_CORE_PUBLIC
+bool isPropertyMetadataEditAllowed(
+    const PXR_NS::UsdPrim& prim,
+    const PXR_NS::TfToken& propName,
+    const PXR_NS::TfToken& metadataName,
+    const PXR_NS::TfToken& keyPath,
+    std::string*           errMsg);
+
+//! Apply restriction rules on the given prim
+MAYAUSD_CORE_PUBLIC
+void applyCommandRestriction(
+    const PXR_NS::UsdPrim& prim,
+    const std::string&     commandName,
+    bool                   allowStronger = false);
+
+//! Apply restriction rules on the given prim
+MAYAUSD_CORE_PUBLIC
+bool applyCommandRestrictionNoThrow(
+    const PXR_NS::UsdPrim& prim,
+    const std::string&     commandName,
+    bool                   allowStronger = false);
+
+//! Check if the edit target in the stage is allowed to be changed.
+//! \return True, if the edit target layer in the stage is allowed to be changed
+MAYAUSD_CORE_PUBLIC
+bool isEditTargetLayerModifiable(
+    const PXR_NS::UsdStageWeakPtr stage,
+    std::string*                  errMsg = nullptr);
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

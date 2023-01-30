@@ -17,6 +17,7 @@
 
 #include <mayaUsd/fileio/translators/translatorUtil.h>
 #include <mayaUsd/fileio/translators/translatorXformable.h>
+#include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/util.h>
 
 #include <pxr/base/tf/staticData.h>
@@ -38,10 +39,13 @@
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnSingleIndexedComponent.h>
 #include <maya/MFnSkinCluster.h>
+#include <maya/MFnTransform.h>
 #include <maya/MMatrix.h>
 #include <maya/MObjectHandle.h>
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
+
+using namespace MAYAUSD_NS_DEF;
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -77,8 +81,6 @@ PXR_NAMESPACE_OPEN_SCOPE
 //
 //    set mesh's transform to inheritsTransform=0 to prevent double transforms
 //    set mesh's transform to match the USD gprim's geomBindTransform
-//      sgustafson: Seems like this should be unnecessary, but I see incorrect
-//      results without doing this.
 //    create skinClusterGroupParts node of type groupParts
 //      set groupParts.inputComponents = vtx[*]
 //    create skinClusterGroupId node of type groupId
@@ -723,8 +725,8 @@ bool _CreateDagPose(
     UsdMayaPrimReaderContext* context,
     MObject*                  dagPoseNode)
 {
-    MStatus     status;
-    MDGModifier dgMod;
+    MStatus      status;
+    MDGModifier& dgMod = MDGModifierUndoItem::create("Skeleton DAG pose creation");
 
     *dagPoseNode = dgMod.createNode(_MayaTokens->dagPoseType, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);
@@ -1002,7 +1004,7 @@ bool _CreateRestMesh(const MObject& inputMesh, const MObject& parent, MObject* r
     // Determine a new name for the rest mesh, and rename the copy.
     static const MString restSuffix("_rest");
     MString              restMeshName = meshFn.name() + restSuffix;
-    MDGModifier          dgMod;
+    MDGModifier&         dgMod = MDGModifierUndoItem::create("Rename deformer input mesh");
     status = dgMod.renameNode(*restMesh, restMeshName);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
@@ -1017,8 +1019,8 @@ bool _ClearIncomingConnections(MPlug& plug)
 {
     MPlugArray connections;
     if (plug.connectedTo(connections, /*asDst*/ true, /*asSrc*/ false)) {
-        MStatus     status;
-        MDGModifier dgMod;
+        MStatus      status;
+        MDGModifier& dgMod = MDGModifierUndoItem::create("Clear deformer connections");
         for (unsigned int i = 0; i < connections.length(); ++i) {
             status = dgMod.disconnect(plug, connections[i]);
             CHECK_MSTATUS_AND_RETURN(status, false);
@@ -1038,37 +1040,42 @@ bool _ConfigureSkinnedObjectTransform(
     MFnDependencyNode transformDep(transform, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
-    // Make sure transforms are not ineherited.
+    // Make sure transforms are not inherited.
     // Otherwise we get a double transform when a transform ancestor
     // affects both this object and the joints that drive the skinned object.
     if (!UsdMayaUtil::setPlugValue(transformDep, _MayaTokens->inheritsTransform, false)) {
         return false;
     }
 
-    // The transform needs to be set to the geomBindTransform.
-    GfVec3d t, r, s;
-    if (UsdMayaTranslatorXformable::ConvertUsdMatrixToComponents(
-            skinningQuery.GetGeomBindTransform(), &t, &r, &s)) {
+    // break any connections on the TRS attributes of the transform. We're going
+    // to set a new value.
+    for (const auto& attrName :
+         { _MayaTokens->translates, _MayaTokens->rotates, _MayaTokens->scales }) {
 
-        for (const auto& pair : { std::make_pair(t, _MayaTokens->translates),
-                                  std::make_pair(r, _MayaTokens->rotates),
-                                  std::make_pair(s, _MayaTokens->scales) }) {
+        for (int c = 0; c < 3; ++c) {
+            MPlug plug = transformDep.findPlug(attrName[c], &status);
+            CHECK_MSTATUS_AND_RETURN(status, false);
 
-            for (int c = 0; c < 3; ++c) {
-                MPlug plug = transformDep.findPlug(pair.second[c], &status);
-                CHECK_MSTATUS_AND_RETURN(status, false);
-
-                // Before setting each plug, make sure there are no connections.
-                // Usd import may have already wired up some connections
-                // (eg., animation channels)
-                if (!_ClearIncomingConnections(plug))
-                    return false;
-
-                status = plug.setValue(pair.first[c]);
-                CHECK_MSTATUS_AND_RETURN(status, false);
-            }
+            // Before setting each plug, make sure there are no connections.
+            // Usd import may have already wired up some connections
+            // (eg., animation channels)
+            if (!_ClearIncomingConnections(plug))
+                return false;
         }
     }
+
+    // primvars:skel:geomBindTransform is the final world space transform that
+    // the deformed mesh should have. Set that transform onto the maya transform
+    // node in a way that correctly handles pivots.
+    MFnDagNode dagFn(transform, &status);
+    CHECK_MSTATUS_AND_RETURN(status, false);
+    MDagPath path;
+    status = dagFn.getPath(path);
+    CHECK_MSTATUS_AND_RETURN(status, false);
+    MFnTransform transformFn(path, &status);
+    GfMatrix4d   geomBindTransform = skinningQuery.GetGeomBindTransform();
+    MMatrix      gbt = UsdMayaUtil::GfMatrixToMMatrix(geomBindTransform);
+    transformFn.set(MTransformationMatrix(gbt));
 
     return true;
 }
@@ -1133,7 +1140,7 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
         return false;
     }
 
-    MDGModifier dgMod;
+    MDGModifier& dgMod = MDGModifierUndoItem::create("Skin cluster creation");
 
     MObject skinCluster = dgMod.createNode(_MayaTokens->skinClusterType, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);

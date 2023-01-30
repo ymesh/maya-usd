@@ -64,6 +64,11 @@ function(mayaUsd_find_python_module module)
     string(TOUPPER ${module} module_upper)
     set(MODULE_FOUND "${module_upper}_FOUND")
     if(NOT ${MODULE_FOUND})
+        # Check for Python Executable
+        if(NOT DEFINED Python_EXECUTABLE OR Python_EXECUTABLE STREQUAL "")
+            MESSAGE(FATAL_ERROR "Python_EXECUTABLE is not set")
+        endif()
+
         if(ARGC GREATER 1 AND ARGV1 STREQUAL "REQUIRED")
             set(${module}_FIND_REQUIRED TRUE)
         endif()
@@ -211,120 +216,6 @@ function(mayaUsd_promoteHeaderList)
     endforeach()
 endfunction()
 
-#
-# mayaUsd_copyFiles( <target>
-#                    [DESTINATION <destination>]
-#                    [FILES <list of files>])
-#
-#   DESTINATION   - destination where files will be copied into.
-#   FILES         - list of files to copy
-#
-function(mayaUsd_copyFiles target)
-    cmake_parse_arguments(PREFIX
-        ""             # options
-        "DESTINATION"  # one_value keywords
-        "FILES"        # multi_value keywords
-        ${ARGN}
-    )
-
-    if(PREFIX_DESTINATION)
-        set(DESTINATION ${PREFIX_DESTINATION})
-    else()
-        message(FATAL_ERROR "DESTINATION keyword is not specified.")
-    endif()
-
-     if(PREFIX_FILES)
-        set(SRCFILES ${PREFIX_FILES})
-    else()
-        message(FATAL_ERROR "FILES keyword is not specified.")
-    endif()
-
-    foreach(file ${SRCFILES})
-        get_filename_component(input_file "${file}" ABSOLUTE)
-        get_filename_component(output_file "${DESTINATION}/${file}" ABSOLUTE)
-
-        add_custom_command(
-            TARGET ${target}
-            PRE_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${input_file} ${output_file}
-            DEPENDS "${SRCFILES}"
-            COMMENT "copying file from ${input_file} to ${output_file}"
-        )
-    endforeach()
-endfunction()
-
-#
-# mayaUsd_copyDirectory( <target>
-#                        [SOURCE <directory>]
-#                        [DESTINATION <destination>]
-#                        [EXCLUDE <exclude_files>]
-#                        [GLOB <pattern>]
-#
-#   SOURCE        - directory to be copied.
-#   DESTINATION   - destination where directory will be copied into.
-#   EXCLUDE       - exclude files from copy.
-#   GLOB          - glob files with pattern (e.g *.cpp, *.py)
-#
-function(mayaUsd_copyDirectory target)
-    cmake_parse_arguments(PREFIX
-        ""
-        "SOURCE;DESTINATION" # one value-keyword
-        "EXCLUDE;GLOB"       # multi_value keywords
-        ${ARGN}
-    )
-
-    # source
-    if(NOT PREFIX_SOURCE)
-        set(PREFIX_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}")
-    endif()
-    get_filename_component(PREFIX_SOURCE "${PREFIX_SOURCE}" ABSOLUTE)
-
-    # destination
-    if(NOT PREFIX_DESTINATION)
-        set(PREFIX_DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
-    endif()
-    get_filename_component(PREFIX_DESTINATION "${PREFIX_DESTINATION}" ABSOLUTE)
-
-    # exclude
-    if(NOT PREFIX_EXCLUDE)
-        unset(PREFIX_EXCLUDE)
-    endif()
-    unset(exclude_files)
-    foreach(pattern ${PREFIX_EXCLUDE})
-        list(APPEND exclude_files "${PREFIX_SOURCE}/${pattern}")
-    endforeach()
-
-    # glob
-    if(NOT PREFIX_GLOB)
-        set(PREFIX_GLOB "*")
-    endif()
-    unset(glob_files)
-    foreach(pattern ${PREFIX_GLOB})
-        list(APPEND glob_files "${PREFIX_SOURCE}/${pattern}")
-    endforeach()
-    file(GLOB_RECURSE files RELATIVE "${PREFIX_SOURCE}" ${glob_files})
-
-    if(NOT "${exclude_files}" STREQUAL "")
-        file(GLOB_RECURSE excludes RELATIVE "${PREFIX_SOURCE}" ${exclude_files})
-        if(excludes)
-            list(REMOVE_ITEM files ${excludes})
-        endif()
-    endif()
-
-    # do the actual copy
-    foreach(file ${files})
-        set(INPUT_FILE "${PREFIX_SOURCE}/${file}")
-        set(OUTPUT_FILE "${PREFIX_DESTINATION}/${file}")
-        add_custom_command(TARGET ${target}
-            PRE_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${INPUT_FILE} ${OUTPUT_FILE}
-            COMMENT "Copying ${file} to ${PREFIX_DESTINATION}"
-            DEPENDS "${INPUT_FILE}"
-        )
-    endforeach()
-endfunction()
-
 function(mayaUsd_split_head_tail input_string split_string var_head var_tail)
     string(FIND "${input_string}" "${split_string}" head_end)
     if("${head_end}" EQUAL -1)
@@ -372,3 +263,49 @@ function(set_python_module_property target)
         )
     endif()
 endfunction()
+
+# This fuction will populate "out_var" with the default values external
+# projects are expected to need.
+# It can take an optional argument that will replace the list separator
+# in CMake values. For instance, if an external project uses a different
+# list separator, the values in here must be changed to reflect this.
+function(get_external_project_default_values out_var)
+    # Some of these variables might end up not being used by some projects
+    # Therefore avoid useless warnings in the log.
+    list(APPEND setting_list --no-warn-unused-cli)
+
+    if(ARGN)
+        list(GET ARGN 0 custom_sep)
+    endif()
+
+    # Macro to add the value only if it's present.
+    macro(external_project_conditional_define option)
+        if (${option})
+            if(custom_sep)
+                # This will change the list separator to the desired one.
+                # i.e. -DCMAKE_OSX_ARCHITECTURES=x86_64;arm64 -> -DCMAKE_OSX_ARCHITECTURES=x86_64|arm64
+                string(REPLACE ";" ${custom_sep} ${option} "${${option}}")
+            endif()
+            list(APPEND setting_list -D${option}=${${option}})
+        endif()
+    endmacro(external_project_conditional_define)
+
+    external_project_conditional_define(CMAKE_INSTALL_MESSAGE)
+    external_project_conditional_define(CMAKE_BUILD_TYPE)
+    external_project_conditional_define(CMAKE_MAKE_PROGRAM)
+
+    if(BUILD_UB2)
+        # UB2 builds require this flag
+        external_project_conditional_define(CMAKE_OSX_ARCHITECTURES)
+        external_project_conditional_define(CMAKE_OSX_DEPLOYMENT_TARGET)
+    endif()
+
+    # Debugging informations for external projects
+    external_project_conditional_define(CMAKE_VERBOSE_MAKEFILE)
+    external_project_conditional_define(CMAKE_FIND_DEBUG_MODE)
+
+    set(${out_var} ${setting_list} PARENT_SCOPE)
+endfunction(get_external_project_default_values)
+
+# Create one for all the project using the default list separator
+get_external_project_default_values(MAYAUSD_EXTERNAL_PROJECT_GENERAL_SETTINGS "$<SEMICOLON>")

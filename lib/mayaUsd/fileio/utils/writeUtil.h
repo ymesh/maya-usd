@@ -42,6 +42,7 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 class UsdUtilsSparseValueWriter;
+struct UsdMayaJobExportArgs;
 
 /// This struct contains helpers for writing USD (thus reading Maya data).
 struct UsdMayaWriteUtil
@@ -54,10 +55,20 @@ struct UsdMayaWriteUtil
     MAYAUSD_CORE_PUBLIC
     static bool WriteUVAsFloat2();
 
-    /// Returns whether the environment setting for renaming map1 TexCoord to st
-    /// is set to true
-    MAYAUSD_CORE_PUBLIC
-    static bool WriteMap1AsST();
+    /// Returns the exported name of a UV set at \p uvIndex according to the renaming rule and the
+    /// current set of options.
+    ///
+    /// \p originalNames is the full array returned by MFnMesh::getUVSetNames().
+    /// \p preserveSetNames is as defined by the -preserveUVSetNames export option and stored in
+    /// UsdMayaJobExportArgs::preserveUVSetNames.
+    /// \p uvSetRemaps is as defined by the -remapUVSetsTo export option and stored in
+    /// UsdMayaJobExportArgs::remapUVSetsTo.
+    /// \p uvIndex is the index of the name we want to query in originalNames.
+    static MString UVSetExportedName(
+        const MStringArray&                       originalNames,
+        bool                                      preserveSetNames,
+        const std::map<std::string, std::string>& uvSetRemaps,
+        unsigned int                              uvIndex);
 
     /// Given an \p attrPlug, try to create a USD attribute on \p usdPrim with
     /// the name \p attrName. Note, it's value will not be set.
@@ -170,9 +181,11 @@ struct UsdMayaWriteUtil
     /// \sa UsdMayaAdaptor::GetAppliedSchemas
     MAYAUSD_CORE_PUBLIC
     static bool WriteAPISchemaAttributesToPrim(
-        const MObject&             mayaObject,
-        const UsdPrim&             prim,
-        UsdUtilsSparseValueWriter* valueWriter = nullptr);
+        const MObject&              mayaObject,
+        const UsdPrim&              prim,
+        const UsdMayaJobExportArgs& jobExportArgs,
+        const UsdTimeCode&          usdTime = UsdTimeCode::Default(),
+        UsdUtilsSparseValueWriter*  valueWriter = nullptr);
 
     template <typename T>
     static size_t WriteSchemaAttributesToPrim(

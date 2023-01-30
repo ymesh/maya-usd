@@ -58,7 +58,7 @@ PxrMayaUsdPreviewSurface_Reader::PxrMayaUsdPreviewSurface_Reader(
 }
 
 /* virtual */
-bool PxrMayaUsdPreviewSurface_Reader::Read(UsdMayaPrimReaderContext* context)
+bool PxrMayaUsdPreviewSurface_Reader::Read(UsdMayaPrimReaderContext& context)
 {
     const UsdPrim& prim = _GetArgs().GetUsdPrim();
     UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -76,7 +76,7 @@ bool PxrMayaUsdPreviewSurface_Reader::Read(UsdMayaPrimReaderContext* context)
               &status,
               &mayaObject)
           && depFn.setObject(mayaObject))) {
-        // we need to make sure assumes those types are loaded..
+        // we need to make sure those types are loaded..
         TF_RUNTIME_ERROR(
             "Could not create node of type %s for shader '%s'. "
             "Probably missing a loadPlugin.\n",
@@ -85,7 +85,7 @@ bool PxrMayaUsdPreviewSurface_Reader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
 
     for (const UsdShadeInput& input : shaderSchema.GetInputs()) {
         TfToken baseName = GetMayaNameForUsdAttrName(input.GetFullName());

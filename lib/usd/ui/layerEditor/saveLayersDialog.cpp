@@ -12,6 +12,7 @@
 #include <mayaUsd/base/tokens.h>
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/listeners/notice.h>
+#include <mayaUsd/utils/utilFileSystem.h>
 #include <mayaUsd/utils/utilSerialization.h>
 
 #include <pxr/usd/sdf/layer.h>
@@ -103,19 +104,16 @@ public:
 
     QString layerDisplayName() const;
 
-    QString absolutePath() const;
     QString pathToSaveAs() const;
 
-    void setAbsolutePath(const std::string& path);
+    void setPathToSaveAs(const std::string& path);
 
 protected:
     void onOpenBrowser();
     void onTextChanged(const QString& text);
-    void onRelativeButtonChecked(bool checked);
 
 public:
-    QString                                                _initialStartFolder;
-    QString                                                _absolutePath;
+    QString                                                _pathToSaveAs;
     SaveLayersDialog*                                      _parent { nullptr };
     std::pair<SdfLayerRefPtr, MayaUsd::utils::LayerParent> _layerPair;
     QLabel*                                                _label { nullptr };
@@ -146,10 +144,9 @@ SaveLayerPathRow::SaveLayerPathRow(
     _label->setToolTip(in_parent->buildTooltipForLayer(_layerPair.first));
     gridLayout->addWidget(_label, 0, 0);
 
-    _initialStartFolder = MayaUsd::utils::getSceneFolder().c_str();
-    _absolutePath = MayaUsd::utils::generateUniqueFileName(stageName).c_str();
+    _pathToSaveAs = MayaUsd::utils::generateUniqueFileName(stageName).c_str();
 
-    QFileInfo fileInfo(_absolutePath);
+    QFileInfo fileInfo(_pathToSaveAs);
     QString   suggestedFullPath = fileInfo.absoluteFilePath();
     _pathEdit = new AnonLayerPathEdit(this);
     _pathEdit->setText(suggestedFullPath);
@@ -168,14 +165,12 @@ SaveLayerPathRow::SaveLayerPathRow(
 
 QString SaveLayerPathRow::layerDisplayName() const { return _label->text(); }
 
-QString SaveLayerPathRow::absolutePath() const { return _absolutePath; }
+QString SaveLayerPathRow::pathToSaveAs() const { return _pathToSaveAs; }
 
-QString SaveLayerPathRow::pathToSaveAs() const { return _absolutePath; }
-
-void SaveLayerPathRow::setAbsolutePath(const std::string& path)
+void SaveLayerPathRow::setPathToSaveAs(const std::string& path)
 {
-    _absolutePath = path.c_str();
-    _pathEdit->setText(_absolutePath);
+    _pathToSaveAs = path.c_str();
+    _pathEdit->setText(_pathToSaveAs);
     _pathEdit->setEnabled(true);
 }
 
@@ -183,25 +178,15 @@ void SaveLayerPathRow::onOpenBrowser()
 {
     std::string fileName;
     if (SaveLayersDialog::saveLayerFilePathUI(fileName)) {
-        setAbsolutePath(fileName);
+        if (UsdMayaUtilFileSystem::requireUsdPathsRelativeToMayaSceneFile()) {
+            fileName = UsdMayaUtilFileSystem::getPathRelativeToMayaSceneFile(fileName);
+        }
+
+        setPathToSaveAs(fileName);
     }
 }
 
-void SaveLayerPathRow::onTextChanged(const QString& text) { _absolutePath = text; }
-
-void SaveLayerPathRow::onRelativeButtonChecked(bool checked)
-{
-    if (checked) {
-        QDir dir(_initialStartFolder);
-
-        QString relativePath = dir.relativeFilePath(_absolutePath);
-        _pathEdit->setText(relativePath);
-        _pathEdit->setEnabled(false);
-    } else {
-        _pathEdit->setEnabled(true);
-        _pathEdit->setText(_absolutePath);
-    }
-}
+void SaveLayerPathRow::onTextChanged(const QString& text) { _pathToSaveAs = text; }
 
 class SaveLayerPathRowArea : public QScrollArea
 {
@@ -244,28 +229,28 @@ public:
 namespace UsdLayerEditor {
 
 #if defined(WANT_UFE_BUILD)
-SaveLayersDialog::SaveLayersDialog(QWidget* in_parent, const MDagPathArray& proxyShapes)
+SaveLayersDialog::SaveLayersDialog(
+    QWidget*                                     in_parent,
+    const std::vector<MayaUsd::StageSavingInfo>& infos)
     : QDialog(in_parent)
     , _sessionState(nullptr)
 {
     MString msg, nbStages;
 
-    nbStages = proxyShapes.length();
+    nbStages = infos.size();
     msg.format(StringResources::getAsMString(StringResources::kSaveXStages), nbStages);
     setWindowTitle(MQtUtil::toQString(msg));
 
     // For each stage collect the layers to save.
-    for (const auto& shape : proxyShapes) {
+    for (const auto& info : infos) {
 
-        getLayersToSave(shape.fullPathName().asChar(), shape.partialPathName().asChar());
+        getLayersToSave(
+            info.dagPath.fullPathName().asChar(), info.dagPath.partialPathName().asChar());
     }
 
     QString msg1, msg2;
     getDialogMessages(
-        static_cast<int>(proxyShapes.length()),
-        static_cast<int>(_anonLayerPairs.size()),
-        msg1,
-        msg2);
+        static_cast<int>(infos.size()), static_cast<int>(_anonLayerPairs.size()), msg1, msg2);
     buildDialog(msg1, msg2);
 }
 #endif
@@ -489,10 +474,21 @@ void SaveLayersDialog::onSaveAll()
             if (!path.isEmpty()) {
                 auto sdfLayer = row->_layerPair.first;
                 auto parent = row->_layerPair.second;
-                auto qFileName = row->absolutePath();
+                auto qFileName = row->pathToSaveAs();
+
+                // If the qFileName is a relative path, compute the absolute path from the scene
+                // folder otherwise, USD will use a path relative the current working directory.
+                bool savePathAsRelative = false;
+                if (QDir::isRelativePath(qFileName)) {
+                    QDir dir(MayaUsd::utils::getSceneFolder().c_str());
+                    qFileName = dir.absoluteFilePath(qFileName);
+                    savePathAsRelative = true;
+                }
+
                 auto sFileName = qFileName.toStdString();
 
-                auto newLayer = MayaUsd::utils::saveAnonymousLayer(sdfLayer, sFileName, parent);
+                auto newLayer = MayaUsd::utils::saveAnonymousLayer(
+                    sdfLayer, sFileName, savePathAsRelative, parent);
                 if (newLayer) {
                     _newPaths.append(QString::fromStdString(sdfLayer->GetDisplayName()));
                     _newPaths.append(qFileName);
@@ -513,25 +509,58 @@ void SaveLayersDialog::onCancel() { reject(); }
 
 bool SaveLayersDialog::okToSave()
 {
-    int         i, count;
-    QStringList existingFiles;
+    // Files can have the same file names in complicated ways, with one file having two copies,
+    // another three, so we keep the exact number of copies per file path.
+    QMap<QString, int> alreadySeenPaths;
+    QStringList        existingFiles;
 
     // The anonymous layer section in the dialog can be empty.
     if (nullptr != _anonLayersWidget) {
         QLayout* anonLayout = _anonLayersWidget->layout();
-        for (i = 0, count = anonLayout->count(); i < count; ++i) {
+        for (int i = 0, count = anonLayout->count(); i < count; ++i) {
             auto row = dynamic_cast<SaveLayerPathRow*>(anonLayout->itemAt(i)->widget());
             if (nullptr == row)
                 continue;
 
             QString path = row->pathToSaveAs();
             if (!path.isEmpty()) {
+                if (alreadySeenPaths.count(path) > 0) {
+                    alreadySeenPaths[path] += 1;
+                } else {
+                    alreadySeenPaths[path] = 1;
+                }
                 QFileInfo fInfo(path);
                 if (fInfo.exists()) {
                     existingFiles.append(path);
                 }
             }
         }
+    }
+
+    QStringList identicalFiles;
+    int         identicalCount = 0;
+    for (const auto& path : alreadySeenPaths.keys()) {
+        const int count = alreadySeenPaths[path];
+        if (count > 1) {
+            identicalFiles.append(path);
+            identicalCount += count;
+        }
+    }
+
+    if (identicalCount > 0) {
+        MString errorMsg;
+        MString count;
+        count = identicalCount;
+        errorMsg.format(
+            StringResources::getAsMString(StringResources::kSaveAnonymousIdenticalFiles), count);
+
+        warningDialog(
+            StringResources::getAsQString(StringResources::kSaveAnonymousIdenticalFilesTitle),
+            MQtUtil::toQString(errorMsg),
+            &identicalFiles,
+            QMessageBox::Icon::Critical);
+
+        return false;
     }
 
     if (!existingFiles.isEmpty()) {

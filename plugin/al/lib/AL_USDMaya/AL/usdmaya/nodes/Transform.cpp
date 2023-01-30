@@ -25,8 +25,21 @@
 #include <pxr/usd/usdGeom/scope.h>
 
 #include <maya/MBoundingBox.h>
+#include <maya/MDGContextGuard.h>
 #include <maya/MGlobal.h>
+#include <maya/MProfiler.h>
 #include <maya/MTime.h>
+
+namespace {
+const int _transformProfilerCategory = MProfiler::addCategory(
+#if MAYA_API_VERSION >= 20190000
+    "Transform",
+    "Transform"
+#else
+    "Transform"
+#endif
+);
+} // namespace
 
 namespace {
 // Simple RAII class to ensure boolean gets set to false when done.
@@ -190,6 +203,9 @@ MStatus Transform::initialise()
 //----------------------------------------------------------------------------------------------------------------------
 MStatus Transform::compute(const MPlug& plug, MDataBlock& dataBlock)
 {
+    MProfilingScope profilerScope(
+        _transformProfilerCategory, MProfiler::kColorE_L3, "Compute plug");
+
     TF_DEBUG(ALUSDMAYA_EVALUATION).Msg("Transform::compute %s\n", plug.name().asChar());
     if (plug == m_time || plug == m_timeOffset || plug == m_timeScalar || plug == m_outTime) {
         updateTransform(dataBlock);
@@ -237,6 +253,9 @@ MStatus Transform::compute(const MPlug& plug, MDataBlock& dataBlock)
 //----------------------------------------------------------------------------------------------------------------------
 void Transform::updateTransform(MDataBlock& dataBlock)
 {
+    MProfilingScope profilerScope(
+        _transformProfilerCategory, MProfiler::kColorE_L3, "Update transform");
+
     TF_DEBUG(ALUSDMAYA_EVALUATION).Msg("Transform::updateTransform\n");
 
     // It's possible that the calls to inputTimeValue below will ALSO trigger a call to
@@ -334,6 +353,9 @@ MStatus Transform::validateAndSetValue(
     const MDataHandle& handle,
     const MDGContext&  context)
 {
+    MProfilingScope profilerScope(
+        _transformProfilerCategory, MProfiler::kColorE_L3, "Validate and set value");
+
     TF_DEBUG(ALUSDMAYA_EVALUATION).Msg("Transform::validateAndSetValue %s\n", plug.name().asChar());
 
     if (plug.isNull())
@@ -356,7 +378,11 @@ MStatus Transform::validateAndSetValue(
             outputDoubleValue(dataBlock, m_timeScalar, handle.asDouble());
         }
 
+        UsdTimeCode usdTime(handle.asTime().as(MTime::uiUnit()));
+        getTransMatrix()->updateToTime(usdTime);
         updateTransform(dataBlock);
+        outputTimeValue(dataBlock, m_outTime, handle.asTime());
+        dirtyMatrix();
         return MS::kSuccess;
     } else
         // The local translate offset doesn't drive the TRS, so set the value here, and the
@@ -384,6 +410,7 @@ MStatus Transform::validateAndSetValue(
         MDataBlock dataBlock = forceCache(*(MDGContext*)&context);
         getTransMatrix()->enablePushToPrim(handle.asBool());
         outputBoolValue(dataBlock, m_pushToPrim, handle.asBool());
+        dirtyMatrix();
         return MS::kSuccess;
     } else if (plug == m_readAnimatedValues) {
         MDataBlock dataBlock = forceCache(*(MDGContext*)&context);
@@ -433,10 +460,61 @@ MStatus Transform::validateAndSetValue(
             }
             transform()->setPrim(UsdPrim(), this);
         }
+        dirtyMatrix();
         return MS::kSuccess;
     }
 
     return MPxTransform::validateAndSetValue(plug, handle, context);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+MStatus Transform::preEvaluation(const MDGContext& context, const MEvaluationNode& evaluationNode)
+{
+    MDGContextGuard contextGuard(context);
+    if (!context.isNormal()) {
+
+        MDataBlock dataBlock = forceCache(*(MDGContext*)&context);
+        auto*      data = inputDataValue<MayaUsdStageData>(dataBlock, m_inStageData);
+        if (data && data->stage) {
+            MString path = inputStringValue(dataBlock, m_primPath);
+            SdfPath primPath;
+            UsdPrim usdPrim;
+            if (path.length()) {
+                primPath = SdfPath(path.asChar());
+                usdPrim = data->stage->GetPrimAtPath(primPath);
+            }
+            getTransMatrix()->setPrim(usdPrim, this);
+        }
+
+        MTime time;
+        context.getTime(time);
+        MTime theTime = (time - inputTimeValue(dataBlock, m_timeOffset))
+            * inputDoubleValue(dataBlock, m_timeScalar);
+        UsdTimeCode usdTime(theTime.as(MTime::uiUnit()));
+
+        getTransMatrix()->updateToTime(usdTime);
+    }
+    return MPxTransform::preEvaluation(context, evaluationNode);
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+MStatus Transform::postEvaluation(
+    const MDGContext&      context,
+    const MEvaluationNode& evaluationNode,
+    PostEvaluationType     evalType)
+{
+    MDGContextGuard contextGuard(context);
+
+    MDataBlock dataBlock = forceCache();
+
+    MStatus     status;
+    MDataHandle timeInHandle = dataBlock.inputValue(m_outTime, &status);
+    MTime       theTime = timeInHandle.asTime();
+    UsdTimeCode usdTime(theTime.as(MTime::uiUnit()));
+
+    getTransMatrix()->updateToTime(usdTime);
+
+    return MPxTransform::postEvaluation(context, evaluationNode, evalType);
 }
 
 //----------------------------------------------------------------------------------------------------------------------

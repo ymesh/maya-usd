@@ -18,6 +18,7 @@
 #include <mayaUsd/fileio/shaderWriter.h>
 #include <mayaUsd/fileio/shaderWriterRegistry.h>
 #include <mayaUsd/fileio/shading/shadingModeRegistry.h>
+#include <mayaUsd/fileio/utils/shadingUtil.h>
 #include <mayaUsd/fileio/writeJobContext.h>
 #include <mayaUsd/utils/util.h>
 
@@ -26,7 +27,6 @@
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/gf/vec4f.h>
 #include <pxr/base/tf/diagnostic.h>
-#include <pxr/base/tf/pathUtils.h>
 #include <pxr/base/tf/staticTokens.h>
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/base/tf/token.h>
@@ -35,6 +35,9 @@
 #include <pxr/usd/sdf/assetPath.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
+#include <pxr/usd/sdr/registry.h>
+#include <pxr/usd/sdr/shaderNode.h>
+#include <pxr/usd/sdr/shaderProperty.h>
 #include <pxr/usd/usdShade/input.h>
 #include <pxr/usd/usdShade/material.h>
 #include <pxr/usd/usdShade/output.h>
@@ -49,12 +52,33 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
-#include <ghc/filesystem.hpp>
-
-#include <regex>
-#include <system_error>
-
 PXR_NAMESPACE_OPEN_SCOPE
+
+namespace {
+SdfValueTypeName _GetVarnameType()
+{
+    static SdfValueTypeName varnameType;
+    static std::once_flag   once;
+    std::call_once(once, []() {
+        // varname input went from TfToken to std::string in USD 20.11. Fetch the type directly from
+        // the registry:
+        SdrRegistry&          registry = SdrRegistry::GetInstance();
+        SdrShaderNodeConstPtr shaderNodeDef
+            = registry.GetShaderNodeByIdentifier(TrUsdTokens->UsdPrimvarReader_float2);
+        varnameType = shaderNodeDef
+            ? shaderNodeDef->GetShaderInput(TrUsdTokens->varname)->GetTypeAsSdfType().first
+            : SdfValueTypeNames->Token;
+    });
+    return varnameType;
+}
+} // namespace
+
+// Maya USD used to only write the colorspace if the colorspace was not the default.
+// This env var allows users to go back to the sparse write method when desired
+TF_DEFINE_ENV_SETTING(
+    MAYAUSD_EXPORT_VERBOSE_COLORSPACE_METADATA,
+    true,
+    "This env flag controls whether colorspace values are written even if they're the default.")
 
 class PxrUsdTranslators_FileTextureWriter : public UsdMayaShaderWriter
 {
@@ -68,9 +92,12 @@ public:
 
     void Write(const UsdTimeCode& usdTime) override;
 
-    TfToken GetShadingAttributeNameForMayaAttrName(const TfToken& mayaAttrName) override;
+    UsdAttribute GetShadingAttributeForMayaAttrName(
+        const TfToken&          mayaAttrName,
+        const SdfValueTypeName& typeName) override;
 
-    void WriteTransform2dNode(const UsdTimeCode& usdTime, const UsdShadeShader& texShaderSchema);
+    void    WriteTransform2dNode(const UsdTimeCode& usdTime, const UsdShadeShader& texShaderSchema);
+    SdfPath getPlace2DTexturePath(const MFnDependencyNode& depNodeFn);
 };
 
 PXRUSDMAYA_REGISTER_SHADER_WRITER(file, PxrUsdTranslators_FileTextureWriter);
@@ -80,7 +107,7 @@ TF_DEFINE_PRIVATE_TOKENS(
     _tokens,
 
     // UsdPrimvarReader_float2 Prim Name
-    ((PrimvarReaderShaderName, "TexCoordReader"))
+    ((PrimvarReaderShaderName, "shared_TexCoordReader"))
 
     // Usd2dTransform Prim Name
     ((UsdTransform2dShaderName, "UsdTransform2d"))
@@ -91,9 +118,14 @@ TF_DEFINE_PRIVATE_TOKENS(
 UsdMayaShaderWriter::ContextSupport
 PxrUsdTranslators_FileTextureWriter::CanExport(const UsdMayaJobExportArgs& exportArgs)
 {
-    return exportArgs.convertMaterialsTo == UsdImagingTokens->UsdPreviewSurface
-        ? ContextSupport::Supported
-        : ContextSupport::Fallback;
+    if (exportArgs.convertMaterialsTo == UsdImagingTokens->UsdPreviewSurface) {
+        return ContextSupport::Supported;
+    }
+    // Only report as fallback if UsdPreviewSurface was not explicitly requested:
+    if (exportArgs.allMaterialConversions.count(UsdImagingTokens->UsdPreviewSurface) == 0) {
+        return ContextSupport::Fallback;
+    }
+    return ContextSupport::Unsupported;
 }
 
 PxrUsdTranslators_FileTextureWriter::PxrUsdTranslators_FileTextureWriter(
@@ -123,56 +155,78 @@ PxrUsdTranslators_FileTextureWriter::PxrUsdTranslators_FileTextureWriter(
 
     // Now create a UsdPrimvarReader shader that the UsdUvTexture shader will
     // use.
-    const SdfPath primvarReaderShaderPath
-        = texShaderSchema.GetPath().AppendChild(_tokens->PrimvarReaderShaderName);
-    UsdShadeShader primvarReaderShaderSchema
-        = UsdShadeShader::Define(GetUsdStage(), primvarReaderShaderPath);
+    const SdfPath primvarReaderShaderPath = getPlace2DTexturePath(depNodeFn);
 
-    primvarReaderShaderSchema.CreateIdAttr(VtValue(TrUsdTokens->UsdPrimvarReader_float2));
+    if (!GetUsdStage()->GetPrimAtPath(primvarReaderShaderPath)) {
+        UsdShadeShader primvarReaderShaderSchema
+            = UsdShadeShader::Define(GetUsdStage(), primvarReaderShaderPath);
 
-    UsdShadeInput varnameInput
-        = primvarReaderShaderSchema.CreateInput(TrUsdTokens->varname, SdfValueTypeNames->Token);
+        primvarReaderShaderSchema.CreateIdAttr(VtValue(TrUsdTokens->UsdPrimvarReader_float2));
 
-    // We expose the primvar reader varname attribute to the material to allow
-    // easy specialization based on UV mappings to geometries:
-    SdfPath          materialPath = GetUsdPath().GetParentPath();
-    UsdShadeMaterial materialSchema(GetUsdStage()->GetPrimAtPath(materialPath));
-    while (!materialSchema && !materialPath.IsEmpty()) {
-        materialPath = materialPath.GetParentPath();
-        materialSchema = UsdShadeMaterial(GetUsdStage()->GetPrimAtPath(materialPath));
-    }
+        UsdShadeInput varnameInput
+            = primvarReaderShaderSchema.CreateInput(TrUsdTokens->varname, _GetVarnameType());
 
-    if (materialSchema) {
         TfToken inputName(
             TfStringPrintf("%s:%s", depNodeFn.name().asChar(), TrUsdTokens->varname.GetText()));
-        UsdShadeInput materialInput
-            = materialSchema.CreateInput(inputName, SdfValueTypeNames->Token);
-        materialInput.Set(UsdUtilsGetPrimaryUVSetName());
-        varnameInput.ConnectToSource(materialInput);
-        // Note: This needs to be done for all nodes that require UV input. In
-        // the UsdPreviewSurface case, the file node is the only one, but for
-        // other Maya nodes like cloth, checker, mandelbrot, we will also need
-        // to resolve the UV channels. This means traversing UV inputs until we
-        // find the unconnected one that implicitly connects to uvSet[0] of the
-        // geometry, or an explicit uvChooser node connecting to alternate uvSets.
+
+        // We expose the primvar reader varname attribute to the material to allow
+        // easy specialization based on UV mappings to geometries:
+        UsdPrim          materialPrim = primvarReaderShaderSchema.GetPrim().GetParent();
+        UsdShadeMaterial materialSchema(materialPrim);
+        while (!materialSchema && materialPrim) {
+            UsdShadeNodeGraph intermediateNodeGraph(materialPrim);
+            if (intermediateNodeGraph) {
+                UsdShadeInput intermediateInput
+                    = intermediateNodeGraph.CreateInput(inputName, _GetVarnameType());
+                varnameInput.ConnectToSource(intermediateInput);
+                varnameInput = intermediateInput;
+            }
+
+            materialPrim = materialPrim.GetParent();
+            materialSchema = UsdShadeMaterial(materialPrim);
+        }
+
+        VtValue varNameValue;
+        if (_GetVarnameType() == SdfValueTypeNames->Token) {
+            varNameValue = UsdUtilsGetPrimaryUVSetName();
+        } else {
+            varNameValue = UsdUtilsGetPrimaryUVSetName().GetString();
+        }
+
+        if (materialSchema) {
+            UsdShadeInput materialInput = materialSchema.CreateInput(inputName, _GetVarnameType());
+            materialInput.Set(varNameValue);
+            varnameInput.ConnectToSource(materialInput);
+            // Note: This needs to be done for all nodes that require UV input. In
+            // the UsdPreviewSurface case, the file node is the only one, but for
+            // other Maya nodes like cloth, checker, mandelbrot, we will also need
+            // to resolve the UV channels. This means traversing UV inputs until we
+            // find the unconnected one that implicitly connects to uvSet[0] of the
+            // geometry, or an explicit uvChooser node connecting to alternate uvSets.
+        } else {
+            varnameInput.Set(varNameValue);
+        }
+
+        UsdShadeOutput primvarReaderOutput = primvarReaderShaderSchema.CreateOutput(
+            TrUsdTokens->result, SdfValueTypeNames->Float2);
+
+        // Connect the output of the primvar reader to the texture coordinate
+        // input of the UV texture.
+        texShaderSchema.CreateInput(TrUsdTokens->st, SdfValueTypeNames->Float2)
+            .ConnectToSource(primvarReaderOutput);
     } else {
-        varnameInput.Set(UsdUtilsGetPrimaryUVSetName());
+        // Re-using an existing primvar reader:
+        UsdShadeShader primvarReaderShaderSchema(
+            GetUsdStage()->GetPrimAtPath(primvarReaderShaderPath));
+        UsdShadeOutput primvarReaderOutput
+            = primvarReaderShaderSchema.GetOutput(TrUsdTokens->result);
+
+        // Connect the output of the primvar reader to the texture coordinate
+        // input of the UV texture.
+        texShaderSchema.CreateInput(TrUsdTokens->st, SdfValueTypeNames->Float2)
+            .ConnectToSource(primvarReaderOutput);
     }
-
-    UsdShadeOutput primvarReaderOutput
-        = primvarReaderShaderSchema.CreateOutput(TrUsdTokens->result, SdfValueTypeNames->Float2);
-
-    // Connect the output of the primvar reader to the texture coordinate
-    // input of the UV texture.
-    texShaderSchema.CreateInput(TrUsdTokens->st, SdfValueTypeNames->Float2)
-        .ConnectToSource(primvarReaderOutput);
 }
-
-namespace {
-// Match UDIM pattern, from 1001 to 1999
-const std::regex
-    _udimRegex(".*[^\\d](1(?:[0-9][0-9][1-9]|[1-9][1-9]0|0[1-9]0|[1-9]00))(?:[^\\d].*|$)");
-} // namespace
 
 /* virtual */
 void PxrUsdTranslators_FileTextureWriter::Write(const UsdTimeCode& usdTime)
@@ -208,48 +262,27 @@ void PxrUsdTranslators_FileTextureWriter::Write(const UsdTimeCode& usdTime)
         return;
     }
 
-    // WARNING: This extremely minimal attempt at making the file path relative
-    //          to the USD stage is a stopgap measure intended to provide
-    //          minimal interop. It will be replaced by proper use of Maya and
-    //          USD asset resolvers. For package files, the exporter needs full
-    //          paths.
+    const MPlug tilingAttr
+        = depNodeFn.findPlug(TrMayaTokens->uvTilingMode.GetText(), true, &status);
+    const bool isUDIM = (status == MS::kSuccess && tilingAttr.asInt() == 3);
 
     // We use the ExportArgs fileName here instead of the USD root layer path
     // to make sure that we are basing logic of the final export location
-    const std::string fileName = _GetExportArgs().GetResolvedFileName();
-    TfToken           fileExt(TfGetExtension(fileName));
-    if (fileExt != UsdMayaTranslatorTokens->UsdFileExtensionPackage) {
-        ghc::filesystem::path usdDir(fileName);
-        usdDir = usdDir.parent_path();
-        std::error_code       ec;
-        ghc::filesystem::path relativePath = ghc::filesystem::relative(fileTextureName, usdDir, ec);
-        if (!ec && !relativePath.empty()) {
-            fileTextureName = relativePath.generic_string();
-        }
-    }
-
-    // Update filename in case of UDIM
-    const MPlug tilingAttr
-        = depNodeFn.findPlug(TrMayaTokens->uvTilingMode.GetText(), true, &status);
-    if (status == MS::kSuccess && tilingAttr.asInt() == 3) {
-        std::smatch match;
-        if (std::regex_search(fileTextureName, match, _udimRegex) && match.size() == 2) {
-            fileTextureName = std::string(match[0].first, match[1].first)
-                + TrMayaTokens->UDIMTag.GetString() + std::string(match[1].second, match[0].second);
-        }
-    }
+    UsdMayaShadingUtil::ResolveUsdTextureFileName(
+        fileTextureName, _GetExportArgs().GetResolvedFileName(), isUDIM);
 
     UsdShadeInput fileInput = shaderSchema.CreateInput(TrUsdTokens->file, SdfValueTypeNames->Asset);
     fileInput.Set(SdfAssetPath(fileTextureName.c_str()), usdTime);
 
     MPlug colorSpacePlug = depNodeFn.findPlug(TrMayaTokens->colorSpace.GetText(), true, &status);
     if (status == MS::kSuccess) {
-        MString colorRuleCmd;
+        const bool verboseColorspace = TfGetEnvSetting(MAYAUSD_EXPORT_VERBOSE_COLORSPACE_METADATA);
+        MString    colorRuleCmd;
         colorRuleCmd.format(
             "colorManagementFileRules -evaluate \"^1s\";", fileTextureNamePlug.asString());
         const MString colorSpaceByRule(MGlobal::executeCommandStringResult(colorRuleCmd));
         const MString colorSpace(colorSpacePlug.asString(&status));
-        if (status == MS::kSuccess && colorSpace != colorSpaceByRule) {
+        if (status == MS::kSuccess && (verboseColorspace || colorSpace != colorSpaceByRule)) {
             fileInput.GetAttr().SetColorSpace(TfToken(colorSpace.asChar()));
         }
 
@@ -529,94 +562,177 @@ void PxrUsdTranslators_FileTextureWriter::WriteTransform2dNode(
     }
 
     // Get the TexCoordReader node and its output "result"
-    const SdfPath primvarReaderShaderPath
-        = texShaderSchema.GetPath().AppendChild(_tokens->PrimvarReaderShaderName);
-
+    const SdfPath        primvarReaderShaderPath = getPlace2DTexturePath(depNodeFn);
     const UsdShadeShader primvarReaderShader
         = texShaderSchema.Get(GetUsdStage(), primvarReaderShaderPath);
 
     const UsdShadeOutput primvarReaderShaderOutput
         = primvarReaderShader.GetOutput(TrUsdTokens->result);
 
-    // Create the Transform2d node as a child of the UsdUVTexture node
-    const SdfPath transform2dShaderPath
-        = texShaderSchema.GetPath().AppendChild(_tokens->UsdTransform2dShaderName);
-    UsdShadeShader transform2dShaderSchema
-        = UsdShadeShader::Define(GetUsdStage(), transform2dShaderPath);
+    // We have two cases. If the node is connected to a place2DTransform, then the transform data
+    // was on the placement node. If not, then the transform data was on the file node.
+    std::string usdUvTransformName;
+    if (primvarReaderShaderPath.GetName() == _tokens->PrimvarReaderShaderName.GetString()) {
+        usdUvTransformName = TfStringPrintf(
+            "%s_%s",
+            UsdMayaUtil::SanitizeName(depNodeFn.name().asChar()).c_str(),
+            _tokens->UsdTransform2dShaderName.GetText());
 
-    transform2dShaderSchema.CreateIdAttr(VtValue(TrUsdTokens->UsdTransform2d));
-
-    // Create the Transform2d input "in" attribute and connect it
-    // to the TexCoordReader output "result"
-    transform2dShaderSchema.CreateInput(TrUsdTokens->in, SdfValueTypeNames->Float2)
-        .ConnectToSource(primvarReaderShaderOutput);
-
-    // Compute the Transform2d values, converting from Maya's coordinates to USD coordinates
-
-    // Maya's place2dtexture transform order seems to be `in * T * S * R`, where the rotation
-    // pivot is (0.5, 0.5) and scale pivot is (0,0). USD's Transform2d transform order is `in *
-    // S * R * T`, where the rotation and scale pivots are (0,0). This conversion translates
-    // from place2dtexture's UV space to Transform2d's UV space: `in * S * T * Rpivot_inverse *
-    // R * Rpivot`
-    GfMatrix4f pivotXform = GfMatrix4f().SetTranslate(GfVec3f(0.5, 0.5, 0));
-    GfMatrix4f translateXform
-        = GfMatrix4f().SetTranslate(GfVec3f(translationValue[0], translationValue[1], 0));
-    GfRotation rotation = GfRotation(GfVec3f::ZAxis(), rotationValue);
-    GfMatrix4f rotationXform = GfMatrix4f().SetRotate(rotation);
-    GfVec3f    scale;
-    if (fabs(scaleValue[0]) <= std::numeric_limits<float>::epsilon()
-        || fabs(scaleValue[1]) <= std::numeric_limits<float>::epsilon()) {
-        TF_WARN(
-            "At least one of the components of RepeatUV for %s are set to zero.  To avoid divide "
-            "by zero exceptions, these values are changed to the smallest finite float greater "
-            "than zero.",
-            UsdMayaUtil::GetMayaNodeName(GetMayaObject()).c_str());
-
-        scale = GfVec3f(
-            1.0 / std::max(scaleValue[0], std::numeric_limits<float>::min()),
-            1.0 / std::max(scaleValue[1], std::numeric_limits<float>::min()),
-            1.0);
     } else {
-        scale = GfVec3f(1.0 / scaleValue[0], 1.0 / scaleValue[1], 1.0);
+        usdUvTransformName = TfStringPrintf(
+            "%s_%s",
+            primvarReaderShaderPath.GetName().c_str(),
+            _tokens->UsdTransform2dShaderName.GetText());
     }
 
-    GfMatrix4f scaleXform = GfMatrix4f().SetScale(scale);
+    const SdfPath transform2dShaderPath = texShaderSchema.GetPath().GetParentPath().AppendChild(
+        TfToken(usdUvTransformName.c_str()));
 
-    GfMatrix4f transform
-        = scaleXform * translateXform * pivotXform.GetInverse() * rotationXform * pivotXform;
-    GfVec3f translationResult = transform.ExtractTranslation();
-    translationValue.Set(translationResult[0], translationResult[1]);
+    if (!GetUsdStage()->GetPrimAtPath(transform2dShaderPath)) {
+        // Create the Transform2d node as a child of the UsdUVTexture node
+        UsdShadeShader transform2dShaderSchema
+            = UsdShadeShader::Define(GetUsdStage(), transform2dShaderPath);
 
-    // Create and set the Transform2d input attributes
-    transform2dShaderSchema.CreateInput(TrUsdTokens->translation, SdfValueTypeNames->Float2)
-        .Set(translationValue);
+        transform2dShaderSchema.CreateIdAttr(VtValue(TrUsdTokens->UsdTransform2d));
 
-    transform2dShaderSchema.CreateInput(TrUsdTokens->rotation, SdfValueTypeNames->Float)
-        .Set(rotationValue);
+        // Create the Transform2d input "in" attribute and connect it
+        // to the TexCoordReader output "result"
+        transform2dShaderSchema.CreateInput(TrUsdTokens->in, SdfValueTypeNames->Float2)
+            .ConnectToSource(primvarReaderShaderOutput);
 
-    transform2dShaderSchema.CreateInput(TrUsdTokens->scale, SdfValueTypeNames->Float2)
-        .Set(scaleValue);
+        // Compute the Transform2d values, converting from Maya's coordinates to USD coordinates
 
-    // Create the Transform2d output "result" attribute
-    UsdShadeOutput transform2dOutput
-        = transform2dShaderSchema.CreateOutput(TrUsdTokens->result, SdfValueTypeNames->Float2);
+        // Maya's place2dtexture transform order seems to be `in * T * S * R`, where the rotation
+        // pivot is (0.5, 0.5) and scale pivot is (0,0). USD's Transform2d transform order is `in *
+        // S * R * T`, where the rotation and scale pivots are (0,0). This conversion translates
+        // from place2dtexture's UV space to Transform2d's UV space: `in * S * T * Rpivot_inverse *
+        // R * Rpivot`
+        GfMatrix4f pivotXform = GfMatrix4f().SetTranslate(GfVec3f(0.5, 0.5, 0));
+        GfMatrix4f translateXform
+            = GfMatrix4f().SetTranslate(GfVec3f(translationValue[0], translationValue[1], 0));
+        GfRotation rotation = GfRotation(GfVec3f::ZAxis(), rotationValue);
+        GfMatrix4f rotationXform = GfMatrix4f().SetRotate(rotation);
+        GfVec3f    scale;
+        if (fabs(scaleValue[0]) <= std::numeric_limits<float>::epsilon()
+            || fabs(scaleValue[1]) <= std::numeric_limits<float>::epsilon()) {
+            TF_WARN(
+                "At least one of the components of RepeatUV for %s are set to zero.  To avoid "
+                "divide "
+                "by zero exceptions, these values are changed to the smallest finite float greater "
+                "than zero.",
+                UsdMayaUtil::GetMayaNodeName(GetMayaObject()).c_str());
 
-    // Get and connect the TexCoordReader input "st" to the Transform2d
-    // output "result"
-    UsdShadeInput texShaderSchemaInput = texShaderSchema.GetInput(TrUsdTokens->st);
-    texShaderSchemaInput.ConnectToSource(transform2dOutput);
+            scale = GfVec3f(
+                1.0 / std::max(scaleValue[0], std::numeric_limits<float>::min()),
+                1.0 / std::max(scaleValue[1], std::numeric_limits<float>::min()),
+                1.0);
+        } else {
+            scale = GfVec3f(1.0 / scaleValue[0], 1.0 / scaleValue[1], 1.0);
+        }
+
+        GfMatrix4f scaleXform = GfMatrix4f().SetScale(scale);
+
+        GfMatrix4f transform
+            = scaleXform * translateXform * pivotXform.GetInverse() * rotationXform * pivotXform;
+        GfVec3f translationResult = transform.ExtractTranslation();
+        translationValue.Set(translationResult[0], translationResult[1]);
+
+        // Create and set the Transform2d input attributes
+        transform2dShaderSchema.CreateInput(TrUsdTokens->translation, SdfValueTypeNames->Float2)
+            .Set(translationValue);
+
+        transform2dShaderSchema.CreateInput(TrUsdTokens->rotation, SdfValueTypeNames->Float)
+            .Set(rotationValue);
+
+        transform2dShaderSchema.CreateInput(TrUsdTokens->scale, SdfValueTypeNames->Float2)
+            .Set(scaleValue);
+
+        // Create the Transform2d output "result" attribute
+        UsdShadeOutput transform2dOutput
+            = transform2dShaderSchema.CreateOutput(TrUsdTokens->result, SdfValueTypeNames->Float2);
+
+        // Get and connect the file texture input "st" to the Transform2d  output "result"
+        UsdShadeInput texShaderSchemaInput = texShaderSchema.GetInput(TrUsdTokens->st);
+        texShaderSchemaInput.ConnectToSource(transform2dOutput);
+    } else {
+        // Re-using an existing transform node:
+        UsdShadeShader transform2dShaderSchema(GetUsdStage()->GetPrimAtPath(transform2dShaderPath));
+        UsdShadeOutput transform2dOutput = transform2dShaderSchema.GetOutput(TrUsdTokens->result);
+        // Get and connect the file texture input "st" to the Transform2d  output "result"
+        UsdShadeInput texShaderSchemaInput = texShaderSchema.GetInput(TrUsdTokens->st);
+        texShaderSchemaInput.ConnectToSource(transform2dOutput);
+    }
+}
+
+SdfPath
+PxrUsdTranslators_FileTextureWriter::getPlace2DTexturePath(const MFnDependencyNode& depNodeFn)
+{
+    MStatus     status;
+    std::string usdUvTextureName;
+    const MPlug plug = depNodeFn.findPlug(
+        TrMayaTokens->uvCoord.GetText(),
+        /* wantNetworkedPlug = */ true,
+        &status);
+    if (status == MS::kSuccess && plug.isDestination(&status)) {
+        MPlug source = plug.source(&status);
+        if (status == MS::kSuccess && !source.isNull()) {
+            MFnDependencyNode sourceNode(source.node());
+            usdUvTextureName = UsdMayaUtil::SanitizeName(sourceNode.name().asChar());
+        }
+    }
+
+    if (usdUvTextureName.empty()) {
+        // We want a single UV reader for all file nodes not connected to a place2DTexture node
+        usdUvTextureName = _tokens->PrimvarReaderShaderName.GetString();
+    }
+
+    return GetUsdPath().GetParentPath().AppendChild(TfToken(usdUvTextureName.c_str()));
 }
 
 /* virtual */
-TfToken PxrUsdTranslators_FileTextureWriter::GetShadingAttributeNameForMayaAttrName(
-    const TfToken& mayaAttrName)
+UsdAttribute PxrUsdTranslators_FileTextureWriter::GetShadingAttributeForMayaAttrName(
+    const TfToken&          mayaAttrName,
+    const SdfValueTypeName& typeName)
 {
+    UsdAttribute     usdAttr;
     TfToken          usdAttrName;
     SdfValueTypeName usdTypeName = SdfValueTypeNames->Float;
 
     if (mayaAttrName == TrMayaTokens->outColor) {
-        usdAttrName = TrUsdTokens->RGBOutputName;
-        usdTypeName = SdfValueTypeNames->Float3;
+        if (typeName == SdfValueTypeNames->Color3f || typeName == SdfValueTypeNames->Normal3f) {
+            usdAttrName = TrUsdTokens->RGBOutputName;
+            usdTypeName = SdfValueTypeNames->Float3;
+        } else {
+            // Float input detected. Happens when connecting outColor to opacity and requires an
+            // alpha channel or a monochrome texture
+            const MFnDependencyNode depNodeFn(GetMayaObject());
+            const MPlug             fileTextureNamePlug = depNodeFn.findPlug(
+                TrMayaTokens->fileTextureName.GetText(),
+                /* wantNetworkedPlug = */ true);
+            std::string fileTextureName(fileTextureNamePlug.asString().asChar());
+
+            UsdMayaShadingUtil::ResolveUsdTextureFileName(
+                fileTextureName, _GetExportArgs().GetResolvedFileName(), false);
+            int numChannels = UsdMayaShadingUtil::GetNumberOfChannels(fileTextureName);
+            if (numChannels == 1) {
+                usdAttrName = TrUsdTokens->RedOutputName;
+            } else if (numChannels == 2) {
+                // Mono texture with alpha channel. Corner case. Should it connect to the second
+                // channel G or should it always connect on the A channel?
+                usdAttrName = TrUsdTokens->AlphaOutputName;
+            } else if (numChannels == 4) {
+                usdAttrName = TrUsdTokens->AlphaOutputName;
+            } else {
+                // Impossible to read the user's mind here. Use the red channel by default.
+                usdAttrName = TrUsdTokens->RedOutputName;
+                TF_WARN(
+                    "Arbitrarily connecting the red channel of %s on %s might result in unexpected "
+                    "opacity results. Try a monochrome texture, a texture with an alpha channel, "
+                    "or explicit connections.",
+                    fileTextureName.c_str(),
+                    depNodeFn.name().asChar());
+            }
+        }
     } else if (mayaAttrName == TrMayaTokens->outColorR) {
         usdAttrName = TrUsdTokens->RedOutputName;
     } else if (mayaAttrName == TrMayaTokens->outColorG) {
@@ -634,15 +750,13 @@ TfToken PxrUsdTranslators_FileTextureWriter::GetShadingAttributeNameForMayaAttrN
     if (!usdAttrName.IsEmpty()) {
         UsdShadeShader shaderSchema(_usdPrim);
         if (!shaderSchema) {
-            return TfToken();
+            return usdAttr;
         }
 
-        shaderSchema.CreateOutput(usdAttrName, usdTypeName);
-
-        usdAttrName = UsdShadeUtils::GetFullName(usdAttrName, UsdShadeAttributeType::Output);
+        usdAttr = shaderSchema.CreateOutput(usdAttrName, usdTypeName);
     }
 
-    return usdAttrName;
+    return usdAttr;
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

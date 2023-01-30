@@ -16,6 +16,7 @@
 #include "util.h"
 
 #include <mayaUsd/nodes/proxyShapeBase.h>
+#include <mayaUsd/undo/OpUndoItems.h>
 
 #include <maya/MAnimControl.h>
 #include <maya/MAnimUtil.h>
@@ -38,6 +39,7 @@
 #include <maya/MFnSingleIndexedComponent.h>
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MGlobal.h>
+#include <maya/MItDag.h>
 #include <maya/MItDependencyGraph.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MItMeshFaceVertex.h>
@@ -79,8 +81,14 @@
 #include <pxr/base/vt/value.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/tokens.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/metrics.h>
+#include <pxr/usd/usdGeom/xformCache.h>
+
+#include <cctype>
+
+using namespace MAYAUSD_NS_DEF;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -113,6 +121,18 @@ bool shouldAddToSet(const MDagPath& toAdd, const UsdMayaUtil::MDagPathSet& dagPa
     }
 
     return true;
+}
+
+bool GetMayaExtent(const UsdPrim& prim, GfRange3d& range)
+{
+    if (prim.IsA<UsdGeomCamera>()) {
+        // UsdGeomCamera, not being a UsdGeomBoundable, doesn't provide any extent information.
+        // So let's add Maya camera dimensions here
+        range = GfRange3d(GfVec3d(-0.4f, -0.3f, -2.0f), GfVec3d(0.4f, 1.0f, 2.0f));
+        return true;
+    }
+
+    return false;
 }
 } // namespace
 
@@ -202,10 +222,10 @@ MString UsdMayaUtil::GetUniqueNameOfDagNode(const MObject& node)
     return nodeName;
 }
 
-MStatus UsdMayaUtil::GetMObjectByName(const std::string& nodeName, MObject& mObj)
+MStatus UsdMayaUtil::GetMObjectByName(const MString& nodeName, MObject& mObj)
 {
     MSelectionList selectionList;
-    MStatus        status = selectionList.add(MString(nodeName.c_str()));
+    MStatus        status = selectionList.add(nodeName);
     if (status != MS::kSuccess) {
         return status;
     }
@@ -215,17 +235,9 @@ MStatus UsdMayaUtil::GetMObjectByName(const std::string& nodeName, MObject& mObj
     return status;
 }
 
-MStatus UsdMayaUtil::GetDagPathByName(const std::string& nodeName, MDagPath& dagPath)
+MStatus UsdMayaUtil::GetMObjectByName(const std::string& nodeName, MObject& mObj)
 {
-    MSelectionList selectionList;
-    MStatus        status = selectionList.add(MString(nodeName.c_str()));
-    if (status != MS::kSuccess) {
-        return status;
-    }
-
-    status = selectionList.getDagPath(0, dagPath);
-
-    return status;
+    return GetMObjectByName(MString(nodeName.c_str()), mObj);
 }
 
 UsdStageRefPtr UsdMayaUtil::GetStageByProxyName(const std::string& proxyPath)
@@ -710,6 +722,32 @@ std::string UsdMayaUtil::stripNamespaces(const std::string& nodeName, const int 
 std::string UsdMayaUtil::SanitizeName(const std::string& name)
 {
     return TfStringReplace(name, ":", "_");
+}
+
+std::string UsdMayaUtil::prettifyName(const std::string& name)
+{
+    std::string prettyName(1, std::toupper(name[0]));
+    size_t      nbChars = name.size();
+    bool        capitalizeNext = false;
+    for (size_t i = 1; i < nbChars; ++i) {
+        unsigned char nextLetter = name[i];
+        if (capitalizeNext) {
+            nextLetter = std::toupper(nextLetter);
+            capitalizeNext = false;
+        }
+        if (std::isupper(name[i]) && !std::isdigit(name[i - 1])) {
+            if (((i < (nbChars - 1)) && !std::isupper(name[i + 1])) || std::islower(name[i - 1])) {
+                prettyName += ' ';
+            }
+            prettyName += nextLetter;
+        } else if (name[i] == '_' || name[i] == ':') {
+            prettyName += " ";
+            capitalizeNext = true;
+        } else {
+            prettyName += nextLetter;
+        }
+    }
+    return prettyName;
 }
 
 // This to allow various pipeline to sanitize the colorset name for output
@@ -1247,8 +1285,17 @@ MPlug UsdMayaUtil::GetConnected(const MPlug& plug)
 
 void UsdMayaUtil::Connect(const MPlug& srcPlug, const MPlug& dstPlug, const bool clearDstPlug)
 {
-    MStatus     status;
-    MDGModifier dgMod;
+    MDGModifier& dgMod = MDGModifierUndoItem::create("Generic plug connection");
+    Connect(srcPlug, dstPlug, clearDstPlug, dgMod);
+}
+
+void UsdMayaUtil::Connect(
+    const MPlug& srcPlug,
+    const MPlug& dstPlug,
+    const bool   clearDstPlug,
+    MDGModifier& dgMod)
+{
+    MStatus status;
 
     if (clearDstPlug) {
         MPlugArray plgCons;
@@ -1778,7 +1825,8 @@ VtDictionary UsdMayaUtil::GetDictionaryFromArgDatabase(
     // 1 - bools: Some bools are actual boolean flags (t/f) in Maya, and others
     //     are false if omitted, true if present (simple flags).
     // 2 - strings: Just strings!
-    // 3 - vectors (multi-use args): Try to mimic the way they're passed in the
+    // 3 - doubles: A simple double
+    // 4 - vectors (multi-use args): Try to mimic the way they're passed in the
     //     Python command API. If single arg per flag, make it a vector of
     //     strings. Multi arg per flag, vector of vector of strings.
     VtDictionary args;
@@ -1800,6 +1848,10 @@ VtDictionary UsdMayaUtil::GetDictionaryFromArgDatabase(
             args[key] = val;
         } else if (guideValue.IsHolding<std::string>()) {
             const std::string val = argData.flagArgumentString(key.c_str(), 0).asChar();
+            args[key] = val;
+        } else if (guideValue.IsHolding<double>()) {
+            double val = 0.0;
+            argData.getFlagArgument(key.c_str(), 0, val);
             args[key] = val;
         } else if (guideValue.IsHolding<std::vector<VtValue>>()) {
             unsigned int count = argData.numberOfFlagUses(entry.first.c_str());
@@ -1834,7 +1886,10 @@ VtDictionary UsdMayaUtil::GetDictionaryFromArgDatabase(
             }
             args[key] = val;
         } else {
-            TF_CODING_ERROR("Can't handle type '%s'", guideValue.GetTypeName().c_str());
+            TF_CODING_ERROR(
+                "Can't handle type '%s' for key '%s' ",
+                guideValue.GetTypeName().c_str(),
+                key.c_str());
         }
     }
 
@@ -1881,6 +1936,10 @@ VtValue _ParseArgumentValue(const std::string& value, const VtValue& guideValue)
     // The export UI only has boolean and string parameters.
     if (guideValue.IsHolding<bool>()) {
         return VtValue(TfUnstringify<bool>(value));
+    } else if (guideValue.IsHolding<double>()) {
+        return VtValue(TfUnstringify<double>(value));
+    } else if (guideValue.IsHolding<int>()) {
+        return VtValue(TfUnstringify<int>(value));
     } else if (guideValue.IsHolding<std::string>()) {
         return VtValue(value);
     } else if (guideValue.IsHolding<std::vector<VtValue>>()) {
@@ -1950,6 +2009,10 @@ std::pair<bool, std::string> UsdMayaUtil::ValueToArgument(const VtValue& value)
 {
     if (value.IsHolding<bool>()) {
         return std::make_pair(true, std::string(value.Get<bool>() ? "1" : "0"));
+    } else if (value.IsHolding<int>()) {
+        return std::make_pair(true, std::to_string(value.Get<int>()));
+    } else if (value.IsHolding<float>()) {
+        return std::make_pair(true, std::to_string(value.Get<float>()));
     } else if (value.IsHolding<std::string>()) {
         return std::make_pair(true, value.Get<std::string>());
     } else if (value.IsHolding<std::vector<VtValue>>()) {
@@ -2031,6 +2094,27 @@ std::string UsdMayaUtil::convert(const MString& str)
 MString UsdMayaUtil::convert(const std::string& str)
 {
     return MString(str.data(), static_cast<int>(str.size()));
+}
+
+std::vector<MDagPath> UsdMayaUtil::getDescendants(const MDagPath& path)
+{
+    std::vector<MDagPath> descendants;
+    {
+        MItDag dagIt;
+        for (dagIt.reset(path); !dagIt.isDone(); dagIt.next()) {
+            MDagPath curDagPath;
+            dagIt.getPath(curDagPath);
+            descendants.emplace_back(curDagPath);
+        }
+    }
+    return descendants;
+}
+
+std::vector<MDagPath> UsdMayaUtil::getDescendantsStartingWithChildren(const MDagPath& path)
+{
+    std::vector<MDagPath> descendants = getDescendants(path);
+    std::reverse(descendants.begin(), descendants.end());
+    return descendants;
 }
 
 MDagPath UsdMayaUtil::getDagPath(const MFnDependencyNode& depNodeFn, const bool reportError)
@@ -2126,8 +2210,11 @@ MDagPath UsdMayaUtil::nameToDagPath(const std::string& name)
     MSelectionList selection;
     selection.add(MString(name.c_str()));
     MDagPath dag;
-    MStatus  status = selection.getDagPath(0, dag);
-    CHECK_MSTATUS(status);
+    // Not found?  Empty selection list.
+    if (!selection.isEmpty()) {
+        MStatus status = selection.getDagPath(0, dag);
+        CHECK_MSTATUS(status);
+    }
     return dag;
 }
 
@@ -2446,4 +2533,61 @@ MString UsdMayaUtil::GetCurrentSceneFilePath()
     }
 
     return currentSceneFilePath;
+}
+
+std::set<std::string> UsdMayaUtil::getAllSublayers(const PXR_NS::SdfLayerRefPtr& layer)
+{
+    std::set<std::string>      allSublayers;
+    std::deque<SdfLayerRefPtr> processing;
+    processing.push_back(layer);
+    while (!processing.empty()) {
+        auto layerToProcess = processing.front();
+        processing.pop_front();
+        SdfSubLayerProxy sublayerPaths = layerToProcess->GetSubLayerPaths();
+        for (auto path : sublayerPaths) {
+            SdfLayerRefPtr sublayer = SdfLayer::FindOrOpen(path);
+            if (sublayer) {
+                allSublayers.insert(path);
+                processing.push_back(sublayer);
+            }
+        }
+    }
+
+    return allSublayers;
+}
+
+std::set<std::string>
+UsdMayaUtil::getAllSublayers(const std::vector<std::string>& layerPaths, bool includeParents)
+{
+    std::set<std::string> layers;
+
+    for (auto layerPath : layerPaths) {
+        SdfLayerRefPtr layer = PXR_NS::SdfLayer::Find(layerPath);
+        if (layer) {
+            if (includeParents)
+                layers.insert(layerPath);
+            auto sublayerPaths = UsdMayaUtil::getAllSublayers(layer);
+            std::move(sublayerPaths.begin(), sublayerPaths.end(), inserter(layers, layers.end()));
+        }
+    }
+
+    return layers;
+}
+
+void UsdMayaUtil::AddMayaExtents(GfBBox3d& bbox, const UsdPrim& root, const UsdTimeCode time)
+{
+    GfRange3d localExtents;
+    if (GetMayaExtent(root, localExtents)) {
+        bbox = GfBBox3d::Combine(bbox, GfBBox3d(localExtents));
+    }
+
+    UsdGeomXformCache   xformCache(time);
+    UsdPrimSubtreeRange descendants = root.GetDescendants();
+    for (auto it = descendants.begin(); it != descendants.end(); ++it) {
+        if (GetMayaExtent(*it, localExtents)) {
+            bool resetXformStack;
+            auto xform = xformCache.ComputeRelativeTransform(*it, root, &resetXformStack);
+            bbox = GfBBox3d::Combine(bbox, GfBBox3d(localExtents, xform));
+        }
+    }
 }

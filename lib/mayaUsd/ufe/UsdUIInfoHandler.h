@@ -19,12 +19,15 @@
 
 #include <mayaUsd/base/api.h>
 
+#include <maya/MEventMessage.h>
 #include <ufe/uiInfoHandler.h>
+
+#include <array>
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
-//! \brief Interface to create a UsdUIInfoHandler interface object.
+//! \brief Implementation of Ufe::UIInfoHandler interface for USD objects.
 class MAYAUSD_CORE_PUBLIC UsdUIInfoHandler : public Ufe::UIInfoHandler
 {
 public:
@@ -47,6 +50,16 @@ public:
     Ufe::UIInfoHandler::Icon treeViewIcon(const Ufe::SceneItem::Ptr& item) const override;
     std::string              treeViewTooltip(const Ufe::SceneItem::Ptr& item) const override;
     std::string              getLongRunTimeLabel() const override;
+
+private:
+    void updateInvisibleColor();
+
+    // Note: the on-color-changed callback function is declared taking a void pointer
+    //       to be compatible with MMessage callback API.
+    static void onColorChanged(void*);
+
+    std::array<double, 3> fInvisibleColor;
+    MCallbackId           fColorChangedCallbackId = 0;
 }; // UsdUIInfoHandler
 
 } // namespace ufe

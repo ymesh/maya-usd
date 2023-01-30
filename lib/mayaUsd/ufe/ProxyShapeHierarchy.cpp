@@ -34,12 +34,26 @@
 #include <mayaUsd/ufe/UsdUndoReorderCommand.h>
 #endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/fileio/primUpdaterManager.h>
+
+#include <ufe/pathString.h> // In UFE v2 but only needed for primUpdater.
+#endif
+
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
+
+// We want to display the unloaded prims, so removed UsdPrimIsLoaded from
+// the default UsdPrimDefaultPredicate.
+// Note: UsdPrimIsActive is handled differently because pulled objects
+//       are set inactive (to hide them from Rendering), so we handle
+//       them differently.
+const Usd_PrimFlagsConjunction MayaUsdPrimDefaultPredicate = UsdPrimIsDefined && !UsdPrimIsAbstract;
+
 UsdPrimSiblingRange getUSDFilteredChildren(
     const UsdPrim&               prim,
-    const Usd_PrimFlagsPredicate pred = UsdPrimDefaultPredicate)
+    const Usd_PrimFlagsPredicate pred = MayaUsdPrimDefaultPredicate)
 {
     // Since the equivalent of GetChildren is
     // GetFilteredChildren( UsdPrimDefaultPredicate ),
@@ -119,15 +133,46 @@ const UsdPrim& ProxyShapeHierarchy::getUsdRootPrim() const
 
 Ufe::SceneItem::Ptr ProxyShapeHierarchy::sceneItem() const { return fItem; }
 
+#if (UFE_PREVIEW_VERSION_NUM >= 4004)
+
 bool ProxyShapeHierarchy::hasChildren() const
 {
-    const UsdPrim& rootPrim = getUsdRootPrim();
-    if (!rootPrim.IsValid()) {
-        UFE_LOG("invalid root prim in ProxyShapeHierarchy::hasChildren()");
-        return false;
-    }
-    return !getUSDFilteredChildren(rootPrim).empty();
+    // We have an extra logic in createUFEChildList to remap and filter
+    // prims. Going this direction is more costly, but easier to maintain.
+    //
+    // I don't have data that proves we need to worry about performance in here,
+    // so going after maintainability.
+    return !children().empty();
 }
+
+bool ProxyShapeHierarchy::hasFilteredChildren(const ChildFilter& childFilter) const
+{
+    // We have an extra logic in createUFEChildList to remap and filter
+    // prims. Going this direction is more costly, but easier to maintain.
+    //
+    // I don't have data that proves we need to worry about performance in here,
+    // so going after maintainability.
+    return !filteredChildren(childFilter).empty();
+}
+
+#else
+
+bool ProxyShapeHierarchy::hasChildren() const
+{
+    // Return children of the USD root.
+    const UsdPrim& rootPrim = getUsdRootPrim();
+    if (!rootPrim.IsValid())
+        return false;
+
+    // We have an extra logic in createUFEChildList to remap and filter
+    // prims. Going this direction is more costly, but easier to maintain.
+    //
+    // I don't have data that proves we need to worry about performance in here,
+    // so going after maintainability.
+    return !createUFEChildList(getUSDFilteredChildren(rootPrim), false /*filterInactive*/).empty();
+}
+
+#endif
 
 Ufe::SceneItemList ProxyShapeHierarchy::children() const
 {
@@ -136,7 +181,7 @@ Ufe::SceneItemList ProxyShapeHierarchy::children() const
     if (!rootPrim.IsValid())
         return Ufe::SceneItemList();
 
-    return createUFEChildList(getUSDFilteredChildren(rootPrim));
+    return createUFEChildList(getUSDFilteredChildren(rootPrim), true /*filterInactive*/);
 }
 
 #ifdef UFE_V2_FEATURES_AVAILABLE
@@ -151,10 +196,10 @@ Ufe::SceneItemList ProxyShapeHierarchy::filteredChildren(const ChildFilter& chil
     //       See UsdHierarchyHandler::childFilter()
     if ((childFilter.size() == 1) && (childFilter.front().name == "InactivePrims")) {
         // See uniqueChildName() for explanation of USD filter predicate.
-        Usd_PrimFlagsPredicate flags = childFilter.front().value
-            ? UsdPrimIsDefined && !UsdPrimIsAbstract
-            : UsdPrimDefaultPredicate;
-        return createUFEChildList(getUSDFilteredChildren(rootPrim, flags));
+        const bool             showInactive = childFilter.front().value;
+        Usd_PrimFlagsPredicate flags
+            = showInactive ? UsdPrimIsDefined && !UsdPrimIsAbstract : MayaUsdPrimDefaultPredicate;
+        return createUFEChildList(getUSDFilteredChildren(rootPrim, flags), !showInactive);
     }
 
     UFE_LOG("Unknown child filter");
@@ -163,18 +208,34 @@ Ufe::SceneItemList ProxyShapeHierarchy::filteredChildren(const ChildFilter& chil
 #endif
 
 // Return UFE child list from input USD child list.
-Ufe::SceneItemList ProxyShapeHierarchy::createUFEChildList(const UsdPrimSiblingRange& range) const
+Ufe::SceneItemList
+ProxyShapeHierarchy::createUFEChildList(const UsdPrimSiblingRange& range, bool filterInactive) const
 {
     // We must create selection items for our children.  These will have as
     // path the path of the proxy shape, with a single path segment of a
     // single component appended to it.
     auto               parentPath = fItem->path();
     Ufe::SceneItemList children;
+    UFE_V3(std::string dagPathStr;)
     for (const auto& child : range) {
-        children.emplace_back(UsdSceneItem::create(
-            parentPath
-                + Ufe::PathSegment(Ufe::PathComponent(child.GetName().GetString()), g_USDRtid, '/'),
-            child));
+#ifdef UFE_V3_FEATURES_AVAILABLE
+        if (MAYAUSD_NS_DEF::readPullInformation(child, dagPathStr)) {
+            auto item = Ufe::Hierarchy::createItem(Ufe::PathString::path(dagPathStr));
+            // if we mapped to a valid object, insert it. it's possible that we got stale object
+            // so in this case simply fallback to the usual processing of items
+            if (item) {
+                children.emplace_back(item);
+                continue;
+            }
+        }
+#endif
+        if (!filterInactive || child.IsActive()) {
+            children.emplace_back(UsdSceneItem::create(
+                parentPath
+                    + Ufe::PathSegment(
+                        Ufe::PathComponent(child.GetName().GetString()), g_USDRtid, '/'),
+                child));
+        }
     }
     return children;
 }
@@ -209,6 +270,21 @@ ProxyShapeHierarchy::insertChild(const Ufe::SceneItem::Ptr& child, const Ufe::Sc
     return insertChildCommand->insertedChild();
 }
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+Ufe::SceneItem::Ptr ProxyShapeHierarchy::createGroup(const Ufe::PathComponent& name) const
+{
+    Ufe::SceneItem::Ptr createdItem;
+
+    auto usdItem = UsdSceneItem::create(sceneItem()->path(), getUsdRootPrim());
+    UsdUndoCreateGroupCommand::Ptr cmd = UsdUndoCreateGroupCommand::create(usdItem, name.string());
+    if (cmd) {
+        cmd->execute();
+        createdItem = cmd->insertedChild();
+    }
+
+    return createdItem;
+}
+#else
 Ufe::SceneItem::Ptr ProxyShapeHierarchy::createGroup(
     const Ufe::Selection&     selection,
     const Ufe::PathComponent& name) const
@@ -220,12 +296,22 @@ Ufe::SceneItem::Ptr ProxyShapeHierarchy::createGroup(
         = UsdUndoCreateGroupCommand::create(usdItem, selection, name.string());
     if (cmd) {
         cmd->execute();
-        createdItem = cmd->group();
+        createdItem = cmd->insertedChild();
     }
 
     return createdItem;
 }
+#endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+Ufe::InsertChildCommand::Ptr
+ProxyShapeHierarchy::createGroupCmd(const Ufe::PathComponent& name) const
+{
+    auto usdItem = UsdSceneItem::create(sceneItem()->path(), getUsdRootPrim());
+
+    return UsdUndoCreateGroupCommand::create(usdItem, name.string());
+}
+#else
 Ufe::UndoableCommand::Ptr ProxyShapeHierarchy::createGroupCmd(
     const Ufe::Selection&     selection,
     const Ufe::PathComponent& name) const
@@ -234,6 +320,7 @@ Ufe::UndoableCommand::Ptr ProxyShapeHierarchy::createGroupCmd(
 
     return UsdUndoCreateGroupCommand::create(usdItem, selection, name.string());
 }
+#endif
 
 Ufe::UndoableCommand::Ptr
 ProxyShapeHierarchy::reorderCmd(const Ufe::SceneItemList& orderedList) const
@@ -250,11 +337,21 @@ ProxyShapeHierarchy::reorderCmd(const Ufe::SceneItemList& orderedList) const
 
 Ufe::SceneItem::Ptr ProxyShapeHierarchy::defaultParent() const
 {
-    // Maya shape nodes cannot be unparented.
-    return nullptr;
+    // The default parent is the root of the USD scene.
+    // Since the proxy shape corresponds to the USD root prim,
+    // therefore we implement the default parent as the proxy shape itself.
+    return UsdSceneItem::create(sceneItem()->path(), getUsdRootPrim());
 }
 
 #endif // UFE_V2_FEATURES_AVAILABLE
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+Ufe::UndoableCommand::Ptr ProxyShapeHierarchy::ungroupCmd() const
+{
+    // pseudo root can not be ungrouped.
+    return nullptr;
+}
+#endif // UFE_V3_FEATURES_AVAILABLE
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

@@ -1,31 +1,26 @@
-set(TARGET_NAME MAYAUSD_RENDER_PXRUSDMAYAGL_TEST)
-
 # Unit test scripts.
 set(TEST_SCRIPT_FILES
     testProxyShapeDrawAndTransform.py
     testProxyShapeDrawColorAccuracy.py
     testProxyShapeDrawColors.py
     testProxyShapeDrawLighting.py
-    testProxyShapeDrawPerformance.py
     testProxyShapeDrawPurpose.py
     testProxyShapeDrawTimeSampled.py
     testProxyShapeDrawUsdChangeProcessing.py
     testProxyShapeDrawVisibility.py
-    testProxyShapeDuplicatePerformance.py
     testProxyShapeLiveSurface.py
     testProxyShapeRendererSceneMessages.py
-    testProxyShapeSelectionPerformance.py
     testPxrUsdMayaGL.py
 )
 
-add_custom_target(${TARGET_NAME} ALL)
-
-# Copy all the resources and Python scripts to build directory
-mayaUsd_copyDirectory(${TARGET_NAME}
-    SOURCE ${CMAKE_CURRENT_SOURCE_DIR}
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}
-    EXCLUDE "*.txt"
-)
+# Those tests are too long and take to much memory in Debug
+if(NOT CMAKE_BUILD_TYPE MATCHES Debug)
+    list(APPEND TEST_SCRIPT_FILES
+            testProxyShapeDrawPerformance.py
+            testProxyShapeDuplicatePerformance.py
+            testProxyShapeSelectionPerformance.py
+    )
+endif()
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})

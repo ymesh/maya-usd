@@ -22,6 +22,9 @@
 #include <mayaUsd/utils/util.h>
 
 #include <maya/MFnDagNode.h>
+#ifdef UFE_V2_FEATURES_AVAILABLE
+#include <ufe/pathString.h>
+#endif
 
 #include <cassert>
 
@@ -42,17 +45,21 @@ MObjectHandle nameLookup(const Ufe::Path& path)
     return handle;
 }
 
+Ufe::Path firstPath(const MObject& object)
+{
+    MDagPath dagPath;
+    auto     status = MFnDagNode(object).getPath(dagPath);
+    CHECK_MSTATUS(status);
+    return MayaUsd::ufe::dagPathToUfe(dagPath);
+}
+
 // Assuming proxy shape nodes cannot be instanced, simply return the first path.
 Ufe::Path firstPath(const MObjectHandle& handle)
 {
     if (!TF_VERIFY(handle.isValid(), "Cannot get path from invalid object handle")) {
         return Ufe::Path();
     }
-
-    MDagPath dagPath;
-    auto     status = MFnDagNode(handle.object()).getPath(dagPath);
-    CHECK_MSTATUS(status);
-    return MayaUsd::ufe::dagPathToUfe(dagPath);
+    return firstPath(handle.object());
 }
 
 UsdStageWeakPtr objToStage(MObject& obj)
@@ -77,6 +84,12 @@ inline Ufe::Path::Segments::size_type nbPathSegments(const Ufe::Path& path)
 #else
         path.getSegments().size();
 #endif
+}
+
+inline Ufe::Path toPath(const std::string& mayaPathString)
+{
+    return Ufe::Path(
+        Ufe::PathSegment("|world" + mayaPathString, MayaUsd::ufe::getMayaRunTimeId(), '|'));
 }
 
 } // namespace
@@ -112,11 +125,13 @@ void UsdStageMap::addItem(const Ufe::Path& path)
         return;
     }
 
-    // Non-const MObject& requires an lvalue.  We've just done a name-based
-    // lookup of the proxy shape, so the stage cannot be null.
+    // If a proxy shape doesn't yet have a stage, don't add it.
+    // We will add it later, when the stage is initialized
     auto obj = proxyShape.object();
     auto stage = objToStage(obj);
-    TF_AXIOM(stage);
+    if (!stage) {
+        return;
+    }
 
     fPathToObject[path] = proxyShape;
     fStageToObject[stage] = proxyShape;
@@ -133,38 +148,93 @@ MObject UsdStageMap::proxyShape(const Ufe::Path& path)
 {
     rebuildIfDirty();
 
+    // In additional to the explicit dirty system it is possible that
+    // the cache is in an invalid state and needs to be refreshed. See
+    // the class comment in UsdStageMap.h for details.
+    // There are two scenarios which signal a cache refresh is required:
+    // 1. A path is searched for which cannot be found. This indicates that
+    //    the stage has been reparented and the new path has been used to search
+    //    for the stage and the stage is not present in the cache.
+    // 2. The DAG path of a cached MObject doesn't match the key path used to
+    //    find that MObject. This indicates that the stage has been reparented
+    //    and the old path has been used to search for the stage. In this case
+    //    there is a cache hit when there should not be.
+
     const auto& singleSegmentPath
         = nbPathSegments(path) == 1 ? path : Ufe::Path(path.getSegments()[0]);
 
     auto iter = fPathToObject.find(singleSegmentPath);
-    if (iter != std::end(fPathToObject)) {
-        return iter->second.object();
-    }
 
-    // Caches are invalidated by DG dirtying, but not by renaming or
-    // reparenting.  We have not found the object in the PathToObject cache,
-    // either because the cache is stale, or because the object does not exist.
-    // MObjectHandle values in the caches are stable against rename or
-    // reparent, so StageToObject is unchanged.  We can iterate on the
-    // MObjectHandle values and refresh the stale Ufe::Path in PathToObject.
-    // Iterate on a copy of the map, as we may be updating some entries.
-    auto pathToObject = fPathToObject;
-    for (const auto& entry : pathToObject) {
-        const auto& cachedPath = entry.first;
-        const auto& cachedObject = entry.second;
-        // Get the UFE path from the map value.
-        auto newPath = firstPath(cachedObject);
-        if (newPath != cachedPath) {
-            // Key is stale.  Remove it from our cache, and add the new entry.
-            auto count = fPathToObject.erase(cachedPath);
-            TF_AXIOM(count);
-            fPathToObject[newPath] = cachedObject;
+    if (iter == std::end(fPathToObject)) {
+        // When we don't find an entry in the cache then we are in scenario 1.
+        // MObjects stay valid even when re-parented or re-named, so we can
+        // scan through all the entries in the cache and validate that the current
+        // DAG path to the MObject matches the key Ufe::Path for the MObject in
+        // the cache. When the don't match, update fPathToObject so that the key and
+        // the MObject are in sync again.
+        auto pathToObject = fPathToObject;
+        for (const auto& entry : pathToObject) {
+            const auto& cachedPath = entry.first;
+            const auto& cachedObject = entry.second;
+            // If the cached object itself is invalid then remove it from the map.
+            if (!cachedObject.isValid()) {
+                fPathToObject.erase(cachedPath);
+                continue;
+            }
+            // Get the UFE path from the map value.
+            auto newPath = firstPath(cachedObject);
+            if (newPath != cachedPath) {
+                // Key is stale.  Remove it from our cache, and add the new entry.
+                auto count = fPathToObject.erase(cachedPath);
+                TF_AXIOM(count);
+                if (!newPath.empty())
+                    fPathToObject[newPath] = cachedObject;
+            }
+        }
+
+        // Now that the cache is in a better state, attempt to find the searched for
+        // proxyShape again.
+        iter = fPathToObject.find(singleSegmentPath);
+
+        if (iter == std::end(fPathToObject)) {
+            // Still not found, must have re-appeared through undo of delete.
+            // Add it back to the cache.
+            for (const auto& psn : ProxyShapeHandler::getAllNames()) {
+                auto psPath = toPath(psn);
+                if (fPathToObject.find(psPath) == std::end(fPathToObject)) {
+                    addItem(psPath);
+                }
+            }
+
+            iter = fPathToObject.find(singleSegmentPath);
+            if (iter == std::end(fPathToObject)) {
+                // Since our cache is fresh, path not found means it's not a
+                // proxy shape.
+                return MObject();
+            }
+        }
+    } else {
+        auto object = iter->second;
+        // If the cached object itself is invalid then remove it from the map.
+        if (!object.isValid()) {
+            fPathToObject.erase(singleSegmentPath);
+            return MObject();
+        }
+        auto objectPath = firstPath(object);
+        if (objectPath != iter->first) {
+            // When we hit the cache and the key path doesn't match the current object path
+            // we are in scenario 2. Update the entry in fPathToObject so that the key path
+            // is the current object path.
+            fPathToObject.erase(singleSegmentPath);
+            if (!objectPath.empty())
+                fPathToObject[objectPath] = object;
+            TF_VERIFY(std::end(fPathToObject) == fPathToObject.find(singleSegmentPath));
+            return MObject();
         }
     }
 
     // At this point the cache is rebuilt, so lookup failure means the object
     // doesn't exist.
-    iter = fPathToObject.find(singleSegmentPath);
     return iter == std::end(fPathToObject) ? MObject() : iter->second.object();
 }
 
@@ -195,8 +265,20 @@ UsdStageMap::StageSet UsdStageMap::allStages()
     rebuildIfDirty();
 
     StageSet stages;
-    for (const auto& pair : fPathToObject) {
-        stages.insert(stage(pair.first));
+    for (auto it = fPathToObject.begin(); it != fPathToObject.end();
+         /* no ++it here, we manually move it in the loop */) {
+        const auto&      pair = *it;
+        const Ufe::Path& path = pair.first;
+        // Calling UsdStageMap::stage may erase the entry in fPathToObject at path.
+        // Advance the iterator so that the iterator stays valid if erasure occurs.
+        it++;
+        // Now handle path.
+        PXR_NS::UsdStageWeakPtr matchingStage = stage(path);
+        // After this point pair and path cannot be safely used, they may have been erased.
+        // If the object cached in fPathToObject was invalid we'll get back a nullptr.
+        // Don't add nullptr to the returned StageSet.
+        if (matchingStage)
+            stages.insert(matchingStage);
     }
     return stages;
 }
@@ -214,7 +296,7 @@ void UsdStageMap::rebuildIfDirty()
         return;
 
     for (const auto& psn : ProxyShapeHandler::getAllNames()) {
-        addItem(Ufe::Path(Ufe::PathSegment("|world" + psn, getMayaRunTimeId(), '|')));
+        addItem(toPath(psn));
     }
     fDirty = false;
 }

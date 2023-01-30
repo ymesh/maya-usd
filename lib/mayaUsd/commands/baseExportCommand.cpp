@@ -19,6 +19,7 @@
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/shading/shadingModeRegistry.h>
 #include <mayaUsd/fileio/utils/writeUtil.h>
+#include <mayaUsd/utils/utilDictionary.h>
 
 #include <pxr/pxr.h>
 
@@ -40,7 +41,7 @@ MSyntax MayaUSDExportCommand::createSyntax()
     MSyntax syntax;
 
     // These flags correspond to entries in
-    // UsdMayaJobExportArgs::GetDefaultDictionary.
+    // UsdMayaJobExportArgs::GetGuideDictionary.
     syntax.addFlag(
         kMergeTransformAndShapeFlag,
         UsdMayaJobExportArgsTokens->mergeTransformAndShape.GetText(),
@@ -58,15 +59,26 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportDisplayColor.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kExportDistanceUnitFlag,
+        UsdMayaJobExportArgsTokens->exportDistanceUnit.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kShadingModeFlag, UsdMayaJobExportArgsTokens->shadingMode.GetText(), MSyntax::kString);
     syntax.addFlag(
         kConvertMaterialsToFlag,
         UsdMayaJobExportArgsTokens->convertMaterialsTo.GetText(),
         MSyntax::kString);
+    syntax.makeFlagMultiUse(kConvertMaterialsToFlag);
     syntax.addFlag(
         kMaterialsScopeNameFlag,
         UsdMayaJobExportArgsTokens->materialsScopeName.GetText(),
         MSyntax::kString);
+    syntax.addFlag(
+        kApiSchemaFlag, UsdMayaJobExportArgsTokens->apiSchema.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kApiSchemaFlag);
+    syntax.addFlag(
+        kJobContextFlag, UsdMayaJobExportArgsTokens->jobContext.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kJobContextFlag);
     syntax.addFlag(
         kExportUVsFlag, UsdMayaJobExportArgsTokens->exportUVs.GetText(), MSyntax::kBoolean);
     syntax.addFlag(
@@ -84,6 +96,10 @@ MSyntax MayaUSDExportCommand::createSyntax()
     syntax.addFlag(
         kNormalizeNurbsFlag,
         UsdMayaJobExportArgsTokens->normalizeNurbs.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
+        kPreserveUVSetNamesFlag,
+        UsdMayaJobExportArgsTokens->preserveUVSetNames.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
         kExportColorSetsFlag,
@@ -108,13 +124,22 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportVisibility.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kExportComponentTagsFlag,
+        UsdMayaJobExportArgsTokens->exportComponentTags.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kIgnoreWarningsFlag,
         UsdMayaJobExportArgsTokens->ignoreWarnings.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
-        kExportReferenceObjectsFlag,
-        UsdMayaJobExportArgsTokens->exportReferenceObjects.GetText(),
-        MSyntax::kBoolean);
+        kReferenceObjectModeFlag,
+        UsdMayaJobExportArgsTokens->referenceObjectMode.GetText(),
+        MSyntax::kString);
+    syntax.addFlag(
+        kExportRootsFlag, UsdMayaJobExportArgsTokens->exportRoots.GetText(), MSyntax::kString);
+    syntax.makeFlagMultiUse(kExportRootsFlag);
+    syntax.addFlag(
+        kWorldspaceFlag, UsdMayaJobExportArgsTokens->worldspace.GetText(), MSyntax::kBoolean);
     syntax.addFlag(
         kExportSkelsFlag, UsdMayaJobExportArgsTokens->exportSkels.GetText(), MSyntax::kString);
     syntax.addFlag(
@@ -135,10 +160,14 @@ MSyntax MayaUSDExportCommand::createSyntax()
         MSyntax::kString);
     syntax.addFlag(kKindFlag, UsdMayaJobExportArgsTokens->kind.GetText(), MSyntax::kString);
     syntax.addFlag(
+        kDisableModelKindProcessorFlag,
+        UsdMayaJobExportArgsTokens->disableModelKindProcessor.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kCompatibilityFlag, UsdMayaJobExportArgsTokens->compatibility.GetText(), MSyntax::kString);
 
     syntax.addFlag(kChaserFlag, UsdMayaJobExportArgsTokens->chaser.GetText(), MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobExportArgsTokens->chaser.GetText());
+    syntax.makeFlagMultiUse(kChaserFlag);
 
     syntax.addFlag(
         kChaserArgsFlag,
@@ -146,7 +175,14 @@ MSyntax MayaUSDExportCommand::createSyntax()
         MSyntax::kString,
         MSyntax::kString,
         MSyntax::kString);
-    syntax.makeFlagMultiUse(UsdMayaJobExportArgsTokens->chaserArgs.GetText());
+    syntax.makeFlagMultiUse(kChaserArgsFlag);
+
+    syntax.addFlag(
+        kRemapUVSetsToFlag,
+        UsdMayaJobExportArgsTokens->remapUVSetsTo.GetText(),
+        MSyntax::kString,
+        MSyntax::kString);
+    syntax.makeFlagMultiUse(kRemapUVSetsToFlag);
 
     syntax.addFlag(
         kMelPerFrameCallbackFlag,
@@ -231,7 +267,7 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
 
         // Read all of the dictionary args first.
         const VtDictionary userArgs = UsdMayaUtil::GetDictionaryFromArgDatabase(
-            argData, UsdMayaJobExportArgs::GetDefaultDictionary());
+            argData, UsdMayaJobExportArgs::GetGuideDictionary());
 
         // Now read all of the other args that are specific to this command.
         bool        append = false;
@@ -299,25 +335,59 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
             frameSamples.insert(tmpArgList.asDouble(0));
         }
 
+        // The priority order for what objects get exported is (from highest to lowest):
+        //
+        //     - Requesting to export the current selection.
+        //     - Explicit export roots provided to the command.
+        //     - Explicit objects given to the command.
+        //     - Otherwise defaults to all objects.
+        //
+        // This priority order is embodied from code here and from code in the function
+        // UsdMayaUtil::GetFilteredSelectionToExport.
+
         MSelectionList           objSelList;
         UsdMayaUtil::MDagPathSet dagPaths;
         bool                     exportSelected = argData.isFlagSet(kSelectionFlag);
         if (!exportSelected) {
-            argData.getObjects(objSelList);
+            if (userArgs.count(UsdMayaJobExportArgsTokens->exportRoots) > 0) {
+                const auto exportRoots = DictUtils::extractVector<std::string>(
+                    userArgs, UsdMayaJobExportArgsTokens->exportRoots);
+                if (exportRoots.size() > 0) {
+                    for (const std::string& root : exportRoots) {
+                        objSelList.add(root.c_str());
+                    }
+                }
+            }
+
+            if (objSelList.isEmpty()) {
+                argData.getObjects(objSelList);
+            }
         }
         UsdMayaUtil::GetFilteredSelectionToExport(exportSelected, objSelList, dagPaths);
+
+        // Validation of paths. The real read in of argument is happening as part of
+        // GetDictionaryFromArgDatabase.
+        unsigned int numRoots = argData.numberOfFlagUses(kExportRootsFlag);
+        for (unsigned int i = 0; i < numRoots; i++) {
+            MArgList tmpArgList;
+            argData.getFlagArgumentList(kExportRootsFlag, i, tmpArgList);
+            std::string rootPath = tmpArgList.asString(0).asChar();
+
+            if (!rootPath.empty()) {
+                MDagPath rootDagPath = UsdMayaUtil::nameToDagPath(rootPath);
+                if (!rootDagPath.isValid()) {
+                    MGlobal::displayError(
+                        MString("Invalid dag path provided for exportRoot: ")
+                        + tmpArgList.asString(0));
+                    return MS::kFailure;
+                }
+            }
+        }
 
         const std::vector<double> timeSamples
             = UsdMayaWriteUtil::GetTimeSamples(timeInterval, frameSamples, frameStride);
         UsdMayaJobExportArgs jobArgs
             = UsdMayaJobExportArgs::CreateFromDictionary(userArgs, dagPaths, timeSamples);
-
-        unsigned int numFilteredTypes = argData.numberOfFlagUses(kFilterTypesFlag);
-        for (unsigned int i = 0; i < numFilteredTypes; i++) {
-            MArgList tmpArgList;
-            argData.getFlagArgumentList(kFilterTypesFlag, i, tmpArgList);
-            jobArgs.AddFilteredTypeName(tmpArgList.asString(0));
-        }
 
         std::unique_ptr<UsdMaya_WriteJob> writeJob = initializeWriteJob(jobArgs);
         if (!writeJob || !writeJob->Write(fileName, append)) {

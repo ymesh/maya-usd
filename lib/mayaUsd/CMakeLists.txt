@@ -37,6 +37,7 @@ target_compile_definitions(${PROJECT_NAME}
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_DEBUG_PYTHON>
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_LINKING_PYTHON>
         $<$<BOOL:${UFE_FOUND}>:WANT_UFE_BUILD>
+        $<$<BOOL:${MAYA_ENABLE_NEW_PRIM_DELETE}>:MAYA_ENABLE_NEW_PRIM_DELETE>
     PRIVATE
         MAYAUSD_MACROS_EXPORT
         MAYAUSD_CORE_EXPORT
@@ -47,6 +48,7 @@ target_compile_definitions(${PROJECT_NAME}
         $<$<BOOL:${IS_LINUX}>:LINUX>
         $<$<BOOL:${IS_LINUX}>:GL_GLEXT_PROTOTYPES>
         $<$<BOOL:${IS_LINUX}>:GLX_GLXEXT_PROTOTYPES>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:WANT_MATERIALX_BUILD>
         $<$<BOOL:${Qt5_FOUND}>:WANT_QT_BUILD>
         $<$<BOOL:${BUILD_HDMAYA}>:BUILD_HDMAYA>
 
@@ -61,24 +63,114 @@ if(DEFINED UFE_PREVIEW_VERSION_NUM)
     )
 endif()
 
-if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20220100 AND MAYA_API_VERSION VERSION_LESS 20230000)
+message(STATUS "MAYA_HAS_DEFAULT_MATERIAL_API is ${MAYA_HAS_DEFAULT_MATERIAL_API}")
+if (MAYA_HAS_DEFAULT_MATERIAL_API)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
             HAS_DEFAULT_MATERIAL_SUPPORT_API=1
     )
 endif()
 
-if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20230000 AND UFE_VERSION VERSION_GREATER_EQUAL 2.0.3)
+message(STATUS "MAYA_NEW_POINT_SNAPPING_SUPPORT is ${MAYA_NEW_POINT_SNAPPING_SUPPORT}")
+if (MAYA_NEW_POINT_SNAPPING_SUPPORT)
     target_compile_definitions(${PROJECT_NAME}
-        PRIVATE
-            HAS_DEFAULT_MATERIAL_SUPPORT_API=1
+    PRIVATE
+        MAYA_NEW_POINT_SNAPPING_SUPPORT=1
     )
 endif()
 
-if (MAYA_LIGHTAPI_VERSION EQUAL 2)
+message(STATUS "MAYA_HAS_CRASH_DETECTION is ${MAYA_HAS_CRASH_DETECTION}")
+if (MAYA_HAS_CRASH_DETECTION)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
-            MAYA_LIGHTAPI_VERSION_2=2
+        MAYA_HAS_CRASH_DETECTION=1
+    )
+endif()
+
+message(STATUS "MAYA_CURRENT_UFE_CAMERA_SUPPORT is ${MAYA_CURRENT_UFE_CAMERA_SUPPORT}")
+if (MAYA_CURRENT_UFE_CAMERA_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_CURRENT_UFE_CAMERA_SUPPORT=1
+    )
+endif()
+
+message(STATUS "MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT is ${MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT}")
+if (MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_MRENDERITEM_UFE_IDENTIFIER_SUPPORT=1
+    )
+endif()
+
+message(STATUS "MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT is ${MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT}")
+if (MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_UPDATE_UFE_IDENTIFIER_SUPPORT=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS is ${MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS}")
+if (MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_HAS_DISPLAY_STYLE_ALL_VIEWPORTS=1
+    )
+endif()
+
+message(STATUS "MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT is ${MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT}")
+if (MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_ARRAY_ITERATOR_DIFFERENCE_TYPE_SUPPORT=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_GET_MEMBER_PATHS is ${MAYA_HAS_GET_MEMBER_PATHS}")
+if (MAYA_HAS_GET_MEMBER_PATHS)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_HAS_GET_MEMBER_PATHS=1
+    )
+endif()
+
+message(STATUS "USD_HAS_COLOR4_SDR_SUPPORT is ${USD_HAS_COLOR4_SDR_SUPPORT}")
+if (USD_HAS_COLOR4_SDR_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+        USD_HAS_COLOR4_SDR_SUPPORT=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_DISPLAY_LAYER_API is ${MAYA_HAS_DISPLAY_LAYER_API}")
+if (MAYA_HAS_DISPLAY_LAYER_API)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_HAS_DISPLAY_LAYER_API=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API is ${MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API}")
+if (MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API is ${MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API}")
+if (MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+    MAYA_HAS_RENDER_ITEM_HIDE_ON_PLAYBACK_API=1
+    )
+endif()
+
+if (MAYA_LIGHTAPI_VERSION GREATER_EQUAL 2)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+            MAYA_LIGHTAPI_VERSION_2=${MAYA_LIGHTAPI_VERSION}
     )
 endif()
 
@@ -96,6 +188,15 @@ target_compile_definitions(${PROJECT_NAME}
         MAYAUSD_VERSION=${MAYAUSD_VERSION}
         MAYA_PY_VERSION=${MAYA_PY_VERSION}
 )
+
+if(CMAKE_WANT_MATERIALX_BUILD)
+# Path where MaterialX was found. Allows loading the required libraries.
+string(REPLACE "\\" "/" Forward_MaterialX_DIR ${MaterialX_DIR})
+target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        MaterialX_DIR="${Forward_MaterialX_DIR}"
+)
+endif()
 
 mayaUsd_compile_config(${PROJECT_NAME})
 
@@ -135,12 +236,19 @@ target_link_libraries(${PROJECT_NAME}
         usdShade
         usdSkel
         usdUtils
+        $<$<BOOL:$<VERSION_GREATER_EQUAL:${UFE_PREVIEW_VERSION_NUM},4023>>:usdUI>
         vt
         $<$<BOOL:${UFE_FOUND}>:${UFE_LIBRARY}>
         ${MAYA_LIBRARIES}
         mayaUsdUtils
     PRIVATE
         ghc_filesystem
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:hdMtlx>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:MaterialXCore>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:MaterialXFormat>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:MaterialXRender>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:MaterialXGenShader>
+        $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:MaterialXGenGlsl>
 )
 
 # -----------------------------------------------------------------------------
@@ -199,6 +307,9 @@ add_subdirectory(nodes)
 add_subdirectory(python)
 add_subdirectory(render)
 add_subdirectory(resources)
+if( PXR_VERSION GREATER_EQUAL 2211 )
+    add_subdirectory(sceneIndex)
+endif()
 if(UFE_FOUND)
     add_subdirectory(ufe)
 endif()

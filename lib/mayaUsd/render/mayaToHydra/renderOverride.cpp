@@ -33,9 +33,12 @@
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/rendererPluginRegistry.h>
 #include <pxr/imaging/hd/rprim.h>
+#include <pxr/imaging/hdx/colorizeSelectionTask.h>
 #include <pxr/imaging/hdx/pickTask.h>
 #include <pxr/imaging/hdx/renderTask.h>
 #include <pxr/imaging/hdx/tokens.h>
+#include <pxr/imaging/hgi/hgi.h>
+#include <pxr/imaging/hgi/tokens.h>
 #include <pxr/pxr.h>
 
 #include <maya/M3dView.h>
@@ -54,15 +57,16 @@
 #include <exception>
 #include <limits>
 
-#if PXR_VERSION > 2002
-#include <pxr/imaging/hgi/hgi.h>
-#include <pxr/imaging/hgi/tokens.h>
-#endif
-
 #if WANT_UFE_BUILD
+#include <mayaUsd/ufe/Global.h>
+
 #include <maya/MFileIO.h>
 #include <ufe/globalSelection.h>
 #include <ufe/observableSelection.h>
+#include <ufe/path.h>
+#ifdef UFE_V2_FEATURES_AVAILABLE
+#include <ufe/pathString.h>
+#endif
 #include <ufe/selectionNotification.h>
 #endif // WANT_UFE_BUILD
 
@@ -196,19 +200,13 @@ MtohRenderOverride::MtohRenderOverride(const MtohRendererDescription& desc)
     : MHWRender::MRenderOverride(desc.overrideName.GetText())
     , _rendererDesc(desc)
     , _globals(MtohRenderGlobals::GetInstance())
-    ,
-#if PXR_VERSION > 2002
 #if PXR_VERSION > 2005
-    _hgi(Hgi::CreatePlatformDefaultHgi())
-    ,
+    , _hgi(Hgi::CreatePlatformDefaultHgi())
 #else
-    _hgi(Hgi::GetPlatformDefaultHgi())
-    ,
+    , _hgi(Hgi::GetPlatformDefaultHgi())
 #endif
-    _hgiDriver { HgiTokens->renderDriver, VtValue(_hgi.get()) }
-    ,
-#endif
-    _selectionTracker(new HdxSelectionTracker)
+    , _hgiDriver { HgiTokens->renderDriver, VtValue(_hgi.get()) }
+    , _selectionTracker(new HdxSelectionTracker)
     , _isUsingHdSt(desc.rendererName == MtohTokens->HdStormRendererPlugin)
 {
     TF_DEBUG(HDMAYA_RENDEROVERRIDE_RESOURCES)
@@ -296,7 +294,7 @@ MtohRenderOverride::~MtohRenderOverride()
         MMessage::removeCallbacks(panelAndCallbacks.second);
     }
 
-    {
+    if (!_allInstances.empty()) {
         std::lock_guard<std::mutex> lock(_allInstancesMutex);
         _allInstances.erase(
             std::remove(_allInstances.begin(), _allInstances.end(), this), _allInstances.end());
@@ -503,9 +501,27 @@ MStatus MtohRenderOverride::Render(const MHWRender::MDrawContext& drawContext)
             }
         }
 
+        // MAYA-114630
+        // https://github.com/PixarAnimationStudios/USD/commit/fc63eaef29
+        // removed backing, and restoring of GL_FRAMEBUFFER state.
+        // At the same time HdxColorizeSelectionTask modifies the frame buffer state
+        // Manually backup and restore the state of the frame buffer for now.
+        HdMayaGLBackup backup;
+        if (_backupFrameBufferWorkaround) {
+            HdTaskSharedPtr backupTask(new HdMayaBackupGLStateTask(backup));
+            HdTaskSharedPtr restoreTask(new HdMayaRestoreGLStateTask(backup));
+            tasks.reserve(tasks.size() + 2);
+            for (auto it = tasks.begin(); it != tasks.end(); it++) {
+                if (std::dynamic_pointer_cast<HdxColorizeSelectionTask>(*it)) {
+                    tasks.insert(it, backupTask);
+                    tasks.insert(it + 2, restoreTask);
+                    break;
+                }
+            }
+        }
         _engine.Execute(_renderIndex, &tasks);
 
-        // HdTaskController will query al of the tasks it can for IsConverged.
+        // HdTaskController will query all of the tasks it can for IsConverged.
         // This includes HdRenderPass::IsConverged and HdRenderBuffer::IsConverged (via colorizer).
         //
         _isConverged = _taskController->IsConverged();
@@ -590,18 +606,29 @@ MStatus MtohRenderOverride::Render(const MHWRender::MDrawContext& drawContext)
         MStatus  status;
         MDagPath camPath = getFrameContext()->getCurrentCameraPath(&status);
         if (status == MStatus::kSuccess) {
-            // FIXME: This is what a USD camera selected in the viewport returns.
+#ifdef MAYA_CURRENT_UFE_CAMERA_SUPPORT
+            MString   ufeCameraPathString = getFrameContext()->getCurrentUfeCameraPath(&status);
+            Ufe::Path ufeCameraPath = Ufe::PathString::path(ufeCameraPathString.c_str());
+            bool      isUsdCamera = ufeCameraPath.runTimeId() == MayaUsd::ufe::getUsdRunTimeId();
+#else
             static const MString defaultUfeProxyCameraShape(
                 "|defaultUfeProxyCameraTransformParent|defaultUfeProxyCameraTransform|"
                 "defaultUfeProxyCameraShape");
-            if (defaultUfeProxyCameraShape != camPath.fullPathName()) {
+            bool isUsdCamera = defaultUfeProxyCameraShape == camPath.fullPathName();
+#endif
+            if (!isUsdCamera) {
                 for (auto& delegate : _delegates) {
                     if (HdMayaSceneDelegate* mayaScene
                         = dynamic_cast<HdMayaSceneDelegate*>(delegate.get())) {
                         params.camera = mayaScene->SetCameraViewport(camPath, _viewport);
                         if (vpDirty)
+#if HD_API_VERSION >= 43
+                            mayaScene->GetChangeTracker().MarkSprimDirty(
+                                params.camera, HdCamera::DirtyParams);
+#else
                             mayaScene->GetChangeTracker().MarkSprimDirty(
                                 params.camera, HdCamera::DirtyParams | HdCamera::DirtyProjMatrix);
+#endif
                         break;
                     }
                 }
@@ -715,11 +742,7 @@ void MtohRenderOverride::_InitHydraResources()
     if (!renderDelegate)
         return;
 
-#if PXR_VERSION > 2002
     _renderIndex = HdRenderIndex::New(renderDelegate, { &_hgiDriver });
-#else
-    _renderIndex = HdRenderIndex::New(renderDelegate);
-#endif
     if (!_renderIndex)
         return;
 
@@ -785,7 +808,13 @@ void MtohRenderOverride::_InitHydraResources()
             { _rendererDesc.rendererName, filterRenderer, fallbackToUserDefaults });
         _globals.ApplySettings(renderDelegate, _rendererDesc.rendererName);
     }
-
+    auto tasks = _taskController->GetRenderingTasks();
+    for (auto task : tasks) {
+        if (std::dynamic_pointer_cast<HdxColorizeSelectionTask>(task)) {
+            _backupFrameBufferWorkaround = true;
+            break;
+        }
+    }
     _initializationSucceeded = true;
 }
 
@@ -800,6 +829,15 @@ void MtohRenderOverride::ClearHydraResources()
 
     _delegates.clear();
     _defaultLightDelegate.reset();
+
+    // Cleanup internal context data that keep references to data that is now
+    // invalid.
+#if PXR_VERSION >= 2108
+    _engine.ClearTaskContextData();
+#else
+    for (const auto& token : HdxTokens->allTokens)
+        _engine.RemoveTaskContextData(token);
+#endif
 
     if (_taskController != nullptr) {
         delete _taskController;
@@ -853,11 +891,7 @@ void MtohRenderOverride::_SelectionChanged()
         return;
     }
     SdfPathVector selectedPaths;
-#if PXR_VERSION > 2002
-    auto selection = std::make_shared<HdSelection>();
-#else
-    auto selection = boost::make_shared<HdSelection>();
-#endif // PXR_VERSION > 2002
+    auto          selection = std::make_shared<HdSelection>();
 
 #if WANT_UFE_BUILD
     const UFE_NS::GlobalSelection::Ptr& ufeSelection = UFE_NS::GlobalSelection::get();

@@ -25,10 +25,13 @@ PXR_NAMESPACE_OPEN_SCOPE
 #define HDVP2_REPR_TOKENS \
     (bbox) \
     (defaultMaterial) \
-    (selection)
+    (smoothHullUntextured) \
+    (forcedBbox)
 
 #define HDVP2_TOKENS \
-    (displayColorAndOpacity)
+    (displayColorAndOpacity) \
+    (glslfx) \
+    (mtlx)
 
 // clang-format on
 

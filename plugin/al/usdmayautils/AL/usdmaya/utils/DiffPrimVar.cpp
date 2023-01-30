@@ -18,6 +18,8 @@
 #include <mayaUsdUtils/DiffCore.h>
 #include <mayaUsdUtils/SIMD.h>
 
+#include <pxr/usd/usdGeom/primvarsAPI.h>
+
 #include <maya/MDoubleArray.h>
 #include <maya/MFloatArray.h>
 #include <maya/MIntArray.h>
@@ -116,7 +118,7 @@ uint32_t diffGeom(UsdGeomPointBased& geom, MFnMesh& mesh, UsdTimeCode timeCode, 
             const float* const usdNormals = (const float* const)normalData.cdata();
             const float* const mayaNormals = (const float* const)mesh.getRawNormals(&status);
             const size_t       usdNormalsCount = normalData.size();
-            const size_t       mayaNormalsCount = mesh.numVertices();
+            const size_t       mayaNormalsCount = mesh.numNormals();
             if (!MayaUsdUtils::compareArray(
                     usdNormals, mayaNormals, usdNormalsCount * 3, mayaNormalsCount * 3)) {
                 result |= kNormals;
@@ -526,7 +528,7 @@ void ColourSetBuilder::performDiffTest(PrimVarDiffReport& report)
 //----------------------------------------------------------------------------------------------------------------------
 MStringArray hasNewColourSet(UsdGeomMesh& geom, MFnMesh& mesh, PrimVarDiffReport& report)
 {
-    const std::vector<UsdGeomPrimvar> primvars = geom.GetPrimvars();
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(geom).GetPrimvars();
     MStringArray                      setNames;
     mesh.getColorSetNames(setNames);
 
@@ -738,7 +740,7 @@ void UvSetBuilder::performDiffTest(PrimVarDiffReport& report)
 //----------------------------------------------------------------------------------------------------------------------
 MStringArray hasNewUvSet(UsdGeomMesh& geom, const MFnMesh& mesh, PrimVarDiffReport& report)
 {
-    const std::vector<UsdGeomPrimvar> primvars = geom.GetPrimvars();
+    const std::vector<UsdGeomPrimvar> primvars = UsdGeomPrimvarsAPI(geom).GetPrimvars();
     MStringArray                      setNames;
     mesh.getUVSetNames(setNames);
 
@@ -900,676 +902,6 @@ face_varying:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationType(
-    const float* xyz,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices)
-{
-    // if UV coords are all identical, we have a constant value
-    if (MayaUsdUtils::vec3AreAllTheSame(xyz, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    // if the UV indices match the vertex indices, we have per-vertex assignment
-    if (MayaUsdUtils::compareArray(
-            &indices[0], &pointIndices[0], indices.length(), pointIndices.length())) {
-        return UsdGeomTokens->vertex;
-    }
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationTypeExtended(
-    const float* xyz,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices,
-    MIntArray&   faceCounts)
-{
-    TfToken type = guessVec3InterpolationType(xyz, numElements, indices, pointIndices);
-    if (type != UsdGeomTokens->faceVarying) {
-        return type;
-    }
-
-    // let's see whether we have a uniform prim var set (based on the assumption that each face will
-    // have unique indices)
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            int32_t        index = indices[offset];
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                if (index != indices[offset + j]) {
-                    goto face_varying;
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationTypeExtensive(
-    const float* xyz,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices,
-    MIntArray&   faceCounts)
-{
-    // if prim vars are all identical, we have a constant value
-    if (MayaUsdUtils::vec3AreAllTheSame(xyz, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-// A little dirty. If running the tests via SSE, step back 1 element. We must not go beyond the end
-// of a memory location in case we hit an non-mapped page (crash). On the assumption that all this
-// data will come in a valid memory allocation, stepping back 4bytes will lead us into the
-// allocation header (which we will ignore in our test)
-#if defined(__SSE__)
-    --xyz;
-#endif
-
-    std::unordered_map<int32_t, int32_t> indicesMap;
-
-    // do an exhaustive test to see if the prim var assignments are per-vertex
-    {
-        indicesMap.emplace(pointIndices[0], indices[0]);
-        for (uint32_t i = 1, n = pointIndices.length(); i < n; ++i) {
-            auto index = pointIndices[i];
-            auto xyzindex = indices[i];
-            auto it = indicesMap.find(index);
-
-            // if not found, insert new entry in map
-            if (it == indicesMap.end()) {
-                indicesMap.emplace(index, xyzindex);
-            } else {
-                // if the index matches, we have the same assignment
-                if (xyzindex != it->second) {
-#if defined(__SSE__)
-
-                    const f128 xyz0 = loadu4f(xyz + 3 * it->second);
-                    const f128 xyz1 = loadu4f(xyz + 3 * xyzindex);
-                    const f128 cmp = cmpne4f(xyz0, xyz1);
-                    if (movemask4f(cmp) & 0xE)
-                        goto uniform_test;
-
-#else
-
-                    // if not, check to see if the indices differ, but the values are the same
-                    const float x0 = xyz[3 * it->second];
-                    const float y0 = xyz[3 * it->second + 1];
-                    const float z0 = xyz[3 * it->second + 2];
-                    const float x1 = xyz[3 * xyzindex];
-                    const float y1 = xyz[3 * xyzindex + 1];
-                    const float z1 = xyz[3 * xyzindex + 2];
-                    if (x0 != x1 || y0 != y1 || z0 != z1)
-                        goto uniform_test;
-
-#endif
-                }
-            }
-        }
-        return UsdGeomTokens->vertex;
-    }
-
-uniform_test:
-
-    // An exhaustive test to see if we have per-face assignment of prim vars
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            const int32_t  index = indices[offset];
-
-#if defined(__SSE__)
-
-            const f128 xyz0 = loadu4f(xyz + 3 * index);
-
-#else
-
-            // extract prim var for first vertex in face
-            const float x0 = xyz[3 * index];
-            const float y0 = xyz[3 * index + 1];
-            const float z0 = xyz[3 * index + 2];
-
-#endif
-
-            // process each face
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                const int32_t next_index = indices[offset + j];
-
-                // if the indices don't match
-                if (index != next_index) {
-#if defined(__SSE__)
-
-                    const f128 xyz1 = loadu4f(xyz + 3 * next_index);
-                    const f128 cmp = cmpne4f(xyz0, xyz1);
-                    if (movemask4f(cmp) & 0xE)
-                        goto face_varying;
-
-#else
-
-                    // check the values directly
-                    const float x1 = xyz[3 * next_index];
-                    const float y1 = xyz[3 * next_index + 1];
-                    const float z1 = xyz[3 * next_index + 2];
-                    if (x0 != x1 || y0 != y1 || z0 != z1)
-                        goto face_varying;
-
-#endif
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationType(
-    const double* xyz,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices)
-{
-    // if UV coords are all identical, we have a constant value
-    if (MayaUsdUtils::vec3AreAllTheSame(xyz, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    // if the UV indices match the vertex indices, we have per-vertex assignment
-    if (MayaUsdUtils::compareArray(
-            &indices[0], &pointIndices[0], indices.length(), pointIndices.length())) {
-        return UsdGeomTokens->vertex;
-    }
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationTypeExtended(
-    const double* xyz,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices,
-    MIntArray&    faceCounts)
-{
-    TfToken type = guessVec3InterpolationType(xyz, numElements, indices, pointIndices);
-    if (type != UsdGeomTokens->faceVarying) {
-        return type;
-    }
-
-    // let's see whether we have a uniform UV set (based on the assumption that each face will have
-    // unique UV indices)
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            int32_t        index = indices[offset];
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                if (index != indices[offset + j]) {
-                    goto face_varying;
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec3InterpolationTypeExtensive(
-    const double* xyz,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices,
-    MIntArray&    faceCounts)
-{
-    // if UV coords are all identical, we have a constant value
-    if (MayaUsdUtils::vec3AreAllTheSame(xyz, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    std::unordered_map<int32_t, int32_t> indicesMap;
-
-    // do an exhaustive test to see if the UV assignments are per-vertex
-    {
-        indicesMap.emplace(pointIndices[0], indices[0]);
-        for (uint32_t i = 1, n = pointIndices.length(); i < n; ++i) {
-            auto index = pointIndices[i];
-            auto xyzindex = indices[i];
-            auto it = indicesMap.find(index);
-
-            // if not found, insert new entry in map
-            if (it == indicesMap.end()) {
-                indicesMap.emplace(index, xyzindex);
-            } else {
-                // if the UV index matches, we have the same assignment
-                if (xyzindex != it->second) {
-                    // if not, check to see if the indices differ, but the values are the same
-                    const double x0 = xyz[3 * it->second];
-                    const double y0 = xyz[3 * it->second + 1];
-                    const double z0 = xyz[3 * it->second + 2];
-                    const double x1 = xyz[3 * xyzindex];
-                    const double y1 = xyz[3 * xyzindex + 1];
-                    const double z1 = xyz[3 * xyzindex + 2];
-                    if (x0 != x1 || y0 != y1 || z0 != z1)
-                        goto uniform_test;
-                }
-            }
-        }
-        return UsdGeomTokens->vertex;
-    }
-
-uniform_test:
-
-    // An exhaustive test to see if we have per-face assignment of UVs
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            const int32_t  index = indices[offset];
-
-            // extract UV for first vertex in face
-            const double x0 = xyz[3 * index];
-            const double y0 = xyz[3 * index + 1];
-            const double z0 = xyz[3 * index + 2];
-
-            // process each face
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                const int32_t next_index = indices[offset + j];
-
-                // if the indices don't match
-                if (index != next_index) {
-                    // check the UV values directly
-                    const double x1 = xyz[3 * next_index];
-                    const double y1 = xyz[3 * next_index + 1];
-                    const double z1 = xyz[3 * next_index + 2];
-                    if (x0 != x1 || y0 != y1 || z0 != z1)
-                        goto face_varying;
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationType(
-    const float* xyzw,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices)
-{
-    // if UV coords are all identical, we have a constant value
-    if (MayaUsdUtils::vec4AreAllTheSame(xyzw, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    // if the UV indices match the vertex indices, we have per-vertex assignment
-    if (MayaUsdUtils::compareArray(
-            &indices[0], &pointIndices[0], indices.length(), pointIndices.length())) {
-        return UsdGeomTokens->vertex;
-    }
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationTypeExtended(
-    const float* xyzw,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices,
-    MIntArray&   faceCounts)
-{
-    TfToken type = guessVec4InterpolationType(xyzw, numElements, indices, pointIndices);
-    if (type != UsdGeomTokens->faceVarying) {
-        return type;
-    }
-
-    // let's see whether we have a uniform UV set (based on the assumption that each face will have
-    // unique indices)
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            int32_t        index = indices[offset];
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                if (index != indices[offset + j]) {
-                    goto face_varying;
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationTypeExtensive(
-    const float* xyzw,
-    size_t       numElements,
-    MIntArray&   indices,
-    MIntArray&   pointIndices,
-    MIntArray&   faceCounts)
-{
-    // if prim vars are all identical, we have a constant value
-    if (MayaUsdUtils::vec4AreAllTheSame(xyzw, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    std::unordered_map<int32_t, int32_t> indicesMap;
-
-    // do an exhaustive test to see if the UV assignments are per-vertex
-    {
-        indicesMap.emplace(pointIndices[0], indices[0]);
-        for (uint32_t i = 1, n = pointIndices.length(); i < n; ++i) {
-            auto index = pointIndices[i];
-            auto xyzwindex = indices[i];
-            auto it = indicesMap.find(index);
-
-            // if not found, insert new entry in map
-            if (it == indicesMap.end()) {
-                indicesMap.emplace(index, xyzwindex);
-            } else {
-                // if the index matches, we have the same assignment
-                if (xyzwindex != it->second) {
-#if defined(__SSE__)
-
-                    const f128 xyzw0 = loadu4f(xyzw + 4 * it->second);
-                    const f128 xyzw1 = loadu4f(xyzw + 4 * xyzwindex);
-                    const f128 cmp = cmpne4f(xyzw0, xyzw1);
-                    if (movemask4f(cmp))
-                        goto uniform_test;
-
-#else
-
-                    // if not, check to see if the indices differ, but the values are the same
-                    const float x0 = xyzw[4 * it->second];
-                    const float y0 = xyzw[4 * it->second + 1];
-                    const float z0 = xyzw[4 * it->second + 2];
-                    const float w0 = xyzw[4 * it->second + 3];
-                    const float x1 = xyzw[4 * xyzwindex];
-                    const float y1 = xyzw[4 * xyzwindex + 1];
-                    const float z1 = xyzw[4 * xyzwindex + 2];
-                    const float w1 = xyzw[4 * xyzwindex + 3];
-                    if (x0 != x1 || y0 != y1 || z0 != z1 || w0 != w1)
-                        goto uniform_test;
-
-#endif
-                }
-            }
-        }
-        return UsdGeomTokens->vertex;
-    }
-
-uniform_test:
-
-    // An exhaustive test to see if we have per-face assignment of UVs
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            const int32_t  index = indices[offset];
-
-// extract UV for first vertex in face
-#if defined(__SSE__)
-
-            const f128 xyzw0 = loadu4f(xyzw + 4 * index);
-
-#else
-
-            const float x0 = xyzw[4 * index];
-            const float y0 = xyzw[4 * index + 1];
-            const float z0 = xyzw[4 * index + 2];
-            const float w0 = xyzw[4 * index + 3];
-
-#endif
-
-            // process each face
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                const int32_t next_index = indices[offset + j];
-
-                // if the indices don't match
-                if (index != next_index) {
-#if defined(__SSE__)
-
-                    const f128 xyzw1 = loadu4f(xyzw + 4 * next_index);
-                    const f128 cmp = cmpne4f(xyzw0, xyzw1);
-                    if (movemask4f(cmp))
-                        goto face_varying;
-
-#else
-                    // check the UV values directly
-                    const float x1 = xyzw[4 * next_index];
-                    const float y1 = xyzw[4 * next_index + 1];
-                    const float z1 = xyzw[4 * next_index + 2];
-                    const float w1 = xyzw[4 * next_index + 3];
-                    if (x0 != x1 || y0 != y1 || z0 != z1 || w0 != w1)
-                        goto face_varying;
-
-#endif
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationType(
-    const double* xyzw,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices)
-{
-    // if UV coords are all identical, we have a constant value
-    if (MayaUsdUtils::vec4AreAllTheSame(xyzw, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    // if the UV indices match the vertex indices, we have per-vertex assignment
-    if (MayaUsdUtils::compareArray(
-            &indices[0], &pointIndices[0], indices.length(), pointIndices.length())) {
-        return UsdGeomTokens->vertex;
-    }
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationTypeExtended(
-    const double* xyzw,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices,
-    MIntArray&    faceCounts)
-{
-    TfToken type = guessVec4InterpolationType(xyzw, numElements, indices, pointIndices);
-    if (type != UsdGeomTokens->faceVarying) {
-        return type;
-    }
-
-    // let's see whether we have a uniform UV set (based on the assumption that each face will have
-    // unique UV indices)
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            int32_t        index = indices[offset];
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                if (index != indices[offset + j]) {
-                    goto face_varying;
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-TfToken guessVec4InterpolationTypeExtensive(
-    const double* xyzw,
-    size_t        numElements,
-    MIntArray&    indices,
-    MIntArray&    pointIndices,
-    MIntArray&    faceCounts)
-{
-    // if prim vars are all identical, we have a constant value
-    if (MayaUsdUtils::vec4AreAllTheSame(xyzw, numElements)) {
-        return UsdGeomTokens->constant;
-    }
-
-    std::unordered_map<int32_t, int32_t> indicesMap;
-
-    // do an exhaustive test to see if the assignments are per-vertex
-    {
-        indicesMap.emplace(pointIndices[0], indices[0]);
-        for (uint32_t i = 1, n = pointIndices.length(); i < n; ++i) {
-            auto index = pointIndices[i];
-            auto xyzindex = indices[i];
-            auto it = indicesMap.find(index);
-
-            // if not found, insert new entry in map
-            if (it == indicesMap.end()) {
-                indicesMap.emplace(index, xyzindex);
-            } else {
-                // if the index matches, we have the same assignment
-                if (xyzindex != it->second) {
-#if defined(__AVX__)
-
-                    const d256 xyzw0 = loadu4d(xyzw + 4 * it->second);
-                    const d256 xyzw1 = loadu4d(xyzw + 4 * xyzindex);
-                    const d256 cmp = cmpne4d(xyzw0, xyzw1);
-                    if (movemask4d(cmp))
-                        goto uniform_test;
-
-#elif defined(__SSE__)
-
-                    const d128 xy0 = loadu2d(xyzw + 4 * it->second);
-                    const d128 zw0 = loadu2d(xyzw + 4 * it->second + 2);
-                    const d128 xy1 = loadu2d(xyzw + 4 * xyzindex);
-                    const d128 zw1 = loadu2d(xyzw + 4 * xyzindex + 2);
-                    const d128 cmp = or2d(cmpne2d(xy0, xy1), cmpne2d(zw0, zw1));
-                    if (movemask2d(cmp))
-                        goto uniform_test;
-
-#else
-
-                    // if not, check to see if the indices differ, but the values are the same
-                    const double x0 = xyzw[4 * it->second];
-                    const double y0 = xyzw[4 * it->second + 1];
-                    const double z0 = xyzw[4 * it->second + 2];
-                    const double w0 = xyzw[4 * it->second + 3];
-                    const double x1 = xyzw[4 * xyzindex];
-                    const double y1 = xyzw[4 * xyzindex + 1];
-                    const double z1 = xyzw[4 * xyzindex + 2];
-                    const double w1 = xyzw[4 * xyzindex + 3];
-                    if (x0 != x1 || y0 != y1 || z0 != z1 || w0 != w1)
-                        goto uniform_test;
-
-#endif
-                }
-            }
-        }
-        return UsdGeomTokens->vertex;
-    }
-
-uniform_test:
-
-    // An exhaustive test to see if we have per-face assignment of UVs
-    {
-        uint32_t offset = 0;
-        for (uint32_t i = 0, n = faceCounts.length(); i < n; ++i) {
-            const uint32_t numVerts = faceCounts[i];
-            const int32_t  index = indices[offset];
-
-// extract for first vertex in face
-#if defined(__AVX__)
-
-            const d256 xyzw0 = loadu4d(xyzw + 4 * index);
-
-#elif defined(__SSE__)
-
-            const d128 xy0 = loadu2d(xyzw + 4 * index);
-            const d128 zw0 = loadu2d(xyzw + 4 * index + 2);
-
-#else
-
-            const double x0 = xyzw[4 * index];
-            const double y0 = xyzw[4 * index + 1];
-            const double z0 = xyzw[4 * index + 2];
-            const double w0 = xyzw[4 * index + 3];
-
-#endif
-
-            // process each face
-            for (uint32_t j = 1; j < numVerts; ++j) {
-                const int32_t next_index = indices[offset + j];
-
-                // if the indices don't match
-                if (index != next_index) {
-#if defined(__AVX__)
-
-                    const d256 xyzw1 = loadu4d(xyzw + 4 * next_index);
-                    const d256 cmp = cmpne4d(xyzw0, xyzw1);
-                    if (movemask4d(cmp))
-                        goto face_varying;
-
-#elif defined(__SSE__)
-
-                    const d128 xy1 = loadu2d(xyzw + 4 * next_index);
-                    const d128 zw1 = loadu2d(xyzw + 4 * next_index + 2);
-                    const d128 cmp = or2d(cmpne2d(xy0, xy1), cmpne2d(zw0, zw1));
-                    if (movemask2d(cmp))
-                        goto face_varying;
-
-#else
-
-                    // check the values directly
-                    const double x1 = xyzw[4 * next_index];
-                    const double y1 = xyzw[4 * next_index + 1];
-                    const double z1 = xyzw[4 * next_index + 2];
-                    const double w1 = xyzw[4 * next_index + 3];
-                    if (x0 != x1 || y0 != y1 || z0 != z1 || w0 != w1)
-                        goto face_varying;
-
-#endif
-                }
-            }
-            offset += numVerts;
-        }
-        return UsdGeomTokens->uniform;
-    }
-
-face_varying:
-    return UsdGeomTokens->faceVarying;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
 TfToken guessColourSetInterpolationType(const float* rgba, const size_t numElements)
 {
     // if prim vars are all identical, we have a constant value
@@ -1577,6 +909,47 @@ TfToken guessColourSetInterpolationType(const float* rgba, const size_t numEleme
         return UsdGeomTokens->constant;
     }
 
+    return UsdGeomTokens->faceVarying;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+inline bool isNearlyEqual(const float& a, const float& b, const float& threshold)
+{
+    return std::abs(std::abs(a) - std::abs(b)) <= threshold;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+static bool isWithinThreshold(const float* array, const size_t count, float threshold)
+{
+    // TODO: This function is extracted from MayaUsdUtils::vec4AreAllTheSame(),
+    //       it is generally slower then the SSE/AVX version.
+    //       Improve it with SSE/AVX at some point when needed, for now the optimization is left for
+    //       the compiler.
+    float absThreshold = std::abs(threshold);
+    // Iterate the values and check if they are within the threshold
+    const float x = array[0];
+    const float y = array[1];
+    const float z = array[2];
+    const float w = array[3];
+    for (size_t i = 4, n = count * 4; i < n; i += 4) {
+        if (!isNearlyEqual(x, array[i], absThreshold)
+            || !isNearlyEqual(y, array[i + 1], absThreshold)
+            || !isNearlyEqual(z, array[i + 2], absThreshold)
+            || !isNearlyEqual(w, array[i + 3], absThreshold)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+TfToken
+guessColourSetInterpolationType(const float* rgba, const size_t numElements, float threshold)
+{
+    // Specialized test if there is threshold provided.
+    if (numElements <= 1 || isWithinThreshold(rgba, numElements, threshold)) {
+        return UsdGeomTokens->constant;
+    }
     return UsdGeomTokens->faceVarying;
 }
 
@@ -1672,6 +1045,78 @@ uniform_test:
 
 faceVarying:
     return UsdGeomTokens->faceVarying;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+TfToken guessColourSetInterpolationTypeExtensive(
+    const float*           rgba,
+    const size_t           numElements,
+    float                  threshold,
+    const size_t           numPoints,
+    MIntArray&             pointIndices,
+    MIntArray&             faceCounts,
+    std::vector<uint32_t>& indicesToExtract)
+{
+    // Specialized test if there is threshold provided.
+    // TODO: This function is extracted from guessColourSetInterpolationTypeExtensive() but without
+    // SSE/AVX optimization.
+    //       It is generally slower then the SSE/AVX version.
+    //       Improve it with SSE/AVX at some point when needed, for now the optimization is left for
+    //       the compiler.
+
+    if (numElements <= 1 || isWithinThreshold(rgba, numElements, threshold)) {
+        return UsdGeomTokens->constant;
+    }
+
+    float absThreshold = std::abs(threshold);
+
+    // check for per-vertex assignment
+    std::vector<uint32_t> indicesMap;
+    indicesMap.resize(numPoints, -1);
+    for (uint32_t pntInx = 0, n = pointIndices.length(); pntInx < n; ++pntInx) {
+        auto index = pointIndices[pntInx];
+        auto lastIndex = indicesMap[index];
+        if (lastIndex == 0xFFFFFFFF) {
+            indicesMap[index] = pntInx;
+        } else {
+            // if not, check to see if the indices differ, but the values are the same
+            const float x0 = rgba[4 * lastIndex + 0];
+            const float y0 = rgba[4 * lastIndex + 1];
+            const float z0 = rgba[4 * lastIndex + 2];
+            const float w0 = rgba[4 * lastIndex + 3];
+            const float x1 = rgba[4 * pntInx + 0];
+            const float y1 = rgba[4 * pntInx + 1];
+            const float z1 = rgba[4 * pntInx + 2];
+            const float w1 = rgba[4 * pntInx + 3];
+            if (!isNearlyEqual(x0, x1, absThreshold) || !isNearlyEqual(y0, y1, absThreshold)
+                || !isNearlyEqual(z0, z1, absThreshold) || !isNearlyEqual(w0, w1, absThreshold)) {
+                const uint32_t numFaces = faceCounts.length();
+                indicesMap.resize(numFaces);
+                uint32_t offset = 0;
+                for (uint32_t faceIdx = 0; faceIdx < numFaces; ++faceIdx) {
+                    indicesMap[faceIdx] = offset;
+
+                    int numPointsInFace = faceCounts[faceIdx];
+
+                    const float* rgba0 = rgba + 4 * offset;
+                    for (int32_t j = 1; j < numPointsInFace; ++j) {
+                        const float* rgba1 = rgba + 4 * (offset + j);
+                        if (!isNearlyEqual(rgba0[0], rgba1[0], absThreshold)
+                            || !isNearlyEqual(rgba0[1], rgba1[1], absThreshold)
+                            || !isNearlyEqual(rgba0[2], rgba1[2], absThreshold)
+                            || !isNearlyEqual(rgba0[3], rgba1[3], absThreshold)) {
+                            return UsdGeomTokens->faceVarying;
+                        }
+                    }
+                    offset += numPointsInFace;
+                }
+                std::swap(indicesToExtract, indicesMap);
+                return UsdGeomTokens->uniform;
+            }
+        }
+    }
+    std::swap(indicesToExtract, indicesMap);
+    return UsdGeomTokens->vertex;
 }
 
 //----------------------------------------------------------------------------------------------------------------------

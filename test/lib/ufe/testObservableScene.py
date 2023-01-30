@@ -26,6 +26,12 @@ import os
 import sys
 import unittest
 
+class TestSceneItem(ufe.SceneItem):
+    def __init__(self, path):
+        super(TestSceneItem, self).__init__(path)
+    
+    def nodeType(self):
+        return "TestSceneItem"
 
 class TestObserver(ufe.Observer):
     def __init__(self):
@@ -74,7 +80,7 @@ class UFEObservableSceneTest(unittest.TestCase):
         cb = ufe.PathComponent("b")
         cc = ufe.PathComponent("c")
 
-        sa = ufe.PathSegment([ca], 3, '/')
+        sa = ufe.PathSegment([ca], 1, '/')
         sab = ufe.PathSegment([ca, cb], 1, '|')
         sc = ufe.PathSegment([cc], 2, '/')
 
@@ -82,13 +88,14 @@ class UFEObservableSceneTest(unittest.TestCase):
         b = ufe.Path(sab)
         c = ufe.Path([sab, sc])
 
-        itemA = ufe.SceneItem(a)
-        itemB = ufe.SceneItem(b)
-        itemC = ufe.SceneItem(c)
+        itemA = TestSceneItem(a)
+        itemB = TestSceneItem(b)
+        itemC = TestSceneItem(c)
         # End Setup
 
-        # No observers yet.
-        self.assertEqual(ufe.Scene.nbObservers(), 0)
+        # No observers from the test yet, but Maya could have observers
+        # created on startup
+        initialNbObservers = ufe.Scene.nbObservers()
 
         snObs = TestObserver()
 
@@ -98,7 +105,7 @@ class UFEObservableSceneTest(unittest.TestCase):
         # Order of expected notifications. No notifications yet.
         self.checkNotifications(snObs, [0,0,0,0,0,0])
 
-        self.assertEqual(ufe.Scene.nbObservers(), 1)
+        self.assertEqual(ufe.Scene.nbObservers() - initialNbObservers, 1)
         self.assertTrue(ufe.Scene.hasObserver(snObs))
 
         ufe.Scene.notify(ufe.ObjectAdd(itemA))

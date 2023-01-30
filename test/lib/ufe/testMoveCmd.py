@@ -16,12 +16,18 @@
 # limitations under the License.
 #
 
+import os
 import fixturesUtils
 import mayaUtils
 import testTRSBase
 from testUtils import assertVectorAlmostEqual
 import ufeUtils
 import usdUtils
+
+import mayaUsd_createStageWithNewLayer
+import mayaUsd.ufe
+
+from pxr import UsdGeom, Vt, Gf
 
 from maya import cmds
 from maya import standalone
@@ -276,6 +282,185 @@ class MoveCmdTestCase(testTRSBase.TRSTestCaseBase):
 
         self.runMultiSelectTestMove(ballItems, expected)
 
+    def runTestOpUndo(self, createTransformOp, attrSpec):
+        '''Engine method for op undo testing.'''
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        
+        proxyShapePath = ufe.PathString.path(proxyShape)
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        proxyShapeContextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+        proxyShapeContextOps.doOp(['Add New Prim', 'Sphere'])
+
+        spherePath = ufe.PathString.path('%s,/Sphere1' % proxyShape)
+        sphereItem = ufe.Hierarchy.createItem(spherePath)
+
+        spherePrim = mayaUsd.ufe.ufePathToPrim(ufe.PathString.string(spherePath))
+        sphereXformable = UsdGeom.Xformable(spherePrim)
+        createTransformOp(self, sphereXformable)
+
+        # Set the edit target to the session layer, then move.
+        stage = mayaUsd.ufe.getStage(proxyShape)
+        sessionLayer = stage.GetLayerStack()[0]
+        stage.SetEditTarget(sessionLayer)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(sphereItem)
+
+        cmds.move(0, 10, 0, relative=True, os=True, wd=True)
+
+        sphereT3d = ufe.Transform3d.transform3d(sphereItem)
+        assertVectorAlmostEqual(self, sphereT3d.translation().vector, [0, 10, 0])
+
+        primSpec = stage.GetEditTarget().GetPrimSpecForScenePath('/Sphere1')
+
+        # Writing to the session layer has created a primSpec in that layer,
+        # with the xformOp:transform attrSpec.
+        self.assertIsNotNone(primSpec)
+        self.assertIn(attrSpec, primSpec.attributes)
+
+        # Undo: primSpec in session layer should be gone.
+        cmds.undo()
+
+        assertVectorAlmostEqual(self, sphereT3d.translation().vector, [0, 0, 0])
+
+        primSpec = stage.GetEditTarget().GetPrimSpecForScenePath('/Sphere1')
+        self.assertIsNone(primSpec)
+
+        cmds.redo()
+
+        assertVectorAlmostEqual(self, sphereT3d.translation().vector, [0, 10, 0])
+
+        # Undo after redo must also remove primSpec.
+        cmds.undo()
+
+        assertVectorAlmostEqual(self, sphereT3d.translation().vector, [0, 0, 0])
+
+        primSpec = stage.GetEditTarget().GetPrimSpecForScenePath('/Sphere1')
+        self.assertIsNone(primSpec)
+
+        # Performing change in main layer should also work.
+        layer = stage.GetLayerStack()[1]
+        stage.SetEditTarget(layer)
+
+        cmds.move(0, 10, 0, relative=True, os=True, wd=True)
+
+        def checkTransform(expectedTranslation):
+            # Check through both USD and UFE interfaces
+            assertVectorAlmostEqual(
+                self, sphereT3d.translation().vector, expectedTranslation)
+            expected = Gf.Matrix4d(1.0)
+            expected.SetTranslate(expectedTranslation)
+            actual = sphereXformable.GetLocalTransformation()
+            self.assertTrue(Gf.IsClose(actual, expected, 1e-5))
+            
+        checkTransform([0, 10, 0])
+
+        cmds.undo()
+
+        checkTransform([0, 0, 0])
+
+        cmds.redo()
+
+        checkTransform([0, 10, 0])
+
+    def testMatrixOpUndo(self):
+        '''Undo of matrix op move must completely remove attr spec.'''
+
+        def createMatrixTransformOp(testCase, sphereXformable):
+            transformOp = sphereXformable.AddTransformOp()
+            xform = Gf.Matrix4d(1.0)
+            transformOp.Set(xform)
+    
+            testCase.assertEqual(
+                sphereXformable.GetXformOpOrderAttr().Get(), Vt.TokenArray([
+                    "xformOp:transform"]))
+
+        self.runTestOpUndo(createMatrixTransformOp, 'xformOp:transform')
+
+    def testCommonAPIUndo(self):
+        '''Undo of move with common API must completely remove attr spec.'''
+
+        def createCommonAPI(testCase, sphereXformable):
+            sphereXformable.AddTranslateOp(
+                UsdGeom.XformOp.PrecisionFloat, "pivot")
+            sphereXformable.AddTranslateOp(
+                UsdGeom.XformOp.PrecisionFloat, "pivot", True)
+    
+            self.assertEqual(
+                sphereXformable.GetXformOpOrderAttr().Get(), 
+                Vt.TokenArray(("xformOp:translate:pivot",
+                               "!invert!xformOp:translate:pivot")))
+            self.assertTrue(UsdGeom.XformCommonAPI(sphereXformable))
+
+        self.runTestOpUndo(createCommonAPI, 'xformOp:translate')
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() < 3, 'Creating a SceneItem was fixed in UFE v3.')
+    def testBadSceneItem(self):
+        '''Improperly constructed scene item should not crash Maya.'''
+
+        # MAYA-112601 / GitHub #1169: improperly constructed Python scene item
+        # should not cause a crash.
+        cmds.file(new=True, force=True)
+
+        import mayaUsd_createStageWithNewLayer
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        proxyShapePath = ufe.PathString.path(proxyShape)
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        proxyShapeContextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+        proxyShapeContextOps.doOp(['Add New Prim', 'Sphere'])
+
+        spherePath = ufe.PathString.path('%s,/Sphere1' % proxyShape)
+        # The proper way to create a scene item is the following:
+        #
+        # sphereItem = ufe.Hierarchy.createItem(spherePath)
+        #
+        # A naive user can create a scene item as the following.  The resulting
+        # scene item is not a USD scene item: it is a Python base class scene
+        # item, which has a path but nothing else.  This should not a crash
+        # when using the move command.
+        sphereItem = ufe.SceneItem(spherePath)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(sphereItem)
+
+        cmds.move(0, 10, 0, relative=True, os=True, wd=True)
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 3, 'Creating a SceneItem works in UFE v3.')
+    def testFactorySceneItem(self):
+        '''A scene item can be constructed directly and will work.'''
+
+        # Was:
+        # MAYA-112601 / GitHub #1169: improperly constructed Python scene item
+        # should not cause a crash.
+        # Now:
+        # MAYA-113409 / GutHub PR #222: Use factory CTOR for directly constructed
+        # SceneItems.
+        cmds.file(new=True, force=True)
+
+        import mayaUsd_createStageWithNewLayer
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        proxyShapePath = ufe.PathString.path(proxyShape)
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        proxyShapeContextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+        proxyShapeContextOps.doOp(['Add New Prim', 'Sphere'])
+
+        spherePath = ufe.PathString.path('%s,/Sphere1' % proxyShape)
+        sphereItem = ufe.SceneItem(spherePath)
+
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(sphereItem)
+
+        cmds.move(0, 10, 0, relative=True, os=True, wd=True)
+
+        # The USD prim will have a transform since the move command worked:
+        sphereAttrs = ufe.Attributes.attributes(sphereItem)
+        self.assertIsNotNone(sphereAttrs)
+        self.assertTrue("xformOp:translate" in sphereAttrs.attributeNames)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

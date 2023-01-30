@@ -73,7 +73,8 @@ public:
     static void RegisterReader(
         const TfToken& usdShaderId,
         const TfToken& mayaNodeTypeName,
-        const TfToken& materialConversion = TfToken());
+        const TfToken& materialConversion = TfToken(),
+        bool           fromPython = false);
 
     MAYAUSD_CORE_PUBLIC
     static ContextSupport CanImport(
@@ -86,7 +87,7 @@ public:
         const TfToken&               mayaNodeTypeName);
 
     MAYAUSD_CORE_PUBLIC
-    bool Read(UsdMayaPrimReaderContext* context) override;
+    bool Read(UsdMayaPrimReaderContext& context) override;
 
     MAYAUSD_CORE_PUBLIC
     TfToken GetMayaNameForUsdAttrName(const TfToken& usdAttrName) const override;

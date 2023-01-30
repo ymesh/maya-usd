@@ -34,13 +34,17 @@
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/pointBased.h>
 #include <pxr/usd/usdGeom/primvar.h>
+#include <pxr/usd/usdGeom/primvarsAPI.h>
+#include <pxr/usd/usdGeom/subset.h>
 #include <pxr/usd/usdGeom/tokens.h>
 #include <pxr/usd/usdUtils/pipeline.h>
 
 #include <maya/MBoundingBox.h>
 #include <maya/MFnAttribute.h>
+#include <maya/MFnGeometryData.h>
 #include <maya/MFnMesh.h>
 #include <maya/MFnSet.h>
+#include <maya/MFnSingleIndexedComponent.h>
 #include <maya/MGlobal.h>
 #include <maya/MIntArray.h>
 #include <maya/MItDependencyGraph.h>
@@ -243,7 +247,7 @@ void setPrimvar(
     }
 }
 
-void createUVPrimVar(
+UsdGeomPrimvar createUVPrimVar(
     UsdGeomGprim&              primSchema,
     const TfToken&             name,
     const UsdTimeCode&         usdTime,
@@ -254,7 +258,7 @@ void createUVPrimVar(
 {
     const unsigned int numValues = data.size();
     if (numValues == 0) {
-        return;
+        return UsdGeomPrimvar();
     }
 
     TfToken interp = interpolation;
@@ -266,10 +270,13 @@ void createUVPrimVar(
         ? (SdfValueTypeNames->Float2Array)
         : (SdfValueTypeNames->TexCoord2fArray);
 
-    UsdGeomPrimvar primVar = primSchema.CreatePrimvar(name, uvValueType, interp);
+    UsdGeomPrimvar primVar
+        = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, uvValueType, interp);
 
     setPrimvar(
         primVar, assignmentIndices, VtValue(data), VtValue(UnauthoredUV), usdTime, valueWriter);
+
+    return primVar;
 }
 
 // This function condenses distinct indices that point to the same color values
@@ -495,11 +502,12 @@ bool UsdMayaMeshWriteUtils::getMeshNormals(
 TfToken UsdMayaMeshWriteUtils::getSubdivScheme(const MFnMesh& mesh)
 {
     // Try grabbing the value via the adaptor first.
-    TfToken schemeToken;
-    UsdMayaAdaptor(mesh.object())
-        .GetSchemaOrInheritedSchema<UsdGeomMesh>()
-        .GetAttribute(UsdGeomTokens->subdivisionScheme)
-        .Get<TfToken>(&schemeToken);
+    TfToken                 schemeToken;
+    UsdMayaSchemaAdaptorPtr meshSchema
+        = UsdMayaAdaptor(mesh.object()).GetSchemaOrInheritedSchema<UsdGeomMesh>();
+    if (meshSchema) {
+        meshSchema->GetAttribute(UsdGeomTokens->subdivisionScheme).Get<TfToken>(&schemeToken);
+    }
 
     // Fall back to the RenderMan for Maya attribute.
     if (schemeToken.IsEmpty()) {
@@ -535,11 +543,13 @@ TfToken UsdMayaMeshWriteUtils::getSubdivScheme(const MFnMesh& mesh)
 TfToken UsdMayaMeshWriteUtils::getSubdivInterpBoundary(const MFnMesh& mesh)
 {
     // Try grabbing the value via the adaptor first.
-    TfToken interpBoundaryToken;
-    UsdMayaAdaptor(mesh.object())
-        .GetSchemaOrInheritedSchema<UsdGeomMesh>()
-        .GetAttribute(UsdGeomTokens->interpolateBoundary)
-        .Get<TfToken>(&interpBoundaryToken);
+    TfToken                 interpBoundaryToken;
+    UsdMayaSchemaAdaptorPtr meshSchema
+        = UsdMayaAdaptor(mesh.object()).GetSchemaOrInheritedSchema<UsdGeomMesh>();
+    if (meshSchema) {
+        meshSchema->GetAttribute(UsdGeomTokens->interpolateBoundary)
+            .Get<TfToken>(&interpBoundaryToken);
+    }
 
     // Fall back to the RenderMan for Maya attr.
     if (interpBoundaryToken.IsEmpty()) {
@@ -573,11 +583,13 @@ TfToken UsdMayaMeshWriteUtils::getSubdivInterpBoundary(const MFnMesh& mesh)
 TfToken UsdMayaMeshWriteUtils::getSubdivFVLinearInterpolation(const MFnMesh& mesh)
 {
     // Try grabbing the value via the adaptor first.
-    TfToken sdFVLinearInterpolation;
-    UsdMayaAdaptor(mesh.object())
-        .GetSchemaOrInheritedSchema<UsdGeomMesh>()
-        .GetAttribute(UsdGeomTokens->faceVaryingLinearInterpolation)
-        .Get<TfToken>(&sdFVLinearInterpolation);
+    TfToken                 sdFVLinearInterpolation;
+    UsdMayaSchemaAdaptorPtr meshSchema
+        = UsdMayaAdaptor(mesh.object()).GetSchemaOrInheritedSchema<UsdGeomMesh>();
+    if (meshSchema) {
+        meshSchema->GetAttribute(UsdGeomTokens->faceVaryingLinearInterpolation)
+            .Get<TfToken>(&sdFVLinearInterpolation);
+    }
 
     // If the OpenSubdiv 3-style face varying linear interpolation value
     // wasn't specified, fall back to the old OpenSubdiv 2-style face
@@ -631,7 +643,10 @@ bool UsdMayaMeshWriteUtils::isMeshValid(const MDagPath& dagPath)
     return true;
 }
 
-void UsdMayaMeshWriteUtils::exportReferenceMesh(UsdGeomMesh& primSchema, MObject obj)
+void UsdMayaMeshWriteUtils::exportReferenceMesh(
+    UsdGeomMesh& primSchema,
+    MObject      obj,
+    bool         defaultToMesh)
 {
     MStatus status { MS::kSuccess };
 
@@ -646,12 +661,17 @@ void UsdMayaMeshWriteUtils::exportReferenceMesh(UsdGeomMesh& primSchema, MObject
     }
 
     MPlugArray conns;
+    MObject    referenceObject;
     referencePlug.connectedTo(conns, true, false);
-    if (conns.length() == 0) {
+    if (conns.length() > 0) {
+        referenceObject = conns[0].node();
+    } else if (defaultToMesh) {
+        // Try use the mesh itself as reference
+        referenceObject = obj;
+    } else {
         return;
     }
 
-    MObject referenceObject = conns[0].node();
     if (!referenceObject.hasFn(MFn::kMesh)) {
         return;
     }
@@ -666,8 +686,10 @@ void UsdMayaMeshWriteUtils::exportReferenceMesh(UsdGeomMesh& primSchema, MObject
     const int      numVertices = referenceMesh.numVertices();
     VtVec3fArray   points(mayaRawVec3, mayaRawVec3 + numVertices);
 
-    UsdGeomPrimvar primVar = primSchema.CreatePrimvar(
-        UsdUtilsGetPrefName(), SdfValueTypeNames->Point3fArray, UsdGeomTokens->varying);
+    UsdGeomPrimvar primVar
+        = UsdGeomPrimvarsAPI(primSchema)
+              .CreatePrimvar(
+                  UsdUtilsGetPrefName(), SdfValueTypeNames->Point3fArray, UsdGeomTokens->vertex);
 
     if (!primVar) {
         return;
@@ -820,6 +842,11 @@ void UsdMayaMeshWriteUtils::writeFaceVertexIndicesData(
         primSchema.GetFaceVertexCountsAttr(), &faceVertexCounts, usdTime, valueWriter);
     UsdMayaWriteUtil::SetAttribute(
         primSchema.GetFaceVertexIndicesAttr(), &faceVertexIndices, usdTime, valueWriter);
+
+    bool isLeftHanded = false;
+    UsdMayaUtil::getPlugValue(meshFn, "opposite", &isLeftHanded);
+    primSchema.CreateOrientationAttr(
+        VtValue(isLeftHanded ? UsdGeomTokens->leftHanded : UsdGeomTokens->rightHanded), true);
 }
 
 void UsdMayaMeshWriteUtils::writeInvisibleFacesData(
@@ -915,10 +942,12 @@ bool UsdMayaMeshWriteUtils::getMeshUVSetData(
 }
 
 bool UsdMayaMeshWriteUtils::writeUVSetsAsVec2fPrimvars(
-    const MFnMesh&             meshFn,
-    UsdGeomMesh&               primSchema,
-    const UsdTimeCode&         usdTime,
-    UsdUtilsSparseValueWriter* valueWriter)
+    const MFnMesh&                            meshFn,
+    UsdGeomMesh&                              primSchema,
+    const UsdTimeCode&                        usdTime,
+    UsdUtilsSparseValueWriter*                valueWriter,
+    bool                                      preserveSetNames,
+    const std::map<std::string, std::string>& uvSetRemaps)
 {
     MStatus status { MS::kSuccess };
 
@@ -940,16 +969,24 @@ bool UsdMayaMeshWriteUtils::writeUVSetsAsVec2fPrimvars(
             continue;
         }
 
-        // Rename "map1" as "st" to follow Pixar/USD convention if requested.
-        TfToken setName(uvSetNames[i].asChar());
-        if (setName == UsdMayaMeshPrimvarTokens->DefaultMayaTexcoordName.GetText()
-            && UsdMayaWriteUtil::WriteMap1AsST()) {
-            setName = UsdUtilsGetPrimaryUVSetName();
-        }
+        MString setName
+            = UsdMayaWriteUtil::UVSetExportedName(uvSetNames, preserveSetNames, uvSetRemaps, i);
 
         // create UV PrimVar
-        createUVPrimVar(
-            primSchema, setName, usdTime, uvValues, interpolation, assignmentIndices, valueWriter);
+        UsdGeomPrimvar primVar = createUVPrimVar(
+            primSchema,
+            TfToken(setName.asChar()),
+            usdTime,
+            uvValues,
+            interpolation,
+            assignmentIndices,
+            valueWriter);
+
+        // Save the original name for roundtripping:
+        if (primVar && (setName != uvSetNames[i])) {
+            UsdMayaRoundTripUtil::SetPrimVarMayaName(
+                primVar.GetAttr(), TfToken(uvSetNames[i].asChar()));
+        }
     }
 
     return true;
@@ -1103,8 +1140,8 @@ bool UsdMayaMeshWriteUtils::createRGBPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar
-        = primSchema.CreatePrimvar(name, SdfValueTypeNames->Color3fArray, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema)
+                                 .CreatePrimvar(name, SdfValueTypeNames->Color3fArray, interp);
 
     setPrimvar(
         primVar,
@@ -1142,8 +1179,8 @@ bool UsdMayaMeshWriteUtils::createRGBAPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar
-        = primSchema.CreatePrimvar(name, SdfValueTypeNames->Color4fArray, interp);
+    UsdGeomPrimvar primVar = UsdGeomPrimvarsAPI(primSchema)
+                                 .CreatePrimvar(name, SdfValueTypeNames->Color4fArray, interp);
 
     VtArray<GfVec4f> rgbaData(numValues);
     for (size_t i = 0; i < rgbaData.size(); ++i) {
@@ -1185,7 +1222,8 @@ bool UsdMayaMeshWriteUtils::createAlphaPrimVar(
         interp = TfToken();
     }
 
-    UsdGeomPrimvar primVar = primSchema.CreatePrimvar(name, SdfValueTypeNames->FloatArray, interp);
+    UsdGeomPrimvar primVar
+        = UsdGeomPrimvarsAPI(primSchema).CreatePrimvar(name, SdfValueTypeNames->FloatArray, interp);
     setPrimvar(
         primVar,
         assignmentIndices,
@@ -1355,5 +1393,60 @@ bool UsdMayaMeshWriteUtils::getMeshColorSetData(
 
     return true;
 }
+
+#if MAYA_API_VERSION >= 20220000
+
+MStatus UsdMayaMeshWriteUtils::exportComponentTags(UsdGeomMesh& primSchema, MObject obj)
+{
+    MStatus status { MS::kSuccess };
+
+    MFnDependencyNode dNode(obj, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+
+    const MFnDependencyNode depNodeFn(obj, &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+    MPlug outShp = depNodeFn.findPlug("outMesh", &status);
+    CHECK_MSTATUS_AND_RETURN_IT(status);
+
+    MDataHandle geomDataHandle = outShp.asMDataHandle();
+    MObject     geomObj = geomDataHandle.data();
+    if (geomObj.hasFn(MFn::kGeometryData)) {
+        TfToken         componentTagFamilyName("componentTag");
+        MFnGeometryData fnGeomData(geomObj);
+        MStringArray    keys;
+        status = fnGeomData.componentTags(keys);
+        CHECK_MSTATUS_AND_RETURN_IT(status);
+        for (unsigned int i = 0; i < keys.length(); ++i) {
+            MFnGeometryData::ComponentTagCategory ctg
+                = fnGeomData.componentTagCategory(keys[i], &status);
+            CHECK_MSTATUS_AND_RETURN_IT(status);
+            if (ctg == MFnGeometryData::ComponentTagCategory::kFaces) {
+                MObject contents = fnGeomData.componentTagContents(keys[i], &status);
+                CHECK_MSTATUS_AND_RETURN_IT(status);
+                if (contents.hasFn(MFn::kSingleIndexedComponent)) {
+                    MFnSingleIndexedComponent fnSingleIndexedComponent(contents, &status);
+                    CHECK_MSTATUS_AND_RETURN_IT(status);
+                    MIntArray curIndices;
+                    status = fnSingleIndexedComponent.getElements(curIndices);
+                    CHECK_MSTATUS_AND_RETURN_IT(status);
+                    VtIntArray indices;
+                    indices.reserve(curIndices.length());
+                    for (unsigned int j = 0; j < curIndices.length(); ++j)
+                        indices.push_back(curIndices[j]);
+                    UsdGeomSubset ss = UsdGeomSubset::CreateGeomSubset(
+                        primSchema,
+                        TfToken(keys[i].asChar()),
+                        UsdGeomTokens->face,
+                        indices,
+                        componentTagFamilyName);
+                }
+            }
+        }
+    }
+
+    return status;
+}
+
+#endif
 
 PXR_NAMESPACE_CLOSE_SCOPE

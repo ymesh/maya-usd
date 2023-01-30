@@ -30,8 +30,9 @@ class testUsdImportFramerates(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.temp_dir = fixturesUtils.setUpClass(__file__)
-        cls.usd_file = os.path.join(cls.temp_dir, "UsdImportFramerates/framerate.usda")
+        cls.input_dir = fixturesUtils.setUpClass(__file__)
+        cls.temp_dir = os.path.abspath('.')
+        cls.usd_file = os.path.join(cls.input_dir, "UsdImportFramerates/framerate.usda")
         cls.stage = Usd.Stage.Open(cls.usd_file)
         cls.base_rate = cls.stage.GetTimeCodesPerSecond()
 
@@ -91,8 +92,8 @@ class testUsdImportFramerates(unittest.TestCase):
             cmds.mayaUSDImport(f=self.usd_file, readAnimData=True)
 
             # First make sure the playback slider is set correctly
-            self.assertAlmostEquals(start * time_scale, cmds.playbackOptions(query=True, minTime=True))
-            self.assertAlmostEquals(end * time_scale, cmds.playbackOptions(query=True, maxTime=True))
+            self.assertAlmostEqual(start * time_scale, cmds.playbackOptions(query=True, minTime=True))
+            self.assertAlmostEqual(end * time_scale, cmds.playbackOptions(query=True, maxTime=True))
 
             for node, frames in nodes.items():
                 mframes = sorted(set(cmds.keyframe(node, query=True)))
@@ -103,7 +104,7 @@ class testUsdImportFramerates(unittest.TestCase):
                                 "A mismatched number of frames was found {}:{}".format(numFrames, numMFrames))
 
                 for idx, frame in enumerate(frames):
-                    self.assertAlmostEquals(frame * time_scale, mframes[idx])
+                    self.assertAlmostEqual(frame * time_scale, mframes[idx])
 
 
 if __name__ == '__main__':

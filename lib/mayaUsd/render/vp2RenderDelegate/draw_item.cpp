@@ -48,27 +48,62 @@ HdVP2DrawItem::~HdVP2DrawItem()
         MSubSceneContainer* subSceneContainer = param ? param->GetContainer() : nullptr;
         if (subSceneContainer) {
             for (const auto& renderItemData : _renderItems) {
-                subSceneContainer->remove(renderItemData._renderItemName);
+                const auto& sharedRenderItemCounter = renderItemData._sharedRenderItemCounter;
+                if (!sharedRenderItemCounter || (--(*sharedRenderItemCounter)) == 0) {
+                    TF_VERIFY(renderItemData._renderItemName == renderItemData._renderItem->name());
+                    subSceneContainer->remove(renderItemData._renderItem->name());
+                }
             }
         }
     }
 }
 
-void HdVP2DrawItem::AddRenderItem(MHWRender::MRenderItem* item, const HdGeomSubset* geomSubset)
+HdVP2DrawItem::RenderItemData&
+HdVP2DrawItem::AddRenderItem(MHWRender::MRenderItem* item, const HdGeomSubset* geomSubset)
 {
+    TF_VERIFY(item);
+
     _renderItems.emplace_back();
     RenderItemData& renderItemData = _renderItems.back();
 
     renderItemData._renderItem = item;
-    renderItemData._renderItemName = _drawItemName;
+    renderItemData._renderItemName = item->name();
+    renderItemData._enabled = item->isEnabled();
     if (geomSubset) {
         renderItemData._geomSubset = *geomSubset;
-        renderItemData._renderItemName += std::string(1, VP2_RENDER_DELEGATE_SEPARATOR).c_str();
-        renderItemData._renderItemName += geomSubset->id.GetString().c_str();
     }
 
     renderItemData._indexBuffer.reset(
         new MHWRender::MIndexBuffer(MHWRender::MGeometry::kUnsignedInt32));
+
+    return renderItemData;
+}
+
+void HdVP2DrawItem::ShareRenderItem(HdVP2DrawItem& sourceDrawItem)
+{
+    TF_VERIFY(_renderItems.size() == 0);
+    RenderItemData& srcData = sourceDrawItem.GetRenderItemData();
+    AddRenderItem(srcData._renderItem);
+
+    if (!srcData._sharedRenderItemCounter) {
+        srcData._sharedRenderItemCounter = std::make_shared<size_t>(1);
+    }
+
+    RenderItemData& dstData = GetRenderItemData();
+    dstData._sharedRenderItemCounter = srcData._sharedRenderItemCounter;
+    ++(*dstData._sharedRenderItemCounter);
+}
+
+/* static */
+SdfPath HdVP2DrawItem::RenderItemToPrimPath(const MHWRender::MRenderItem& item)
+{
+    // Extract id of the owner Rprim. A SdfPath directly created from the render
+    // item name could be ill-formed if the render item represents instancing:
+    // "/TreePatch/Tree_1.proto_leaves_id0;DrawItem_xxxxxxxx". Thus std::string
+    // is used instead to extract Rprim id.
+    const std::string renderItemName = item.name().asChar();
+    const auto        pos = renderItemName.find_first_of(VP2_RENDER_DELEGATE_SEPARATOR);
+    return SdfPath(renderItemName.substr(0, pos));
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -23,7 +23,10 @@
 #include <pxr/usd/usd/pyConversions.h>
 #include <pxr/usd/usd/schemaBase.h>
 
-#include <boost/python.hpp>
+#include <boost/python/class.hpp>
+#include <boost/python/def.hpp>
+#include <boost/python/operators.hpp>
+#include <boost/python/self.hpp>
 
 #include <string>
 
@@ -37,6 +40,12 @@ namespace {
 
 // fwd decl.
 WRAP_CUSTOM;
+
+static std::string _Repr(const MayaUsd_SchemasALMayaReference& self)
+{
+    std::string primRepr = TfPyRepr(self.GetPrim());
+    return TfStringPrintf("MayaUsd_Schemas.ALMayaReference(%s)", primRepr.c_str());
+}
 
 } // anonymous namespace
 
@@ -71,7 +80,7 @@ void wrapMayaUsd_SchemasALMayaReference()
 
         .def(!self)
 
-        ;
+        .def("__repr__", ::_Repr);
 
     _CustomWrapCode(cls);
 }

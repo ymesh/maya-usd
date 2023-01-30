@@ -21,6 +21,7 @@
 #include <mayaUsd/fileio/shaderWriter.h>
 
 #include <pxr/pxr.h>
+#include <pxr/usd/usdShade/shader.h>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -34,27 +35,50 @@ public:
         UsdMayaWriteJobContext&  jobCtx);
     static ContextSupport CanExport(const UsdMayaJobExportArgs&);
 
+    // Utility to find out in advance if a place2dTextureNode will be exported or not.
+    static bool IsAuthoredPlace2dTexture(const MFnDependencyNode& p2dTxFn);
+
 protected:
     // Returns the node graph where all ancillary nodes reside
     UsdPrim GetNodeGraph();
 
-    // Add a direct conversion node from one type to another:
-    UsdAttribute AddConversion(
-        const SdfValueTypeName& fromType,
-        const SdfValueTypeName& toType,
-        UsdAttribute            nodeOutput);
-
-    // Add a swizzle node to the current node to extract a channel from a color output:
-    UsdAttribute AddSwizzle(const std::string& channel, int numChannels);
-
     // Add a swizzle node to extract a channel from a color output:
     UsdAttribute AddSwizzle(const std::string& channel, int numChannels, UsdAttribute nodeOutput);
 
+    // Add a swizzle node to extract a channel from any output:
+    UsdAttribute ExtractChannel(size_t channelIndex, UsdAttribute nodeOutput);
+
+    // Add a constructor node for subchannel connection on an input:
+    UsdAttribute AddConstructor(UsdAttribute nodeInput, size_t channelIndex, MPlug inputPlug);
+
+    // Add a swizzle node that converts from the type found in \p nodeOutput to \p destType
+    UsdAttribute AddConversion(const SdfValueTypeName& destType, UsdAttribute nodeOutput);
+
     // Add a luminance node to the current node to get an alpha value from an RGB texture:
-    UsdAttribute AddLuminance(int numChannels);
+    UsdAttribute AddLuminance(int numChannels, UsdAttribute nodeOutput);
 
     // Add normal mapping functionnality to a normal input
     UsdAttribute AddNormalMapping(UsdAttribute normalInput);
+
+    // Make sure that a material-level input uses a nodegraph boundary port for connecting
+    // to subgraph nodes:
+    UsdAttribute PreserveNodegraphBoundaries(UsdAttribute input);
+
+    // Get the official output name of a MaterialX node using Sdr information.
+    static TfToken _GetOutputName(const TfToken& nodeID);
+
+    // Get the global MaterialX name we use for primvar name inputs. Depends on UsdPrimvarReader.
+    static TfToken _GetVarnameName();
+
+    /// Adds a schema attribute to the schema \p shaderSchema if the Maya attribute \p
+    /// shadingNodeAttrName in dependency node \p depNodeFn has been modified or has an incoming
+    /// connection at \p usdTime.
+    bool AuthorShaderInputFromShadingNodeAttr(
+        const MFnDependencyNode& depNodeFn,
+        const TfToken&           shadingNodeAttrName,
+        UsdShadeShader&          shaderSchema,
+        const UsdTimeCode        usdTime,
+        bool                     ignoreIfUnauthored = true);
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -17,10 +17,13 @@
 
 #include "basisCurves.h"
 #include "bboxGeom.h"
+#include "extComputation.h"
 #include "instancer.h"
 #include "material.h"
 #include "mesh.h"
+#include "points.h"
 #include "render_pass.h"
+#include "tokens.h"
 
 #include <mayaUsd/render/vp2ShaderFragments/shaderFragments.h>
 #include <mayaUsd/utils/hash.h>
@@ -47,7 +50,7 @@ namespace {
 inline const TfTokenVector& _SupportedRprimTypes()
 {
     static const TfTokenVector SUPPORTED_RPRIM_TYPES
-        = { HdPrimTypeTokens->basisCurves, HdPrimTypeTokens->mesh };
+        = { HdPrimTypeTokens->basisCurves, HdPrimTypeTokens->mesh, HdPrimTypeTokens->points };
     return SUPPORTED_RPRIM_TYPES;
 }
 
@@ -55,7 +58,9 @@ inline const TfTokenVector& _SupportedRprimTypes()
  */
 inline const TfTokenVector& _SupportedSprimTypes()
 {
-    static const TfTokenVector r { HdPrimTypeTokens->material, HdPrimTypeTokens->camera };
+    static const TfTokenVector r { HdPrimTypeTokens->material,
+                                   HdPrimTypeTokens->camera,
+                                   HdPrimTypeTokens->extComputation };
     return r;
 }
 
@@ -69,6 +74,7 @@ inline const TfTokenVector& _SupportedBprimTypes()
 
 const MString _diffuseColorParameterName = "diffuseColor"; //!< Shader parameter name
 const MString _solidColorParameterName = "solidColor";     //!< Shader parameter name
+const MString _diffuseParameterName = "diffuse";           //!< Shader parameter name
 const MString _pointSizeParameterName = "pointSize";       //!< Shader parameter name
 const MString _curveBasisParameterName = "curveBasis";     //!< Shader parameter name
 const MString _structOutputName = "outSurfaceFinal"; //!< Output struct name of the fallback shader
@@ -81,6 +87,7 @@ enum class FallbackShaderType
     kBasisCurvesCubicBezier,
     kBasisCurvesCubicBSpline,
     kBasisCurvesCubicCatmullRom,
+    kPoints,
     kCount
 };
 
@@ -92,14 +99,13 @@ const MString _fallbackShaderNames[] = { "FallbackShader",
                                          "BasisCurvesLinearFallbackShader",
                                          "BasisCurvesCubicFallbackShader",
                                          "BasisCurvesCubicFallbackShader",
-                                         "BasisCurvesCubicFallbackShader" };
+                                         "BasisCurvesCubicFallbackShader",
+                                         "PointsFallbackShader" };
 
 //! Array of varying-color shader fragment names indexed by FallbackShaderType
-const MString _cpvFallbackShaderNames[] = { "FallbackCPVShader",
-                                            "BasisCurvesLinearCPVShader",
-                                            "BasisCurvesCubicCPVShader",
-                                            "BasisCurvesCubicCPVShader",
-                                            "BasisCurvesCubicCPVShader" };
+const MString _cpvFallbackShaderNames[]
+    = { "FallbackCPVShader",         "BasisCurvesLinearCPVShader", "BasisCurvesCubicCPVShader",
+        "BasisCurvesCubicCPVShader", "BasisCurvesCubicCPVShader",  "PointsFallbackCPVShader" };
 
 //! "curveBasis" parameter values for three different cubic curves
 const std::unordered_map<FallbackShaderType, int> _curveBasisParameterValueMapping
@@ -177,17 +183,17 @@ public:
         TF_VERIFY(_3dDefaultMaterialShader);
 
         _3dCPVSolidShader = shaderMgr->getStockShader(MHWRender::MShaderManager::k3dCPVSolidShader);
+        if (TF_VERIFY(_3dCPVSolidShader)) {
+            _3dCPVSolidShader->setParameter(_diffuseParameterName, 1.0f);
+        }
 
-        TF_VERIFY(_3dCPVSolidShader);
+        _3dCPVFatPointShader
+            = shaderMgr->getStockShader(MHWRender::MShaderManager::k3dCPVFatPointShader);
+        if (TF_VERIFY(_3dCPVFatPointShader)) {
+            _3dCPVFatPointShader->setParameter(_diffuseParameterName, 1.0f);
 
-        _3dFatPointShader = shaderMgr->getStockShader(MHWRender::MShaderManager::k3dFatPointShader);
-
-        if (TF_VERIFY(_3dFatPointShader)) {
-            constexpr float white[] = { 1.0f, 1.0f, 1.0f, 1.0f };
             constexpr float size[] = { 5.0, 5.0 };
-
-            _3dFatPointShader->setParameter(_solidColorParameterName, white);
-            _3dFatPointShader->setParameter(_pointSizeParameterName, size);
+            _3dCPVFatPointShader->setParameter(_pointSizeParameterName, size);
         }
 
         for (size_t i = 0; i < FallbackShaderTypeCount; i++) {
@@ -200,6 +206,10 @@ public:
                 if (it != _curveBasisParameterValueMapping.end()) {
                     shader->setParameter(_curveBasisParameterName, it->second);
                 }
+                if (type == FallbackShaderType::kPoints) {
+                    shader->addInputFragment("PointsGeometry", "GPUStage", "GPUStage");
+                }
+                shader->setParameter(_diffuseParameterName, 1.0f);
             }
 
             _fallbackCPVShaders[i] = shader;
@@ -229,11 +239,54 @@ public:
 
     /*! \brief  Returns a white 3d fat point shader.
      */
-    MHWRender::MShaderInstance* Get3dFatPointShader() const { return _3dFatPointShader; }
+    MHWRender::MShaderInstance* Get3dFatPointShader(const MColor& color)
+    {
+        // Look for it first with reader lock
+        tbb::spin_rw_mutex::scoped_lock lock(_3dFatPointShaders._mutex, false /*write*/);
+        auto                            it = _3dFatPointShaders._map.find(color);
+        if (it != _3dFatPointShaders._map.end()) {
+            return it->second;
+        }
+
+        // Upgrade to writer lock.
+        lock.upgrade_to_writer();
+
+        // Double check that it wasn't inserted by another thread
+        it = _3dFatPointShaders._map.find(color);
+        if (it != _3dFatPointShaders._map.end()) {
+            return it->second;
+        }
+
+        MHWRender::MShaderInstance* shader = nullptr;
+
+        MHWRender::MRenderer*            renderer = MHWRender::MRenderer::theRenderer();
+        const MHWRender::MShaderManager* shaderMgr
+            = renderer ? renderer->getShaderManager() : nullptr;
+        if (TF_VERIFY(shaderMgr)) {
+            shader = shaderMgr->getStockShader(MHWRender::MShaderManager::k3dFatPointShader);
+
+            if (TF_VERIFY(shader)) {
+                const float solidColor[] = { color.r, color.g, color.b, color.a };
+                shader->setParameter(_solidColorParameterName, solidColor);
+
+                constexpr float size[] = { 5.0, 5.0 };
+                shader->setParameter(_pointSizeParameterName, size);
+
+                // Insert instance we just created
+                _3dFatPointShaders._map[color] = shader;
+            }
+        }
+
+        return shader;
+    }
 
     /*! \brief  Returns a 3d CPV solid-color shader instance.
      */
     MHWRender::MShaderInstance* Get3dCPVSolidShader() const { return _3dCPVSolidShader; }
+
+    /*! \brief  Returns a 3d CPV fat point shader instance.
+     */
+    MHWRender::MShaderInstance* Get3dCPVFatPointShader() const { return _3dCPVFatPointShader; }
 
     /*! \brief  Returns a 3d solid shader with the specified color.
      */
@@ -333,6 +386,10 @@ public:
                     if (it != _curveBasisParameterValueMapping.end()) {
                         shader->setParameter(_curveBasisParameterName, it->second);
                     }
+                    if (type == FallbackShaderType::kPoints) {
+                        shader->addInputFragment("PointsGeometry", "GPUStage", "GPUStage");
+                    }
+                    shader->setParameter("diffuse", 1.0f);
                 }
             }
         }
@@ -347,20 +404,97 @@ public:
         return shader;
     }
 
+    MHWRender::MShaderInstance* GetShaderFromCache(const TfToken& id)
+    {
+        tbb::spin_rw_mutex::scoped_lock lock(_userCache._mutex, false /*write*/);
+
+        const auto it = _userCache._map.find(id);
+
+        const MHWRender::MShaderInstance* shader
+            = (it != _userCache._map.cend() ? it->second.get() : nullptr);
+        return (shader ? shader->clone() : nullptr);
+    }
+
+    /*! \brief  Adds a clone of the shader to the cache with the specified id if it doesn't exist.
+     */
+    bool AddShaderToCache(const TfToken& id, const MHWRender::MShaderInstance& shader)
+    {
+        tbb::spin_rw_mutex::scoped_lock lock(_userCache._mutex, false /*write*/);
+
+        const auto it = _userCache._map.find(id);
+        if (it != _userCache._map.cend()) {
+            return false;
+        }
+
+        lock.upgrade_to_writer();
+        _userCache._map[id].reset(shader.clone());
+        return true;
+    }
+
+#ifdef WANT_MATERIALX_BUILD
+    /*! \brief  Returns the cached primvars associated with a shader entry.
+                Will return nullptr if there are no primvars associated with the shader id.
+     */
+    const TfTokenVector* GetPrimvarsFromCache(const TfToken& id)
+    {
+        tbb::spin_rw_mutex::scoped_lock lock(_userCache._mutex, false /*write*/);
+
+        const auto it = _userCache._primvars.find(id);
+
+        return (it != _userCache._primvars.cend() ? &it->second : nullptr);
+    }
+
+    /*! \brief  Adds the primvars associated with a shader id to the cache.
+     */
+    bool AddPrimvarsToCache(const TfToken& id, const TfTokenVector& primvars)
+    {
+        tbb::spin_rw_mutex::scoped_lock lock(_userCache._mutex, false /*write*/);
+
+        const auto it = _userCache._primvars.find(id);
+        if (it != _userCache._primvars.cend()) {
+            return false;
+        }
+
+        lock.upgrade_to_writer();
+        _userCache._primvars[id] = primvars;
+        return true;
+    }
+#endif
+
+    void OnMayaExit()
+    {
+        if (_isInitialized) {
+            for (size_t i = 0; i < FallbackShaderTypeCount; ++i) {
+                _fallbackShaders[i]._map.clear();
+                _fallbackCPVShaders[i] = nullptr;
+            }
+            _3dSolidShaders._map.clear();
+            _3dFatPointShaders._map.clear();
+            _userCache._map.clear();
+            _3dDefaultMaterialShader = nullptr;
+            _3dCPVSolidShader = nullptr;
+            _3dCPVFatPointShader = nullptr;
+        }
+        _isInitialized = false;
+    }
+
 private:
     bool _isInitialized { false }; //!< Whether the shader cache is initialized
 
     //! Shader registry used by fallback shaders
     MShaderMap _fallbackShaders[FallbackShaderTypeCount];
     MShaderMap _3dSolidShaders;
+    MShaderMap _3dFatPointShaders;
 
     //!< Fallback shaders with CPV support
     MHWRender::MShaderInstance* _fallbackCPVShaders[FallbackShaderTypeCount] { nullptr };
     //!< 3d default material shader
     MHWRender::MShaderInstance* _3dDefaultMaterialShader { nullptr };
 
-    MHWRender::MShaderInstance* _3dFatPointShader { nullptr }; //!< 3d shader for points
-    MHWRender::MShaderInstance* _3dCPVSolidShader { nullptr }; //!< 3d CPV solid-color shader
+    MHWRender::MShaderInstance* _3dCPVSolidShader { nullptr };    //!< 3d CPV solid-color shader
+    MHWRender::MShaderInstance* _3dCPVFatPointShader { nullptr }; //!< 3d CPV fat point shader
+
+    HdVP2ShaderCache _userCache; //!< A thread-safe cache of user generated shaders.
 };
 
 MShaderCache sShaderCache; //!< Global shader cache to minimize the number of unique shaders.
@@ -471,6 +605,10 @@ HdVP2RenderDelegate::HdVP2RenderDelegate(ProxyRenderDelegate& drawScene)
  */
 HdVP2RenderDelegate::~HdVP2RenderDelegate()
 {
+    CleanupMaterials();
+    // Release Textures and Shader resources:
+    _materialSprims.clear();
+
     std::lock_guard<std::mutex> guard(_renderDelegateMutex);
     if (_renderDelegateCounter.fetch_sub(1) == 1) {
         _resourceRegistry.reset();
@@ -615,6 +753,13 @@ HdRprim* HdVP2RenderDelegate::CreateRprim(
         return new HdVP2BasisCurves(this, rprimId, instancerId);
 #endif
     }
+    if (typeId == HdPrimTypeTokens->points) {
+#if defined(HD_API_VERSION) && HD_API_VERSION >= 36
+        return new HdVP2Points(this, rprimId);
+#else
+        return new HdVP2Points(this, rprimId, instancerId);
+#endif
+    }
     // if (typeId == HdPrimTypeTokens->volume) {
     // #if defined(HD_API_VERSION) && HD_API_VERSION >= 36
     //    return new HdVP2Volume(this, rprimId);
@@ -640,10 +785,15 @@ void HdVP2RenderDelegate::DestroyRprim(HdRprim* rPrim) { delete rPrim; }
 HdSprim* HdVP2RenderDelegate::CreateSprim(const TfToken& typeId, const SdfPath& sprimId)
 {
     if (typeId == HdPrimTypeTokens->material) {
-        return new HdVP2Material(this, sprimId);
+        auto* material = new HdVP2Material(this, sprimId);
+        _materialSprims.emplace(material);
+        return material;
     }
     if (typeId == HdPrimTypeTokens->camera) {
         return new HdCamera(sprimId);
+    }
+    if (typeId == HdPrimTypeTokens->extComputation) {
+        return new HdVP2ExtComputation(sprimId);
     }
     /*
     if (typeId == HdPrimTypeTokens->sphereLight) {
@@ -686,6 +836,9 @@ HdSprim* HdVP2RenderDelegate::CreateFallbackSprim(const TfToken& typeId)
     if (typeId == HdPrimTypeTokens->camera) {
         return new HdCamera(SdfPath::EmptyPath());
     }
+    if (typeId == HdPrimTypeTokens->extComputation) {
+        return new HdExtComputation(SdfPath::EmptyPath());
+    }
     /*
     if (typeId == HdPrimTypeTokens->sphereLight) {
         return HdVP2Light::CreatePointLight(this, SdfPath::EmptyPath());
@@ -712,7 +865,11 @@ HdSprim* HdVP2RenderDelegate::CreateFallbackSprim(const TfToken& typeId)
 
 /*! \brief  Destroy & deallocate Sprim instance
  */
-void HdVP2RenderDelegate::DestroySprim(HdSprim* sPrim) { delete sPrim; }
+void HdVP2RenderDelegate::DestroySprim(HdSprim* sPrim)
+{
+    _materialSprims.erase(sPrim);
+    delete sPrim;
+}
 
 /*! \brief  Request to Allocate and Construct a new, VP2 specialized Bprim.
 
@@ -767,7 +924,54 @@ void HdVP2RenderDelegate::DestroyBprim(HdBprim* bPrim) { delete bPrim; }
     The full material purpose is suggested according to
       https://github.com/PixarAnimationStudios/USD/pull/853
 */
-TfToken HdVP2RenderDelegate::GetMaterialBindingPurpose() const { return HdTokens->full; }
+TfToken HdVP2RenderDelegate::GetMaterialBindingPurpose() const { return HdTokens->preview; }
+
+TfTokenVector HdVP2RenderDelegate::GetShaderSourceTypes() const
+{
+#ifdef WANT_MATERIALX_BUILD
+    MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
+    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
+        return { HdVP2Tokens->mtlx, HdVP2Tokens->glslfx };
+    } else {
+        return { HdVP2Tokens->glslfx };
+    }
+#else
+    return { HdVP2Tokens->glslfx };
+#endif
+}
+
+#if PXR_VERSION < 2105
+
+TfToken HdVP2RenderDelegate::GetMaterialNetworkSelector() const
+{
+#ifdef WANT_MATERIALX_BUILD
+    MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
+    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
+        return HdVP2Tokens->mtlx;
+    } else {
+        return HdVP2Tokens->glslfx;
+    }
+#else
+    return HdVP2Tokens->glslfx;
+#endif
+}
+
+#else // PXR_VERSION < 2105
+
+TfTokenVector HdVP2RenderDelegate::GetMaterialRenderContexts() const
+{
+#ifdef WANT_MATERIALX_BUILD
+    MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
+    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
+        return { HdVP2Tokens->mtlx, HdVP2Tokens->glslfx };
+    } else {
+        return { HdVP2Tokens->glslfx };
+    }
+#else
+    return { HdVP2Tokens->glslfx };
+#endif
+}
+#endif // PXR_VERSION < 2105
 
 /*! \brief  Returns a node name made as a child of delegate's id.
  */
@@ -780,13 +984,7 @@ MString HdVP2RenderDelegate::GetLocalNodeName(const MString& name) const
  */
 MHWRender::MShaderInstance* HdVP2RenderDelegate::GetShaderFromCache(const TfToken& id)
 {
-    tbb::spin_rw_mutex::scoped_lock lock(_shaderCache._mutex, false /*write*/);
-
-    const auto it = _shaderCache._map.find(id);
-
-    const MHWRender::MShaderInstance* shader
-        = (it != _shaderCache._map.cend() ? it->second.get() : nullptr);
-    return (shader ? shader->clone() : nullptr);
+    return sShaderCache.GetShaderFromCache(id);
 }
 
 /*! \brief  Adds a clone of the shader to the cache with the specified id if it doesn't exist.
@@ -795,17 +993,25 @@ bool HdVP2RenderDelegate::AddShaderToCache(
     const TfToken&                    id,
     const MHWRender::MShaderInstance& shader)
 {
-    tbb::spin_rw_mutex::scoped_lock lock(_shaderCache._mutex, false /*write*/);
-
-    const auto it = _shaderCache._map.find(id);
-    if (it != _shaderCache._map.cend()) {
-        return false;
-    }
-
-    lock.upgrade_to_writer();
-    _shaderCache._map[id].reset(shader.clone());
-    return true;
+    return sShaderCache.AddShaderToCache(id, shader);
 }
+
+#ifdef WANT_MATERIALX_BUILD
+/*! \brief  Returns the cached primvars associated with a shader entry.
+            Will return nullptr if there are no primvars associated with the shader id.
+ */
+const TfTokenVector* HdVP2RenderDelegate::GetPrimvarsFromCache(const TfToken& id)
+{
+    return sShaderCache.GetPrimvarsFromCache(id);
+}
+
+/*! \brief  Adds the primvars associated with a shader id to the cache.
+ */
+bool HdVP2RenderDelegate::AddPrimvarsToCache(const TfToken& id, const TfTokenVector& primvars)
+{
+    return sShaderCache.AddPrimvarsToCache(id, primvars);
+}
+#endif
 
 /*! \brief  Returns a fallback shader instance when no material is bound.
 
@@ -820,6 +1026,11 @@ bool HdVP2RenderDelegate::AddShaderToCache(
 MHWRender::MShaderInstance* HdVP2RenderDelegate::GetFallbackShader(const MColor& color) const
 {
     return sShaderCache.GetFallbackShader(color, FallbackShaderType::kCommon);
+}
+
+MHWRender::MShaderInstance* HdVP2RenderDelegate::GetPointsFallbackShader(const MColor& color) const
+{
+    return sShaderCache.GetFallbackShader(color, FallbackShaderType::kPoints);
 }
 
 /*! \brief  Returns a constant-color fallback shader instance for basisCurves when no material is
@@ -869,6 +1080,11 @@ MHWRender::MShaderInstance* HdVP2RenderDelegate::GetFallbackCPVShader() const
     return sShaderCache.GetFallbackCPVShader(FallbackShaderType::kCommon);
 }
 
+MHWRender::MShaderInstance* HdVP2RenderDelegate::GetPointsFallbackCPVShader() const
+{
+    return sShaderCache.GetFallbackCPVShader(FallbackShaderType::kPoints);
+}
+
 /*! \brief  Returns a 3d solid-color shader.
  */
 MHWRender::MShaderInstance* HdVP2RenderDelegate::Get3dSolidShader(const MColor& color) const
@@ -890,11 +1106,18 @@ MHWRender::MShaderInstance* HdVP2RenderDelegate::Get3dCPVSolidShader() const
     return sShaderCache.Get3dCPVSolidShader();
 }
 
+/*! \brief  Returns a 3d CPV fat point shader.
+ */
+MHWRender::MShaderInstance* HdVP2RenderDelegate::Get3dCPVFatPointShader() const
+{
+    return sShaderCache.Get3dCPVFatPointShader();
+}
+
 /*! \brief  Returns a white 3d fat point shader.
  */
-MHWRender::MShaderInstance* HdVP2RenderDelegate::Get3dFatPointShader() const
+MHWRender::MShaderInstance* HdVP2RenderDelegate::Get3dFatPointShader(const MColor& color) const
 {
-    return sShaderCache.Get3dFatPointShader();
+    return sShaderCache.Get3dFatPointShader(color);
 }
 
 /*! \brief  Returns a sampler state as specified by the description.
@@ -929,5 +1152,16 @@ HdVP2RenderDelegate::GetSamplerState(const MHWRender::MSamplerStateDesc& desc) c
 /*! \brief  Returns the shared bbox geometry.
  */
 const HdVP2BBoxGeom& HdVP2RenderDelegate::GetSharedBBoxGeom() const { return *sSharedBBoxGeom; }
+
+void HdVP2RenderDelegate::CleanupMaterials()
+{
+    for (const auto& sprim : _materialSprims) {
+        if (auto* material = dynamic_cast<HdVP2Material*>(sprim)) {
+            material->ClearPendingTasks();
+        }
+    }
+}
+
+void HdVP2RenderDelegate::OnMayaExit() { sShaderCache.OnMayaExit(); }
 
 PXR_NAMESPACE_CLOSE_SCOPE

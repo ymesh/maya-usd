@@ -16,10 +16,12 @@
 #include "ProxyShape.h"
 #include "adskExportCommand.h"
 #include "adskImportCommand.h"
+#include "adskListJobContextsCommand.h"
 #include "adskListShadingModesCommand.h"
 #include "adskStageLoadUnloadCommands.h"
 #include "base/api.h"
 #include "exportTranslator.h"
+#include "geomNode.h"
 #include "importTranslator.h"
 
 #include <mayaUsd/base/api.h>
@@ -68,6 +70,11 @@
 // functionality.  PPT, 1-Dec-2020.
 #include <maya/MGlobal.h>
 #include <maya/MPxCommand.h>
+#endif
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/commands/PullPushCommands.h>
+#include <mayaUsd/fileio/primUpdaterManager.h>
 #endif
 
 #if defined(WANT_QT_BUILD)
@@ -217,6 +224,13 @@ MStatus initializePlugin(MObject obj)
     registerCommandCheck<MayaUsd::LayerEditorWindowCommand>(plugin);
 #endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    registerCommandCheck<MayaUsd::ufe::EditAsMayaCommand>(plugin);
+    registerCommandCheck<MayaUsd::ufe::MergeToUsdCommand>(plugin);
+    registerCommandCheck<MayaUsd::ufe::DiscardEditsCommand>(plugin);
+    registerCommandCheck<MayaUsd::ufe::DuplicateCommand>(plugin);
+#endif
+
     status = plugin.registerCommand(
         MayaUsd::UsdUndoBlockCmd::commandName, MayaUsd::UsdUndoBlockCmd::creator);
     CHECK_MSTATUS(status);
@@ -258,6 +272,14 @@ MStatus initializePlugin(MObject obj)
         MayaUsdProxyShapePlugin::getProxyShapeClassification());
     CHECK_MSTATUS(status);
 
+    status = plugin.registerNode(
+        MayaUsd::MayaUsdGeomNode::typeName,
+        MayaUsd::MayaUsdGeomNode::typeId,
+        MayaUsd::MayaUsdGeomNode::creator,
+        MayaUsd::MayaUsdGeomNode::initialize);
+    CHECK_MSTATUS(status);
+
+    registerCommandCheck<MayaUsd::ADSKMayaUSDListJobContextsCommand>(plugin);
     registerCommandCheck<MayaUsd::ADSKMayaUSDListShadingModesCommand>(plugin);
 
     status = UsdMayaUndoHelperCommand::initialize(plugin);
@@ -320,7 +342,14 @@ MStatus initializePlugin(MObject obj)
 #endif
 
     UsdMayaSceneResetNotice::InstallListener();
+    UsdMayaBeforeSceneResetNotice::InstallListener();
+    UsdMayaExitNotice::InstallListener();
     UsdMayaDiagnosticDelegate::InstallDelegate();
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    // Install notifications
+    PrimUpdaterManager::getInstance();
+#endif
 
     return status;
 }
@@ -345,6 +374,7 @@ MStatus uninitializePlugin(MObject obj)
     }
 
     deregisterCommandCheck<MayaUsd::ADSKMayaUSDListShadingModesCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ADSKMayaUSDListJobContextsCommand>(plugin);
 
 #if defined(WANT_QT_BUILD)
     status = MayaUsd::USDImportDialogCmd::finalize(plugin);
@@ -375,7 +405,17 @@ MStatus uninitializePlugin(MObject obj)
     MayaUsd::LayerEditorWindowCommand::cleanupOnPluginUnload();
 #endif
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    deregisterCommandCheck<MayaUsd::ufe::EditAsMayaCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ufe::MergeToUsdCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ufe::DiscardEditsCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ufe::DuplicateCommand>(plugin);
+#endif
+
     status = plugin.deregisterNode(MayaUsd::ProxyShape::typeId);
+    CHECK_MSTATUS(status);
+
+    status = plugin.deregisterNode(MayaUsd::MayaUsdGeomNode::typeId);
     CHECK_MSTATUS(status);
 
     status = MayaUsdProxyShapePlugin::finalize(plugin);
@@ -413,6 +453,8 @@ MStatus uninitializePlugin(MObject obj)
 #endif
 
     UsdMayaSceneResetNotice::RemoveListener();
+    UsdMayaBeforeSceneResetNotice::RemoveListener();
+    UsdMayaExitNotice::RemoveListener();
     UsdMayaDiagnosticDelegate::RemoveDelegate();
 
     return status;

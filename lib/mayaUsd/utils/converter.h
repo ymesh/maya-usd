@@ -25,7 +25,6 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/timeCode.h>
 
-#include <maya/MDGModifier.h>
 #include <maya/MDataHandle.h>
 #include <maya/MFnMatrixData.h>
 #include <maya/MFnNumericAttribute.h>
@@ -36,6 +35,7 @@
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 #include <maya/MPointArray.h>
+#include <maya/MString.h>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -394,6 +394,16 @@ template <> struct TypedConverter<MString, std::string>
 {
     static void convert(const std::string& src, MString& dst) { dst = src.c_str(); }
     static void convert(const MString& src, std::string& dst) { dst = src.asChar(); }
+};
+
+//! \brief  Specialization of TypedConverter for MString <--> SdfAssetPath
+template <> struct TypedConverter<MString, SdfAssetPath>
+{
+    static void convert(const SdfAssetPath& src, MString& dst) { dst = src.GetAssetPath().c_str(); }
+    static void convert(const MString& src, SdfAssetPath& dst)
+    {
+        dst = SdfAssetPath(std::string(src.asChar()));
+    }
 };
 
 //! \brief  Specialization of TypedConverter for MMatrix <--> GfMatrix4d

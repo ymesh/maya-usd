@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
+#include "mtlxBaseReader.h"
 #include "shadingTokens.h"
 
 #include <mayaUsd/fileio/shaderReaderRegistry.h>
@@ -44,12 +45,12 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-class MtlxUsd_PreviewSurfaceReader : public UsdMayaShaderReader
+class MtlxUsd_PreviewSurfaceReader : public MtlxUsd_BaseReader
 {
 public:
     MtlxUsd_PreviewSurfaceReader(const UsdMayaPrimReaderArgs&);
 
-    bool Read(UsdMayaPrimReaderContext* context) override;
+    bool Read(UsdMayaPrimReaderContext& context) override;
 
     TfToken GetMayaNameForUsdAttrName(const TfToken& usdAttrName) const override;
 };
@@ -57,12 +58,12 @@ public:
 PXRUSDMAYA_REGISTER_SHADER_READER(ND_UsdPreviewSurface_surfaceshader, MtlxUsd_PreviewSurfaceReader);
 
 MtlxUsd_PreviewSurfaceReader::MtlxUsd_PreviewSurfaceReader(const UsdMayaPrimReaderArgs& readArgs)
-    : UsdMayaShaderReader(readArgs)
+    : MtlxUsd_BaseReader(readArgs)
 {
 }
 
 /* virtual */
-bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext* context)
+bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext& context)
 {
     const UsdPrim& prim = _GetArgs().GetUsdPrim();
     UsdShadeShader shaderSchema = UsdShadeShader(prim);
@@ -87,7 +88,8 @@ bool MtlxUsd_PreviewSurfaceReader::Read(UsdMayaPrimReaderContext* context)
         return false;
     }
 
-    context->RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    context.RegisterNewMayaNode(prim.GetPath().GetString(), mayaObject);
+    RegisterConstructorNodes(context, mayaObject);
 
     for (const UsdShadeInput& input : shaderSchema.GetInputs()) {
         TfToken baseName = GetMayaNameForUsdAttrName(input.GetFullName());
@@ -124,7 +126,7 @@ TfToken MtlxUsd_PreviewSurfaceReader::GetMayaNameForUsdAttrName(const TfToken& u
 
     if (attrType == UsdShadeAttributeType::Input) {
         return baseName;
-    } else if (attrType == UsdShadeAttributeType::Output && baseName == TrMtlxTokens->out) {
+    } else if (attrType == UsdShadeAttributeType::Output && baseName == UsdShadeTokens->surface) {
         return TrMayaTokens->outColor;
     }
     return TfToken();

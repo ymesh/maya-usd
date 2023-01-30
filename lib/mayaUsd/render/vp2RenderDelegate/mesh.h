@@ -17,12 +17,14 @@
 #define HD_VP2_MESH
 
 #include "draw_item.h"
+#include "mayaPrimCommon.h"
 #include "meshViewportCompute.h"
 #include "primvarInfo.h"
 
 #include <mayaUsd/render/vp2RenderDelegate/proxyRenderDelegate.h>
 
 #include <pxr/imaging/hd/mesh.h>
+#include <pxr/imaging/hd/vertexAdjacency.h>
 #include <pxr/pxr.h>
 
 #include <maya/MHWGeometry.h>
@@ -47,9 +49,15 @@ struct HdVP2MeshSharedData
     //! copy.
     HdMeshTopology _topology;
 
+    //! Adjacency based off of _topology
+    Hd_VertexAdjacencySharedPtr _adjacency;
+
     //! The rendering topology is to create unshared or sorted vertice layout
     //! for efficient GPU rendering.
     HdMeshTopology _renderingTopology;
+
+    //! Defines whether or not the vertex layout used for drawing is unshared
+    bool _isVertexLayoutUnshared { false };
 
     //! An array to store original scene face vertex index of each rendering
     //! face vertex index.
@@ -68,7 +76,7 @@ struct HdVP2MeshSharedData
 
     //! Map from the original topology faceId to the void* pointer to
     //! the MRenderItem that face is a part of
-    std::vector<void*> _faceIdToRenderItem;
+    std::vector<SdfPath> _faceIdToGeomSubsetId;
 
     //! The number of vertices in each vertex buffer.
     size_t _numVertices;
@@ -84,9 +92,6 @@ struct HdVP2MeshSharedData
 #ifdef HDVP2_ENABLE_GPU_COMPUTE
     MSharedPtr<MeshViewportCompute> _viewportCompute;
 #endif
-
-    //! Fallback color changed
-    bool _fallbackColorDirty { true };
 };
 
 /*! \brief  VP2 representation of poly-mesh object.
@@ -103,7 +108,9 @@ struct HdVP2MeshSharedData
     in HdVP2RenderDelegate::CommitResources(), which runs on main-thread after
     all prims have been updated.
 */
-class HdVP2Mesh final : public HdMesh
+class HdVP2Mesh final
+    : public HdMesh
+    , public MayaUsdRPrim
 {
 public:
 #if defined(HD_API_VERSION) && HD_API_VERSION >= 36
@@ -125,9 +132,6 @@ private:
     void _InitRepr(const TfToken&, HdDirtyBits*) override;
 
     void _UpdateRepr(HdSceneDelegate*, const TfToken&);
-    void _MakeOtherReprRenderItemsInvisible(HdSceneDelegate*, const TfToken&);
-
-    void _CommitMVertexBuffer(MHWRender::MVertexBuffer* const, void*) const;
 
     bool _PrimvarIsRequired(const TfToken&) const;
 
@@ -138,13 +142,29 @@ private:
     void _CreateOSDTables();
 #endif
 
+    TfToken& _RenderTag() override { return _meshSharedData->_renderTag; }
+
+    void _AddNewRenderItem(
+        HdVP2DrawItem*        drawItem,
+        const HdMeshReprDesc& desc,
+        const TfToken&        reprToken,
+        MSubSceneContainer*   subSceneContainer,
+        const bool            shareHighlightItem = true);
+
+    void _UpdateMods(
+        HdRprim&              refThis,
+        HdVP2DrawItem*        drawItem,
+        HdSceneDelegate*      sceneDelegate,
+        const TfToken&        reprToken,
+        const HdMeshReprDesc& desc,
+        MSubSceneContainer*   subSceneContainer);
+
     void _UpdateDrawItem(
         HdSceneDelegate*,
         HdVP2DrawItem*,
         HdVP2DrawItem::RenderItemData&,
-        const HdMeshReprDesc& desc);
-
-    void _HideAllDrawItems(const TfToken& reprToken);
+        const HdMeshReprDesc& desc,
+        const TfToken&        reprToken);
 
     void _UpdatePrimvarSources(
         HdSceneDelegate*     sceneDelegate,
@@ -156,49 +176,58 @@ private:
         const HdDirtyBits& rprimDirtyBits,
         const TfToken&     reprToken);
 
-    void _CreateSmoothHullRenderItems(HdVP2DrawItem& drawItem);
+    void _CreateSmoothHullRenderItems(
+        HdVP2DrawItem&      drawItem,
+        const TfToken&      reprToken,
+        MSubSceneContainer& subSceneContainer);
 
-    MHWRender::MRenderItem* _CreateSelectionHighlightRenderItem(const MString& name) const;
-    MHWRender::MRenderItem* _CreateSmoothHullRenderItem(const MString& name) const;
-    MHWRender::MRenderItem* _CreateWireframeRenderItem(const MString& name) const;
-    MHWRender::MRenderItem* _CreateBoundingBoxRenderItem(const MString& name) const;
-
-#ifndef MAYA_NEW_POINT_SNAPPING_SUPPORT
-    MHWRender::MRenderItem* _CreatePointsRenderItem(const MString& name) const;
+#ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
+    MHWRender::MRenderItem* _CreateShadedSelectedInstancesItem(
+        const MString&      name,
+        HdVP2DrawItem&      drawItem,
+        const TfToken&      reprToken,
+        MSubSceneContainer& subSceneContainer,
+        const HdGeomSubset* geomSubset) const;
 #endif
+    HdVP2DrawItem::RenderItemData& _CreateSmoothHullRenderItem(
+        const MString&      name,
+        HdVP2DrawItem&      drawItem,
+        const TfToken&      reprToken,
+        MSubSceneContainer& subSceneContainer,
+        const HdGeomSubset* geomSubset) const;
+    MHWRender::MRenderItem* _CreateSelectionHighlightRenderItem(const MString& name) const;
+
+    void _ResetRenderingTopology();
 
     static void _InitGPUCompute();
 
     //! Custom dirty bits used by this mesh
     enum DirtyBits : HdDirtyBits
     {
-        DirtySmoothNormals = HdChangeTracker::CustomBitsBegin,
+        DirtySmoothNormals = MayaUsdRPrim::DirtyBitLast,
         DirtyFlatNormals = (DirtySmoothNormals << 1),
-        DirtyIndices = (DirtyFlatNormals << 1),
-        DirtyHullIndices = (DirtyIndices << 1),
-        DirtyPointsIndices = (DirtyHullIndices << 1),
-        DirtySelection = (DirtyPointsIndices << 1),
-        DirtySelectionHighlight = (DirtySelection << 1)
+        //! "Forward" the enumerated types here so we don't have to keep writing MayaUsdRPrim in
+        //! the cpp file.
+        DirtySelectionHighlight = MayaUsdRPrim::DirtySelectionHighlight,
+        DirtySelectionMode = MayaUsdRPrim::DirtySelectionMode
     };
 
-    HdVP2RenderDelegate* _delegate {
-        nullptr
-    }; //!< VP2 render delegate for which this mesh was created
     HdDirtyBits _customDirtyBitsInUse {
         0
-    };                      //!< Storage for custom dirty bits. See _PropagateDirtyBits for details.
-    const MString _rprimId; //!< Rprim id cached as a maya string for easier debugging and profiling
+    }; //!< Storage for custom dirty bits. See _PropagateDirtyBits for details.
+
     std::shared_ptr<HdVP2MeshSharedData>
         _meshSharedData; //!< Shared data for all draw items of the Rprim
-
-    //! Selection status of the Rprim
-    HdVP2SelectionStatus _selectionStatus { kUnselected };
 
     //! Control GPU compute behavior
     //! Having these in place even without HDVP2_ENABLE_GPU_COMPUTE or HDVP2_ENABLE_GPU_OSD
     //! defined makes the expressions using these variables much simpler
     bool _gpuNormalsEnabled { true }; //!< Use GPU Compute for normal calculation, only used
                                       //!< when HDVP2_ENABLE_GPU_COMPUTE is defined
+
+    // Record if the points position are generated by a UsdSkel.
+    bool _pointsFromSkel { false };
+
     static size_t _gpuNormalsComputeThreshold;
 };
 

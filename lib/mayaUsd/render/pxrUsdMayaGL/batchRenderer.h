@@ -49,6 +49,7 @@
 #include <pxr/base/tf/singleton.h>
 #include <pxr/base/tf/token.h>
 #include <pxr/base/tf/weakBase.h>
+#include <pxr/imaging/hd/driver.h>
 #include <pxr/imaging/hd/engine.h>
 #include <pxr/imaging/hd/renderIndex.h>
 #include <pxr/imaging/hd/rprimCollection.h>
@@ -68,10 +69,6 @@
 #include <maya/MSelectionContext.h>
 #include <maya/MTypes.h>
 #include <maya/MUserData.h>
-
-#if PXR_VERSION > 2002
-#include <pxr/imaging/hd/driver.h>
-#endif
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -274,12 +271,6 @@ public:
     MAYAUSD_CORE_PUBLIC
     inline bool GetObjectSoftSelectEnabled() { return _objectSoftSelectEnabled; }
 
-    /// Starts batching all diagnostics until the end of the current frame draw.
-    /// The batch renderer will automatically release the diagnostics when Maya
-    /// is done rendering the frame.
-    MAYAUSD_CORE_PUBLIC
-    void StartBatchingFrameDiagnostics();
-
 private:
     friend class TfSingleton<UsdMayaGLBatchRenderer>;
 
@@ -454,15 +445,13 @@ private:
     /// *after* the render index. We enforce that ordering by declaring the
     /// render delegate *before* the render index, since class members are
     /// destructed in reverse declaration order.
-#if PXR_VERSION > 2002
     /// Hgi and HdDriver should be constructed before HdEngine to ensure they
     /// are destructed last. Hgi may be used during engine/delegate destruction.
-    HgiUniquePtr _hgi;
-    HdDriver     _hgiDriver;
-#endif
-    HdEngine                       _hdEngine;
+    HgiUniquePtr                   _hgi;
+    HdDriver                       _hgiDriver;
     HdStRenderDelegate             _renderDelegate;
     std::unique_ptr<HdRenderIndex> _renderIndex;
+    HdEngine                       _hdEngine;
 
     /// The root ID of the batch renderer itself, and the top of the path
     /// hierarchies for shape adapter delegates, one for the legacy viewport
@@ -484,12 +473,6 @@ private:
     HdxSelectionTrackerSharedPtr _selectionTracker;
 
     UsdMayaGLSoftSelectHelper _softSelectHelper;
-
-    /// Shared diagnostic batch context. Used for cases where we want to batch
-    /// diagnostics across multiple function calls, e.g., batching all of the
-    /// Sync() diagnostics across all prepareForDraw() callbacks in a single
-    /// frame.
-    std::unique_ptr<UsdMayaDiagnosticBatchContext> _sharedDiagBatchCtx;
 };
 
 MAYAUSD_TEMPLATE_CLASS(TfSingleton<UsdMayaGLBatchRenderer>);

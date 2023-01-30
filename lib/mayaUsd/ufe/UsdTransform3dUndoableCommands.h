@@ -40,7 +40,7 @@ public:
     bool set(const Ufe::Matrix4d&) override;
 
 protected:
-    void executeUndoBlock() override;
+    void executeImplementation() override;
 
 private:
     Ufe::Vector3d _newT;

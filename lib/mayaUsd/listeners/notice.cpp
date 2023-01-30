@@ -40,6 +40,21 @@ static void _OnMayaNewOrOpenSceneCallback(void* /*clientData*/)
     UsdMayaSceneResetNotice().Send();
 }
 
+static int _beforeSceneResetRegistrationCount = 0;
+
+static void _OnMayaBeforeResetCallback(void* /*clientData*/)
+{
+    UsdMayaBeforeSceneResetNotice().Send();
+}
+
+static int _exitRegistrationCount = 0;
+
+static void _OnMayaExitCallback(void* /*clientData*/)
+{
+    // Maya is about to exit, notifying listeners.
+    UsdMayaExitNotice().Send();
+}
+
 } // anonymous namespace
 
 TF_INSTANTIATE_TYPE(UsdMayaSceneResetNotice, TfType::CONCRETE, TF_1_PARENT(TfNotice));
@@ -85,10 +100,74 @@ void UsdMayaSceneResetNotice::RemoveListener()
 
     if (_afterNewCallbackId != 0) {
         MMessage::removeCallback(_afterNewCallbackId);
+        _afterNewCallbackId = 0;
     }
 
-    if (_beforeFileReadCallbackId == 0) {
+    if (_beforeFileReadCallbackId != 0) {
         MMessage::removeCallback(_beforeFileReadCallbackId);
+        _beforeFileReadCallbackId = 0;
+    }
+}
+
+TF_INSTANTIATE_TYPE(UsdMayaBeforeSceneResetNotice, TfType::CONCRETE, TF_1_PARENT(TfNotice));
+
+MCallbackId UsdMayaBeforeSceneResetNotice::_beforeNewCallbackId = 0;
+
+UsdMayaBeforeSceneResetNotice::UsdMayaBeforeSceneResetNotice() { }
+
+/* static */
+void UsdMayaBeforeSceneResetNotice::InstallListener()
+{
+    if (_beforeSceneResetRegistrationCount++ > 0) {
+        return;
+    }
+
+    if (_beforeNewCallbackId == 0) {
+        _beforeNewCallbackId
+            = MSceneMessage::addCallback(MSceneMessage::kBeforeNew, _OnMayaBeforeResetCallback);
+    }
+}
+
+/* static */
+void UsdMayaBeforeSceneResetNotice::RemoveListener()
+{
+    if (_beforeSceneResetRegistrationCount-- > 1) {
+        return;
+    }
+
+    if (_beforeNewCallbackId != 0) {
+        MMessage::removeCallback(_beforeNewCallbackId);
+    }
+}
+
+TF_INSTANTIATE_TYPE(UsdMayaExitNotice, TfType::CONCRETE, TF_1_PARENT(TfNotice));
+
+MCallbackId UsdMayaExitNotice::_beforeExitCallbackId = 0;
+
+UsdMayaExitNotice::UsdMayaExitNotice() { }
+
+/* static */
+void UsdMayaExitNotice::InstallListener()
+{
+    if (_exitRegistrationCount++ > 0) {
+        return;
+    }
+
+    if (_beforeExitCallbackId == 0) {
+        _beforeExitCallbackId
+            = MSceneMessage::addCallback(MSceneMessage::kMayaExiting, _OnMayaExitCallback);
+    }
+}
+
+/* static */
+void UsdMayaExitNotice::RemoveListener()
+{
+    if (_exitRegistrationCount-- > 1) {
+        return;
+    }
+
+    if (_beforeExitCallbackId != 0) {
+        MMessage::removeCallback(_beforeExitCallbackId);
     }
 }
 

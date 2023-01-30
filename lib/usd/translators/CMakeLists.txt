@@ -20,11 +20,12 @@ target_sources(${TARGET_NAME}
         instancerWriter.cpp
         jointWriter.cpp
         lightReader.cpp
+        lightRfMReader.cpp
+        lightRfMWriter.cpp
         lightWriter.cpp
         locatorWriter.cpp
         materialReader.cpp
         mayaReferenceReader.cpp
-        mayaReferenceUpdater.cpp
         meshReader.cpp
         meshWriter.cpp
         meshWriter_BlendShapes.cpp
@@ -33,11 +34,28 @@ target_sources(${TARGET_NAME}
         nurbsPatchReader.cpp
         nurbsSurfaceWriter.cpp
         particleWriter.cpp
+        plugin.cpp
         scopeReader.cpp
         skelReader.cpp
         strokeWriter.cpp
         xformReader.cpp
 )
+
+# Edit as Maya requires UFE path mapping.
+if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
+    target_sources(${TARGET_NAME}
+        PRIVATE
+            mayaReferenceUpdater.cpp
+    )
+endif()
+
+# MeshLightAPI Schema export requires USD 21.11
+if(PXR_VERSION GREATER_EQUAL 2111)
+    target_sources(${TARGET_NAME}
+        PRIVATE
+            lightRfMWriter_PxrMeshLight.cpp
+    )
+endif()
 
 add_subdirectory(shading)
 
