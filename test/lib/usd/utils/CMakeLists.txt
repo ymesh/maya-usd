@@ -27,7 +27,10 @@ function(add_mayaUsdUtils_test TARGET_NAME)
     # -----------------------------------------------------------------------------
     target_link_libraries(${TARGET_NAME}
         PRIVATE 
-            GTest::GTest
+            # GTest::GTest
+            # ${GTEST_LIBRARIES}
+            ${GTEST_LIBRARY}
+            # gtest
             mayaUsdUtils
     )
 
