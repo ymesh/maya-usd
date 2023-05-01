@@ -133,7 +133,10 @@ void MayaUsdProxyShapeSceneIndex::Populate()
             // care of inside MayaUsdProxyShapeSceneIndex::_StageSet callback.
             {
                 _usdImagingStageSceneIndex->SetStage(stage);
-                _usdImagingStageSceneIndex->Populate();
+                // XXX: USD 23.05:
+                // - Removed Populate() from the UsdImagingStageSceneIndex. "Population" is now 
+                // done automatically when the stage is set.
+                // _usdImagingStageSceneIndex->Populate();
                 _populated = true;
             }
         }

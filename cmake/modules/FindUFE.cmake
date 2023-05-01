@@ -55,6 +55,7 @@ if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/ufe.h")
         # be removed (along with all the UFE_PREVIEW_VERSION_NUM checks).
         set(UFE_PREVIEW_VERSION_NUM 4045)
     endif()
+    message ("============ UFE_PREVIEW_VERSION_NUM = ${UFE_PREVIEW_VERSION_NUM}")
 
     file(STRINGS
         "${UFE_INCLUDE_DIR}/ufe/ufe.h"
