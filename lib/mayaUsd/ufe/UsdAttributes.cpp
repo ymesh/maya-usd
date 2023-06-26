@@ -455,6 +455,152 @@ bool UsdAttributes::canRemoveAttribute(const UsdSceneItem::Ptr& item, const std:
     }
     return false;
 }
+static void removeSrcAttrConnections(PXR_NS::UsdPrim& prim, const PXR_NS::UsdAttribute& srcUsdAttr)
+{
+    // Remove the connections with source srcUsdAttr.
+    for (const auto& attribute : prim.GetAttributes()) {
+        PXR_NS::UsdAttribute dstUsdAttr = attribute.As<PXR_NS::UsdAttribute>();
+
+        if (MayaUsd::ufe::isConnected(srcUsdAttr, dstUsdAttr)) {
+            UsdShadeConnectableAPI::DisconnectSource(dstUsdAttr, srcUsdAttr);
+            // Check if we can remove the property.
+            if (MayaUsd::ufe::canRemoveDstProperty(dstUsdAttr)) {
+                // Remove the property.
+                prim.RemoveProperty(dstUsdAttr.GetName());
+            }
+        }
+    }
+}
+
+static void removeDstAttrConnections(const PXR_NS::UsdAttribute& dstUsdAttr)
+{
+    const auto                     kPrim = dstUsdAttr.GetPrim();
+    PXR_NS::UsdShadeConnectableAPI connectApi(kPrim);
+
+    if (!kPrim || !connectApi) {
+        return;
+    }
+
+    const auto kPrimParent = kPrim.GetParent();
+
+    if (!kPrimParent) {
+        return;
+    }
+
+    UsdShadeSourceInfoVector sourcesInfo = connectApi.GetConnectedSources(dstUsdAttr);
+
+    if (sourcesInfo.empty()) {
+        return;
+    }
+
+    // The attribute is the connection destination.
+    PXR_NS::UsdPrim connectedPrim = sourcesInfo[0].source.GetPrim();
+
+    if (connectedPrim) {
+        const std::string prefix = connectedPrim == kPrimParent
+            ? PXR_NS::UsdShadeUtils::GetPrefixForAttributeType(PXR_NS::UsdShadeAttributeType::Input)
+            : PXR_NS::UsdShadeUtils::GetPrefixForAttributeType(
+                PXR_NS::UsdShadeAttributeType::Output);
+
+        const std::string sourceName = prefix + sourcesInfo[0].sourceName.GetString();
+
+        auto srcAttr = connectedPrim.GetAttribute(PXR_NS::TfToken(sourceName));
+
+        if (srcAttr) {
+            UsdShadeConnectableAPI::DisconnectSource(dstUsdAttr, srcAttr);
+            // Check if we can remove the property.
+            if (MayaUsd::ufe::canRemoveSrcProperty(srcAttr)) {
+                // Remove the property.
+                connectedPrim.RemoveProperty(srcAttr.GetName());
+            }
+        }
+    }
+}
+
+static void
+removeAllChildrenConnections(const PXR_NS::UsdPrim& prim, const PXR_NS::UsdAttribute& srcUsdAttr)
+{
+    // Remove the connections with source srcUsdAttr for all the children.
+    for (auto&& usdChild : prim.GetChildren()) {
+        removeSrcAttrConnections(usdChild, srcUsdAttr);
+    }
+}
+
+static void removeNodeGraphConnections(const PXR_NS::UsdAttribute& attr)
+{
+    const auto prim = attr.GetPrim();
+
+    if (!prim) {
+        return;
+    }
+
+    PXR_NS::UsdShadeNodeGraph ngPrim(prim);
+
+    if (!ngPrim) {
+        return;
+    }
+
+    auto primParent = prim.GetParent();
+
+    if (!primParent) {
+        return;
+    }
+
+    const auto baseNameAndType
+        = PXR_NS::UsdShadeUtils::GetBaseNameAndType(PXR_NS::TfToken(attr.GetName()));
+
+    if (baseNameAndType.second != PXR_NS::UsdShadeAttributeType::Output
+        && baseNameAndType.second != PXR_NS::UsdShadeAttributeType::Input) {
+        return;
+    }
+
+    // Remove the connections to the destination attribute.
+    removeDstAttrConnections(attr);
+
+    if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
+        // Remove the connections from the source attribute.
+        removeAllChildrenConnections(primParent, attr);
+        removeSrcAttrConnections(primParent, attr);
+    }
+
+    if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
+        removeAllChildrenConnections(prim, attr);
+    }
+}
+
+void UsdAttributes::removeAttributesConnections(const PXR_NS::UsdPrim& prim)
+{
+
+    auto primParent = prim.GetParent();
+
+    if (!primParent) {
+        return;
+    }
+
+    const auto kPrimAttrs = prim.GetAttributes();
+
+    // Remove all the connections to/from the attribute.
+    for (const auto& attr : kPrimAttrs) {
+        const auto kBaseNameAndType
+            = PXR_NS::UsdShadeUtils::GetBaseNameAndType(PXR_NS::TfToken(attr.GetName()));
+
+        if (kBaseNameAndType.second != PXR_NS::UsdShadeAttributeType::Output
+            && kBaseNameAndType.second != PXR_NS::UsdShadeAttributeType::Input) {
+            continue;
+        }
+
+        if (kBaseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
+            // Remove the connections to the destination attribute.
+            removeDstAttrConnections(attr);
+        }
+
+        if (kBaseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
+            removeAllChildrenConnections(primParent, attr);
+            // Remove the connections from the source attribute.
+            removeSrcAttrConnections(primParent, attr);
+        }
+    }
+}
 
 bool UsdAttributes::doRemoveAttribute(const UsdSceneItem::Ptr& item, const std::string& name)
 {
@@ -474,12 +620,14 @@ bool UsdAttributes::doRemoveAttribute(const UsdSceneItem::Ptr& item, const std::
         if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
             auto output = connectApi.GetOutput(baseNameAndType.first);
             if (output) {
+                removeNodeGraphConnections(attribute);
                 connectApi.ClearSources(output);
                 return prim.RemoveProperty(nameAsToken);
             }
         } else if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
             auto input = connectApi.GetInput(baseNameAndType.first);
             if (input) {
+                removeNodeGraphConnections(attribute);
                 connectApi.ClearSources(input);
                 return prim.RemoveProperty(nameAsToken);
             }
@@ -560,7 +708,6 @@ Ufe::Attribute::Ptr UsdAttributes::doRenameAttribute(
     auto                  propertyHandle = editTarget.GetPropertySpecForScenePath(kPropertyPath);
     auto                  baseNameAndType = PXR_NS::UsdShadeUtils::GetBaseNameAndType(nameAsToken);
 
-    prim.GetAttributes();
     PXR_NS::UsdShadeNodeGraph ngPrim(prim);
 
     if (!propertyHandle) {

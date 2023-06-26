@@ -567,9 +567,11 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
             MPlug plgBlendShapeInput = plgBlendShapeInputs.elementByLogicalIndex(idxGeo);
             MPlug plgBlendShapeInputGeometry
                 = UsdMayaUtil::FindChildPlugWithName(plgBlendShapeInput, "inputGeometry");
+            auto plgBlendShapeInputGeometryHolder
+                = UsdMayaUtil::GetPlugDataHandle(plgBlendShapeInputGeometry);
             MDataHandle dhInputGeo
-                = plgBlendShapeInputGeometry
-                      .asMDataHandle(); // NOTE: (yliangsiew) This should be the pref mesh.
+                = plgBlendShapeInputGeometryHolder->GetDataHandle(); // NOTE: (yliangsiew) This
+                                                                     // should be the pref mesh.
             TF_VERIFY(dhInputGeo.type() == MFnData::kMesh);
             MObject inputGeo = dhInputGeo.asMesh();
             TF_VERIFY(inputGeo.hasFn(MFn::kMesh));
@@ -605,7 +607,7 @@ bool PxrUsdTranslators_MeshWriter::writeMeshAttrs(
 
     if (sdScheme == UsdGeomTokens->none) {
         // Polygonal mesh - export normals.
-        bool emitNormals = false; // Skip writing normals if no tagging.
+        bool emitNormals = true; // Write mesh normals if USD_EmitNormals is not present
         UsdMayaMeshReadUtils::getEmitNormalsTag(finalMesh, &emitNormals);
         if (emitNormals) {
             UsdMayaMeshWriteUtils::writeNormalsData(

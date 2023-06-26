@@ -184,7 +184,7 @@ endif()
 
 target_compile_definitions(${PROJECT_NAME}
     PRIVATE
-        MAYA_USD_VERSION=${USD_VERSION}
+        ADSK_USD_VERSION=${ADSK_USD_VERSION}
         MAYAUSD_VERSION=${MAYAUSD_VERSION}
         MAYA_PY_VERSION=${MAYA_PY_VERSION}
 )
@@ -307,6 +307,9 @@ add_subdirectory(nodes)
 add_subdirectory(python)
 add_subdirectory(render)
 add_subdirectory(resources)
+if( PXR_VERSION GREATER_EQUAL 2211 )
+    add_subdirectory(sceneIndex)
+endif()
 if(UFE_FOUND)
     add_subdirectory(ufe)
 endif()

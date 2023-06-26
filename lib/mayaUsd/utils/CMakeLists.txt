@@ -12,6 +12,7 @@ target_sources(${PROJECT_NAME}
         editability.cpp
         editRouter.cpp
         layerMuting.cpp
+        layers.cpp
         loadRules.cpp
         loadRulesText.cpp
         loadRulesAttribute.cpp
@@ -20,6 +21,7 @@ target_sources(${PROJECT_NAME}
         progressBarScope.cpp
         selectability.cpp
         stageCache.cpp
+        targetLayer.cpp
         traverseLayer.cpp
         undoHelperCommand.cpp
         util.cpp
@@ -33,6 +35,7 @@ if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
     target_sources(${PROJECT_NAME}
         PRIVATE
             json.cpp
+            primActivation.cpp
     )
 endif()
 
@@ -47,12 +50,14 @@ set(HEADERS
     editRouter.h
     hash.h
     layerMuting.h
+    layers.h
     loadRules.h
     query.h
     plugRegistryHelper.h
     progressBarScope.h
     selectability.h
     stageCache.h
+    targetLayer.h
     traverseLayer.h
     undoHelperCommand.h
     util.h
@@ -64,6 +69,7 @@ set(HEADERS
 if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
     list(APPEND HEADERS
         json.h
+        primActivation.h
     )
 endif()
 

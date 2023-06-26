@@ -85,6 +85,8 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #if PXR_VERSION >= 2102
 #include <pxr/imaging/hdSt/udimTextureObject.h>
@@ -181,6 +183,10 @@ TF_DEFINE_PRIVATE_TOKENS(
 
     (file)
     (opacity)
+    (existence)
+    (transmission)
+    (transparency)
+    (alpha)
     (useSpecularWorkflow)
     (st)
     (varname)
@@ -240,8 +246,9 @@ TF_DEFINE_PRIVATE_TOKENS(
 
     (USD_Mtlx_VP2_Material)
     (NG_Maya)
-    (image)
-    (tiledimage)
+    (ND_surface)
+    (ND_standard_surface_surfaceshader)
+    (filename)
     (i_geomprop_)
     (geomprop)
     (uaddressmode)
@@ -913,6 +920,16 @@ void _AddMissingTangents(mx::DocumentPtr& mtlxDoc)
     }
 }
 
+bool _MxHasFilenameInput(const mx::NodeDefPtr nodeDef)
+{
+    for (const auto& input : nodeDef->getActiveInputs()) {
+        if (input->getType() == _mtlxTokens->filename.GetString()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 #endif // WANT_MATERIALX_BUILD
 
 #if PXR_VERSION <= 2211
@@ -952,10 +969,30 @@ bool _IsUsdUVTexture(const HdMaterialNode& node)
     if (_IsMaterialX(node)) {
         mx::NodeDefPtr nodeDef
             = _GetMaterialXData()._mtlxLibrary->getNodeDef(node.identifier.GetString());
-        if (nodeDef
-            && (nodeDef->getNodeString() == _mtlxTokens->image.GetString()
-                || nodeDef->getNodeString() == _mtlxTokens->tiledimage.GetString())) {
-            return true;
+        return nodeDef && _MxHasFilenameInput(nodeDef);
+    }
+#endif
+
+    return false;
+}
+
+bool _IsTextureFilenameAttribute(const HdMaterialNode& node, const TfToken& token)
+{
+
+    if (node.identifier.GetString().rfind(UsdImagingTokens->UsdUVTexture.GetString(), 0) == 0
+        && token == _tokens->file) {
+        return true;
+    }
+
+#ifdef WANT_MATERIALX_BUILD
+    if (_IsMaterialX(node)) {
+        mx::NodeDefPtr nodeDef
+            = _GetMaterialXData()._mtlxLibrary->getNodeDef(node.identifier.GetString());
+        if (nodeDef) {
+            const auto input = nodeDef->getActiveInput(token.GetString());
+            if (input && input->getType() == _mtlxTokens->filename.GetString()) {
+                return true;
+            }
         }
     }
 #endif
@@ -1043,21 +1080,57 @@ std::string _GenerateXMLString(const HdMaterialNetwork& materialNetwork, bool in
     return result;
 }
 
-//! Return true if the surface shader has its opacity attribute connected to a node which isn't
-//! a USD primvar reader.
+//! Return true if the surface shader needs to be rendered in a transparency pass.
 bool _IsTransparent(const HdMaterialNetwork& network)
 {
+    using OpaqueTestPair = std::pair<TfToken, float>;
+    using OpaqueTestPairList = std::vector<OpaqueTestPair>;
+    const OpaqueTestPairList inputPairList = { { _tokens->opacity, 1.0f },
+                                               { _tokens->existence, 1.0f },
+                                               { _tokens->alpha, 1.0f },
+                                               { _tokens->transmission, 0.0f },
+                                               { _tokens->transparency, 0.0f } };
+
     const HdMaterialNode& surfaceShader = network.nodes.back();
 
-    for (const HdMaterialRelationship& rel : network.relationships) {
-        if (rel.outputName == _tokens->opacity && rel.outputId == surfaceShader.path) {
-            for (const HdMaterialNode& node : network.nodes) {
-                if (node.path == rel.inputId) {
-                    return !_IsUsdPrimvarReader(node);
+    // Check for explicitly set value:
+    for (auto&& inputPair : inputPairList) {
+        auto paramIt = surfaceShader.parameters.find(inputPair.first);
+        if (paramIt != surfaceShader.parameters.end()) {
+            if (paramIt->second.IsHolding<float>()) {
+                if (paramIt->second.Get<float>() != inputPair.second) {
+                    return true;
+                }
+            } else if (paramIt->second.IsHolding<GfVec3f>()) {
+                const GfVec3f& value = paramIt->second.Get<GfVec3f>();
+                if (value != GfVec3f(inputPair.second, inputPair.second, inputPair.second)) {
+                    return true;
+                }
+            } else if (paramIt->second.IsHolding<GfVec3d>()) {
+                const GfVec3d& value = paramIt->second.Get<GfVec3d>();
+                if (value != GfVec3d(inputPair.second, inputPair.second, inputPair.second)) {
+                    return true;
                 }
             }
         }
     }
+
+    // Check for any connection on a parameter affecting transparency. It is quite possible that the
+    // output value of the connected subtree is constant and opaque, but discovery is complex. Let's
+    // assume there is at least one semi-transparent pixel if that parameter is connected.
+    for (const HdMaterialRelationship& rel : network.relationships) {
+        if (rel.outputId == surfaceShader.path) {
+            for (auto&& inputPair : inputPairList) {
+                if (inputPair.first == rel.outputName) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Not the most efficient code, but the upgrade to HdMaterialConnection2 should improve things
+    // a lot since we will not have to traverse the whole list of connections, only the ones found
+    // on the surface node.
 
     return false;
 }
@@ -1142,8 +1215,6 @@ MHWRender::MSamplerStateDesc _GetSamplerStateDesc(const HdMaterialNode& node)
                 } else if (token == _mtlxTokens->cubic) {
                     desc.filter = MHWRender::MSamplerState::kAnisotropic;
                     desc.maxAnisotropy = 16;
-                    desc.maxLOD = 1000;
-                    desc.minLOD = -1000;
                 }
             }
         }
@@ -1681,6 +1752,16 @@ TfToken MayaDescriptorToToken(const MVertexBufferDescriptor& descriptor)
     return token;
 }
 
+struct MStringHash
+{
+    std::size_t operator()(const MString& s) const
+    {
+        // To get rid of boost here, switch to C++17 compatible implementation:
+        //     return std::hash(std::string_view(s.asChar(), s.length()))();
+        return boost::hash_range(s.asChar(), s.asChar() + s.length());
+    }
+};
+
 } // anonymous namespace
 
 class HdVP2Material::TextureLoadingTask
@@ -1821,6 +1902,16 @@ void ConvertNetworkMapToUntextured(HdMaterialNetworkMap& networkMap)
         auto eraseBegin = std::remove_if(network.nodes.begin(), network.nodes.end(), isInputNode);
         network.nodes.erase(eraseBegin, network.nodes.end());
         network.relationships.clear();
+#ifdef WANT_MATERIALX_BUILD
+        // Raw MaterialX surface constructor node does not render. Replace with default
+        // standard_surface:
+        for (auto& node : network.nodes) {
+            if (node.identifier == _mtlxTokens->ND_surface) {
+                node.identifier = _mtlxTokens->ND_standard_surface_surfaceshader;
+                node.parameters.clear();
+            }
+        }
+#endif
     }
 }
 
@@ -2022,16 +2113,6 @@ void HdVP2Material::CompiledNetwork::Sync(
             // The token is saved and will be used to determine whether a new shader
             // instance is needed during the next sync.
             _surfaceNetworkToken = token;
-
-            // If the surface shader has its opacity attribute connected to a node which
-            // isn't a primvar reader, it is set as transparent. If the opacity attr is
-            // connected to a primvar reader, the Rprim side will determine the transparency
-            // state according to the primvars:displayOpacity data. If the opacity attr
-            // isn't connected, the transparency state will be set in
-            // _UpdateShaderInstance() according to the opacity value.
-            if (shader) {
-                shader->setIsTransparent(_IsTransparent(bxdfNet));
-            }
         }
 
         _UpdateShaderInstance(sceneDelegate, bxdfNet);
@@ -2363,12 +2444,18 @@ TfToken _RequiresColorManagement(
         return {};
     }
 
-    const std::string& upstreamCategory = upstreamDef->getNodeString();
-    if (upstreamCategory != _mtlxTokens->image.GetString()
-        && upstreamCategory != _mtlxTokens->tiledimage.GetString()) {
-        // upstream is not an image
+    if (!_MxHasFilenameInput(upstreamDef)) {
+        // upstream is not a texture
         return {};
     }
+
+    std::vector<TfToken> fileInputs;
+    for (const auto& input : upstreamDef->getActiveInputs()) {
+        if (input->getType() == _mtlxTokens->filename.GetString()) {
+            fileInputs.push_back(TfToken(input->getName()));
+        }
+    }
+
     mx::OutputPtr colorOutput = upstreamDef->getActiveOutput(_mtlxTokens->out.GetString());
     if (!colorOutput) {
         return {};
@@ -2380,17 +2467,22 @@ TfToken _RequiresColorManagement(
         return {};
     }
 
-    auto itFileParam = upstream.parameters.find(_tokens->file);
-    if (itFileParam == upstream.parameters.end()
-        || !itFileParam->second.IsHolding<SdfAssetPath>()) {
-        // No file name to check:
-        return {};
+    SdfAssetPath filenameVal;
+    for (const auto& inputName : fileInputs) {
+        auto itFileParam = upstream.parameters.find(inputName);
+        if (itFileParam != upstream.parameters.end()
+            && itFileParam->second.IsHolding<SdfAssetPath>()) {
+            filenameVal = itFileParam->second.Get<SdfAssetPath>();
+            break;
+        }
     }
 
-    const SdfAssetPath& val = itFileParam->second.Get<SdfAssetPath>();
-    const std::string&  resolvedPath = val.GetResolvedPath();
-    const std::string&  assetPath = val.GetAssetPath();
-    MString             colorRuleCmd;
+    const std::string& resolvedPath = filenameVal.GetResolvedPath();
+    if (resolvedPath.empty()) {
+        return {};
+    }
+    const std::string& assetPath = filenameVal.GetAssetPath();
+    MString            colorRuleCmd;
     colorRuleCmd.format(
         "colorManagementFileRules -evaluate \"^1s\";",
         (!resolvedPath.empty() ? resolvedPath : assetPath).c_str());
@@ -2700,9 +2792,6 @@ MHWRender::MShaderInstance* HdVP2Material::CompiledNetwork::_CreateMaterialXShad
                 }
             }
         }
-
-        shaderInstance->setIsTransparent(ogsFragment.isTransparent());
-
     } catch (mx::Exception& e) {
         TF_RUNTIME_ERROR(
             "Caught exception '%s' while processing '%s'", e.what(), materialId.GetText());
@@ -2942,6 +3031,13 @@ void HdVP2Material::CompiledNetwork::_UpdateShaderInstance(
     MProfilingScope profilingScope(
         HdVP2RenderDelegate::sProfilerCategory, MProfiler::kColorD_L2, "UpdateShaderInstance");
 
+    std::unordered_set<MString, MStringHash> updatedAttributes;
+
+    const bool matIsTransparent = _IsTransparent(mat);
+    if (matIsTransparent != _surfaceShader->isTransparent()) {
+        _surfaceShader->setIsTransparent(matIsTransparent);
+    }
+
     for (const HdMaterialNode& node : mat.nodes) {
         MString nodeName = "";
 #ifdef WANT_MATERIALX_BUILD
@@ -3002,6 +3098,7 @@ void HdVP2Material::CompiledNetwork::_UpdateShaderInstance(
             const VtValue& value = entry.second;
 
             MString paramName = nodeName + token.GetText();
+            updatedAttributes.insert(paramName);
 
             MStatus status = MStatus::kFailure;
 
@@ -3014,12 +3111,6 @@ void HdVP2Material::CompiledNetwork::_UpdateShaderInstance(
                     status = _SetFAParameter(_surfaceShader.get(), node, paramName, val);
                 }
 #endif
-                // The opacity parameter can be found and updated only when it
-                // has no connection. In this case, transparency of the shader
-                // is solely determined by the opacity value.
-                if (status && nodeName.length() == 0 && token == _tokens->opacity) {
-                    _surfaceShader->setIsTransparent(val < 0.999f);
-                }
             } else if (value.IsHolding<GfVec2f>()) {
                 const float* val = value.UncheckedGet<GfVec2f>().data();
                 status = _surfaceShader->setParameter(paramName, val);
@@ -3043,7 +3134,7 @@ void HdVP2Material::CompiledNetwork::_UpdateShaderInstance(
                 const SdfAssetPath& val = value.UncheckedGet<SdfAssetPath>();
                 const std::string&  resolvedPath = val.GetResolvedPath();
                 const std::string&  assetPath = val.GetAssetPath();
-                if (_IsUsdUVTexture(node) && token == _tokens->file) {
+                if (_IsTextureFilenameAttribute(node, token)) {
                     const HdVP2TextureInfo& info = _owner->_AcquireTexture(
                         sceneDelegate, !resolvedPath.empty() ? resolvedPath : assetPath, node);
 
@@ -3133,6 +3224,59 @@ void HdVP2Material::CompiledNetwork::_UpdateShaderInstance(
                 TF_DEBUG(HDVP2_DEBUG_MATERIAL)
                     .Msg("Failed to set shader parameter %s\n", paramName.asChar());
             }
+        }
+    }
+
+    // Now that we have updated all parameters that were driven by Hydra, we must make sure all the
+    // non-hydra-controlled parameters are at their default values. This fixes missing refresh when
+    // deleting an authored attribute. The shader must not remember the value it had when the
+    // attribute was authored.
+    MStringArray parameterList;
+    _surfaceShader->parameterList(parameterList);
+    for (unsigned int i = 0; i < parameterList.length(); ++i) {
+        const auto& parameterName = parameterList[i];
+        if (updatedAttributes.count(parameterName)
+            || _surfaceShader->isVaryingParameter(parameterName)) {
+            continue;
+        }
+
+        switch (_surfaceShader->parameterType(parameterName)) {
+        case MHWRender::MShaderInstance::kInvalid:
+        case MHWRender::MShaderInstance::kSampler: continue;
+        case MHWRender::MShaderInstance::kBoolean: {
+            MStatus status;
+            void*   defaultValue = _surfaceShader->parameterDefaultValue(parameterName, status);
+            if (status) {
+                _surfaceShader->setParameter(parameterName, static_cast<bool*>(defaultValue)[0]);
+            }
+        } break;
+        case MHWRender::MShaderInstance::kInteger: {
+            MStatus status;
+            void*   defaultValue = _surfaceShader->parameterDefaultValue(parameterName, status);
+            if (status) {
+                _surfaceShader->setParameter(parameterName, static_cast<int*>(defaultValue)[0]);
+            }
+        } break;
+        case MHWRender::MShaderInstance::kFloat:
+        case MHWRender::MShaderInstance::kFloat2:
+        case MHWRender::MShaderInstance::kFloat3:
+        case MHWRender::MShaderInstance::kFloat4:
+        case MHWRender::MShaderInstance::kFloat4x4Row:
+        case MHWRender::MShaderInstance::kFloat4x4Col: {
+            MStatus status;
+            void*   defaultValue = _surfaceShader->parameterDefaultValue(parameterName, status);
+            if (status) {
+                _surfaceShader->setParameter(parameterName, static_cast<float*>(defaultValue));
+            }
+        } break;
+        case MHWRender::MShaderInstance::kTexture1:
+        case MHWRender::MShaderInstance::kTexture2:
+        case MHWRender::MShaderInstance::kTexture3:
+        case MHWRender::MShaderInstance::kTextureCube:
+            MHWRender::MTextureAssignment assignment;
+            assignment.texture = nullptr;
+            _surfaceShader->setParameter(parameterName, assignment);
+            break;
         }
     }
 }

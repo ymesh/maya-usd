@@ -125,6 +125,16 @@ public:
         kSelectionHighlight = kRegular << 1 //!< Selection highlight.
     };
 
+    //! Flags specifying mod properties
+    enum ModFlags
+    {
+        kHideOnPlayback = 1 << 0,
+        kUnselectable = 1 << 1,
+
+        kNumModFlags = 2,
+        kModFlagsBitsetSize = 1 << kNumModFlags
+    };
+
 public:
     HdVP2DrawItem(HdVP2RenderDelegate* delegate, const HdRprimSharedData* sharedData);
 
@@ -157,10 +167,6 @@ public:
      */
     const MString& GetDrawItemName() const { return _drawItemName; }
 
-    /*! \brief  Get render item name
-     */
-    const MString& GetRenderItemName() const { return GetRenderItemData()._renderItemName; }
-
     /*! \brief  Get pointer of the associated render item
      */
     MHWRender::MRenderItem* GetRenderItem() const { return GetRenderItemData()._renderItem; }
@@ -185,10 +191,6 @@ public:
      */
     bool MatchesUsage(RenderItemUsage usage) const { return _renderItemUsage == usage; }
 
-    /*! \brief  Bitwise OR with the input dirty bits.
-     */
-    void SetDirtyBits(HdDirtyBits bits) { GetRenderItemData().SetDirtyBits(bits); }
-
     /*! \brief  Reset the dirty bits to clean.
      */
     void ResetDirtyBits() { GetRenderItemData().ResetDirtyBits(); }
@@ -198,6 +200,33 @@ public:
     HdDirtyBits GetDirtyBits() const { return GetRenderItemData().GetDirtyBits(); }
 
     static SdfPath RenderItemToPrimPath(const MHWRender::MRenderItem& item);
+
+    /*! Mods are used in instanced primitives to represent particular instances which visual
+        properties were modified by a display layer. Example: instances with hide-on-playback
+        flag enabled will have their own mod. A mod associated with the main draw item may have
+        another mod attached to it and so on, thus forming a linked list of mods.
+     */
+    void SetMod(std::unique_ptr<HdVP2DrawItem>&& mod) { _mod = std::move(mod); }
+
+    /*! \brief Get the mod assotiated with the given draw item.
+     */
+    HdVP2DrawItem* GetMod() { return _mod.get(); }
+
+    /*! \brief Marks this draw item as being a mod for instances with particular mod flags.
+     */
+    void SetModFlags(int modFlags) { _modFlags = modFlags; }
+
+    /*! \brief Returns mod flags for this mod.
+     */
+    int GetModFlags() const { return _modFlags; }
+
+    /*! \brief Marks this mod as disabled/enabled.
+     */
+    void SetModDisabled(bool flag) { _modDisabled = flag; }
+
+    /*! \brief Verifies if this mod is disabled.
+     */
+    bool GetModDisabled() const { return _modDisabled; }
 
 private:
     /*
@@ -216,6 +245,20 @@ private:
         The list of MRenderItems used to represent *this in VP2.
     */
     RenderItemDataVector _renderItems; //!< VP2 render item data
+
+    /*
+        Mod associated with the given draw item.
+        This mod may have another one attached to it, thus forming a linked list
+    */
+    std::unique_ptr<HdVP2DrawItem> _mod;
+
+    /*
+        _modFlags equal to zero specifies the main draw item, otherwise it stores a combination
+        of flags defining the drawing characteristics of this mod
+    */
+    int _modFlags = 0;
+    //! Defines if this mod is disabled (due to absense of instances that require it)
+    bool _modDisabled = false;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

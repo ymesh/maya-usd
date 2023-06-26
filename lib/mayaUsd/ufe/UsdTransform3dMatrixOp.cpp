@@ -91,11 +91,11 @@ GfMatrix4d xformInv(
 }
 
 // Class for setMatrixCmd() implementation.
-class UsdSetMatrix4dUndoableCmd : public UsdBaseUndoableCommand<Ufe::SetMatrix4dUndoableCommand>
+class UsdSetMatrix4dUndoableCmd : public UsdUndoableCommand<Ufe::SetMatrix4dUndoableCommand>
 {
 public:
     UsdSetMatrix4dUndoableCmd(const Ufe::Path& path, const Ufe::Matrix4d& newM)
-        : UsdBaseUndoableCommand<Ufe::SetMatrix4dUndoableCommand>(path)
+        : UsdUndoableCommand<Ufe::SetMatrix4dUndoableCommand>(path)
         , _newM(newM)
     {
     }
@@ -109,7 +109,7 @@ public:
         return true;
     }
 
-    void executeUndoBlock() override
+    void executeImplementation() override
     {
         // Use editTransform3d() to set a single matrix transform op.
         // transform3d() returns a whole-object interface, which may include
@@ -279,28 +279,19 @@ Ufe::Vector3d UsdTransform3dMatrixOp::scale() const { return getScale(matrix());
 Ufe::TranslateUndoableCommand::Ptr
 UsdTransform3dMatrixOp::translateCmd(double x, double y, double z)
 {
-    if (!isAttributeEditAllowed(prim(), TfToken("xformOp:translate"))) {
-        return nullptr;
-    }
-
+    enforceAttributeEditAllowed(prim(), TfToken("xformOp:translate"));
     return std::make_shared<MatrixOpTranslateUndoableCmd>(path(), _op, UsdTimeCode::Default());
 }
 
 Ufe::RotateUndoableCommand::Ptr UsdTransform3dMatrixOp::rotateCmd(double x, double y, double z)
 {
-    if (!isAttributeEditAllowed(prim(), TfToken("xformOp:rotateXYZ"))) {
-        return nullptr;
-    }
-
-    return std::make_shared<MatrixOpRotateUndoableCmd>(path(), _op, UsdTimeCode::Default());
+    enforceAttributeEditAllowed(prim(), TfToken("xformOp:rotateXYZ"));
+    return nullptr;
 }
 
 Ufe::ScaleUndoableCommand::Ptr UsdTransform3dMatrixOp::scaleCmd(double x, double y, double z)
 {
-    if (!isAttributeEditAllowed(prim(), TfToken("xformOp:scale"))) {
-        return nullptr;
-    }
-
+    enforceAttributeEditAllowed(prim(), TfToken("xformOp:scale"));
     return std::make_shared<MatrixOpScaleUndoableCmd>(path(), _op, UsdTimeCode::Default());
 }
 
