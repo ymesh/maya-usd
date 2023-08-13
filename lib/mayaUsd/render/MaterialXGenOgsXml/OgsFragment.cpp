@@ -1,6 +1,7 @@
 #include "OgsFragment.h"
 
 #include <mayaUsd/render/MaterialXGenOgsXml/GlslFragmentGenerator.h>
+#include <mayaUsd/render/MaterialXGenOgsXml/GlslOcioNodeImpl.h>
 #include <mayaUsd/render/MaterialXGenOgsXml/OgsXmlGenerator.h>
 
 #include <MaterialXFormat/XmlIo.h>
@@ -494,6 +495,18 @@ std::string OgsFragment::getSpecularEnvKey()
     }
 
     return retVal;
+}
+
+std::string OgsFragment::registerOCIOFragment(const std::string& fragName)
+{
+    // Delegate to the GlslOcioNodeImpl:
+    return mx::GlslOcioNodeImpl::registerOCIOFragment(fragName);
+}
+
+mx::DocumentPtr OgsFragment::getOCIOLibrary()
+{
+    // Delegate to the GlslOcioNodeImpl:
+    return mx::GlslOcioNodeImpl::getOCIOLibrary();
 }
 
 } // namespace MaterialXMaya

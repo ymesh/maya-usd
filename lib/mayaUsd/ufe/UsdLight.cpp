@@ -15,18 +15,13 @@
 //
 #include "UsdLight.h"
 
-#include "private/Utils.h"
-
-#include <mayaUsd/ufe/UsdUndoableCommand.h>
 #include <mayaUsd/ufe/Utils.h>
 #include <mayaUsd/utils/util.h>
 
+#include <usdUfe/ufe/UsdUndoableCommand.h>
+
 #include <pxr/usd/usdLux/distantLight.h>
-#if PXR_VERSION < 2111
-#include <pxr/usd/usdLux/light.h>
-#else
 #include <pxr/usd/usdLux/lightAPI.h>
-#endif
 #include <pxr/usd/usdLux/rectLight.h>
 #include <pxr/usd/usdLux/shadowAPI.h>
 #include <pxr/usd/usdLux/shapingAPI.h>
@@ -89,12 +84,6 @@ UsdLight::Ptr UsdLight::create(const UsdSceneItem::Ptr& item)
     return std::make_shared<UsdLight>(item);
 }
 
-#if PXR_VERSION < 2111
-using UsdLuxLightCommon = UsdLuxLight;
-#else
-using UsdLuxLightCommon = UsdLuxLightAPI;
-#endif
-
 //------------------------------------------------------------------------------
 // Ufe::Light overrides
 //------------------------------------------------------------------------------
@@ -122,8 +111,8 @@ Ufe::Light::Type UsdLight::type() const
 
 float getLightIntensity(const UsdPrim& prim)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetIntensityAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetIntensityAttr();
 
     float val = 0.f;
     lightAttribute.Get(&val);
@@ -132,8 +121,8 @@ float getLightIntensity(const UsdPrim& prim)
 
 void setLightIntensity(const UsdPrim& prim, float attrVal)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetIntensityAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetIntensityAttr();
 
     lightAttribute.Set(attrVal);
 }
@@ -152,8 +141,8 @@ float UsdLight::intensity() const { return getLightIntensity(prim()); }
 
 Ufe::Color3f getLightColor(const UsdPrim& prim)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetColorAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetColorAttr();
 
     GfVec3f val(0.f, 0.f, 0.f);
     lightAttribute.Get(&val);
@@ -162,8 +151,8 @@ Ufe::Color3f getLightColor(const UsdPrim& prim)
 
 void setLightColor(const UsdPrim& prim, const Ufe::Color3f& attrVal)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetColorAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetColorAttr();
 
     lightAttribute.Set(GfVec3f(attrVal.r(), attrVal.g(), attrVal.b()));
 }
@@ -183,8 +172,14 @@ Ufe::Color3f UsdLight::color() const { return getLightColor(prim()); }
 
 bool getLightShadowEnable(const UsdPrim& prim)
 {
-    const UsdLuxShadowAPI   shadowAPI(prim);
-    const pxr::UsdAttribute lightAttribute = shadowAPI.GetShadowEnableAttr();
+    const UsdLuxShadowAPI shadowAPI(prim);
+    PXR_NS::UsdAttribute  lightAttribute = shadowAPI.GetShadowEnableAttr();
+
+    if (!lightAttribute) {
+        // If the shadow enable attribute is not created yet, create one here
+        lightAttribute = shadowAPI.CreateShadowEnableAttr(VtValue(true));
+        return true;
+    }
 
     bool val = false;
     lightAttribute.Get(&val);
@@ -193,10 +188,12 @@ bool getLightShadowEnable(const UsdPrim& prim)
 
 void setLightShadowEnable(const UsdPrim& prim, bool attrVal)
 {
-    const UsdLuxShadowAPI   shadowAPI(prim);
-    const pxr::UsdAttribute lightAttribute = shadowAPI.GetShadowEnableAttr();
+    const UsdLuxShadowAPI      shadowAPI(prim);
+    const PXR_NS::UsdAttribute lightAttribute = shadowAPI.GetShadowEnableAttr();
 
-    lightAttribute.Set(attrVal);
+    if (lightAttribute) {
+        lightAttribute.Set(attrVal);
+    }
 }
 
 Ufe::Light::ShadowEnableUndoableCommand::Ptr UsdLight::shadowEnableCmd(bool se)
@@ -213,8 +210,13 @@ bool UsdLight::shadowEnable() const { return getLightShadowEnable(prim()); }
 
 Ufe::Color3f getLightShadowColor(const UsdPrim& prim)
 {
-    const UsdLuxShadowAPI   shadowAPI(prim);
-    const pxr::UsdAttribute lightAttribute = shadowAPI.GetShadowColorAttr();
+    const UsdLuxShadowAPI shadowAPI(prim);
+    PXR_NS::UsdAttribute  lightAttribute = shadowAPI.GetShadowColorAttr();
+
+    if (!lightAttribute) {
+        // If the shadow color attribute is not created yet, create one here
+        lightAttribute = shadowAPI.CreateShadowColorAttr();
+    }
 
     GfVec3f val(0.f, 0.f, 0.f);
     lightAttribute.Get(&val);
@@ -223,8 +225,8 @@ Ufe::Color3f getLightShadowColor(const UsdPrim& prim)
 
 void setLightShadowColor(const UsdPrim& prim, const Ufe::Color3f& attrVal)
 {
-    const UsdLuxShadowAPI   shadowAPI(prim);
-    const pxr::UsdAttribute lightAttribute = shadowAPI.GetShadowColorAttr();
+    const UsdLuxShadowAPI      shadowAPI(prim);
+    const PXR_NS::UsdAttribute lightAttribute = shadowAPI.GetShadowColorAttr();
 
     lightAttribute.Set(GfVec3f(attrVal.r(), attrVal.g(), attrVal.b()));
 }
@@ -247,8 +249,8 @@ Ufe::Color3f UsdLight::shadowColor() const { return getLightShadowColor(prim());
 
 float getLightDiffuse(const UsdPrim& prim)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetDiffuseAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetDiffuseAttr();
 
     float val = 0.f;
     lightAttribute.Get(&val);
@@ -257,8 +259,8 @@ float getLightDiffuse(const UsdPrim& prim)
 
 void setLightDiffuse(const UsdPrim& prim, float attrVal)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetDiffuseAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetDiffuseAttr();
 
     lightAttribute.Set(attrVal);
 }
@@ -277,8 +279,8 @@ float UsdLight::diffuse() const { return getLightDiffuse(prim()); }
 
 float getLightSpecular(const UsdPrim& prim)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetSpecularAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetSpecularAttr();
 
     float val = 0.f;
     lightAttribute.Get(&val);
@@ -287,8 +289,8 @@ float getLightSpecular(const UsdPrim& prim)
 
 void setLightSpecular(const UsdPrim& prim, float attrVal)
 {
-    const UsdLuxLightCommon lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetSpecularAttr();
+    const UsdLuxLightAPI       lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetSpecularAttr();
 
     lightAttribute.Set(attrVal);
 }
@@ -307,8 +309,8 @@ float UsdLight::specular() const { return getLightSpecular(prim()); }
 
 float getLightAngle(const UsdPrim& prim)
 {
-    const UsdLuxDistantLight lightSchema(prim);
-    const pxr::UsdAttribute  lightAttribute = lightSchema.GetAngleAttr();
+    const UsdLuxDistantLight   lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetAngleAttr();
 
     float val = 0.f;
     lightAttribute.Get(&val);
@@ -317,8 +319,8 @@ float getLightAngle(const UsdPrim& prim)
 
 void setLightAngle(const UsdPrim& prim, float attrVal)
 {
-    const UsdLuxDistantLight lightSchema(prim);
-    const pxr::UsdAttribute  lightAttribute = lightSchema.GetAngleAttr();
+    const UsdLuxDistantLight   lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetAngleAttr();
 
     lightAttribute.Set(attrVal);
 }
@@ -337,8 +339,8 @@ float UsdDirectionalInterface::angle() const { return getLightAngle(fItem->prim(
 
 Ufe::Light::SphereProps getLightSphereProps(const UsdPrim& prim)
 {
-    const UsdLuxSphereLight lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetRadiusAttr();
+    const UsdLuxSphereLight    lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetRadiusAttr();
 
     Ufe::Light::SphereProps sp;
     lightAttribute.Get(&sp.radius);
@@ -348,8 +350,8 @@ Ufe::Light::SphereProps getLightSphereProps(const UsdPrim& prim)
 
 void setLightSphereProps(const UsdPrim& prim, const Ufe::Light::SphereProps& attrVal)
 {
-    const UsdLuxSphereLight lightSchema(prim);
-    const pxr::UsdAttribute lightAttribute = lightSchema.GetRadiusAttr();
+    const UsdLuxSphereLight    lightSchema(prim);
+    const PXR_NS::UsdAttribute lightAttribute = lightSchema.GetRadiusAttr();
 
     lightAttribute.Set(attrVal.radius);
 }
@@ -376,10 +378,10 @@ Ufe::Light::SphereProps UsdSphereInterface::sphereProps() const
 
 Ufe::Light::ConeProps getLightConeProps(const UsdPrim& prim)
 {
-    const UsdLuxShapingAPI  lightSchema(prim);
-    const pxr::UsdAttribute focusAttribute = lightSchema.GetShapingFocusAttr();
-    const pxr::UsdAttribute coneAngleAttribute = lightSchema.GetShapingConeAngleAttr();
-    const pxr::UsdAttribute coneSoftnessAttribute = lightSchema.GetShapingConeSoftnessAttr();
+    const UsdLuxShapingAPI     lightSchema(prim);
+    const PXR_NS::UsdAttribute focusAttribute = lightSchema.GetShapingFocusAttr();
+    const PXR_NS::UsdAttribute coneAngleAttribute = lightSchema.GetShapingConeAngleAttr();
+    const PXR_NS::UsdAttribute coneSoftnessAttribute = lightSchema.GetShapingConeSoftnessAttr();
 
     Ufe::Light::ConeProps cp;
     focusAttribute.Get(&cp.focus);
@@ -390,10 +392,10 @@ Ufe::Light::ConeProps getLightConeProps(const UsdPrim& prim)
 
 void setLightConeProps(const UsdPrim& prim, const Ufe::Light::ConeProps& attrVal)
 {
-    const UsdLuxShapingAPI  lightSchema(prim);
-    const pxr::UsdAttribute focusAttribute = lightSchema.GetShapingFocusAttr();
-    const pxr::UsdAttribute coneAngleAttribute = lightSchema.GetShapingConeAngleAttr();
-    const pxr::UsdAttribute coneSoftnessAttribute = lightSchema.GetShapingConeSoftnessAttr();
+    const UsdLuxShapingAPI     lightSchema(prim);
+    const PXR_NS::UsdAttribute focusAttribute = lightSchema.GetShapingFocusAttr();
+    const PXR_NS::UsdAttribute coneAngleAttribute = lightSchema.GetShapingConeAngleAttr();
+    const PXR_NS::UsdAttribute coneSoftnessAttribute = lightSchema.GetShapingConeSoftnessAttr();
 
     focusAttribute.Set(attrVal.focus);
     coneAngleAttribute.Set(attrVal.angle);
@@ -422,8 +424,8 @@ Ufe::Light::ConeProps UsdConeInterface::coneProps() const
 
 bool getLightNormalize(const UsdPrim& prim)
 {
-    const UsdLuxRectLight   rectLight(prim);
-    const pxr::UsdAttribute lightAttribute = rectLight.GetNormalizeAttr();
+    const UsdLuxRectLight      rectLight(prim);
+    const PXR_NS::UsdAttribute lightAttribute = rectLight.GetNormalizeAttr();
 
     bool val = false;
     lightAttribute.Get(&val);
@@ -432,8 +434,8 @@ bool getLightNormalize(const UsdPrim& prim)
 
 void setLightNormalize(const UsdPrim& prim, bool attrVal)
 {
-    const UsdLuxRectLight   rectLight(prim);
-    const pxr::UsdAttribute lightAttribute = rectLight.GetNormalizeAttr();
+    const UsdLuxRectLight      rectLight(prim);
+    const PXR_NS::UsdAttribute lightAttribute = rectLight.GetNormalizeAttr();
 
     lightAttribute.Set(attrVal);
 }

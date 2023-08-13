@@ -22,9 +22,7 @@
 #include <mayaUsd/utils/util.h>
 
 #include <maya/MFnDagNode.h>
-#ifdef UFE_V2_FEATURES_AVAILABLE
 #include <ufe/pathString.h>
-#endif
 
 #include <cassert>
 
@@ -56,7 +54,7 @@ Ufe::Path firstPath(const MObject& object)
 // Assuming proxy shape nodes cannot be instanced, simply return the first path.
 Ufe::Path firstPath(const MObjectHandle& handle)
 {
-    if (!TF_VERIFY(handle.isValid(), "Cannot get path from invalid object handle")) {
+    if (!handle.isValid()) {
         return Ufe::Path();
     }
     return firstPath(handle.object());
@@ -74,16 +72,6 @@ UsdStageWeakPtr objToStage(MObject& obj)
     TF_VERIFY(ps);
 
     return ps->getUsdStage();
-}
-
-inline Ufe::Path::Segments::size_type nbPathSegments(const Ufe::Path& path)
-{
-    return
-#ifdef UFE_V2_FEATURES_AVAILABLE
-        path.nbSegments();
-#else
-        path.getSegments().size();
-#endif
 }
 
 inline Ufe::Path toPath(const std::string& mayaPathString)
@@ -110,7 +98,7 @@ UsdStageMap g_StageMap;
 void UsdStageMap::addItem(const Ufe::Path& path)
 {
     // We expect a path to the proxy shape node, therefore a single segment.
-    auto nbSegments = nbPathSegments(path);
+    auto nbSegments = path.nbSegments();
     if (nbSegments != 1) {
         TF_CODING_ERROR(
             "A proxy shape node path can have only one segment, path '%s' has %lu",
@@ -161,7 +149,7 @@ MObject UsdStageMap::proxyShape(const Ufe::Path& path)
     //    there is a cache hit when there should not be.
 
     const auto& singleSegmentPath
-        = nbPathSegments(path) == 1 ? path : Ufe::Path(path.getSegments()[0]);
+        = path.nbSegments() == 1 ? path : Ufe::Path(path.getSegments()[0]);
 
     auto iter = fPathToObject.find(singleSegmentPath);
 
@@ -186,7 +174,7 @@ MObject UsdStageMap::proxyShape(const Ufe::Path& path)
             if (newPath != cachedPath) {
                 // Key is stale.  Remove it from our cache, and add the new entry.
                 auto count = fPathToObject.erase(cachedPath);
-                TF_AXIOM(count);
+                TF_VERIFY(count);
                 if (!newPath.empty())
                     fPathToObject[newPath] = cachedObject;
             }

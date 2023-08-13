@@ -16,16 +16,19 @@
 #include "UsdUndoDuplicateCommand.h"
 
 #include "private/UfeNotifGuard.h"
-#include "private/Utils.h"
 
+#include <mayaUsd/base/tokens.h>
 #include <mayaUsd/ufe/Utils.h>
-#include <mayaUsd/utils/editRouter.h>
 #include <mayaUsd/utils/loadRules.h>
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <mayaUsd/undo/UsdUndoBlock.h>
 #include <mayaUsdUtils/MergePrims.h>
-#endif
-#include <mayaUsdUtils/util.h>
+
+#include <usdUfe/base/tokens.h>
+#include <usdUfe/undo/UsdUndoBlock.h>
+#include <usdUfe/utils/editRouter.h>
+#include <usdUfe/utils/editRouterContext.h>
+#include <usdUfe/utils/layers.h>
+#include <usdUfe/utils/loadRules.h>
+#include <usdUfe/utils/usdUtils.h>
 
 #include <pxr/base/tf/token.h>
 #include <pxr/usd/sdf/copyUtils.h>
@@ -44,7 +47,7 @@ namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
 UsdUndoDuplicateCommand::UsdUndoDuplicateCommand(const UsdSceneItem::Ptr& srcItem)
-#if (UFE_PREVIEW_VERSION_NUM >= 4041)
+#ifdef UFE_V4_FEATURES_AVAILABLE
     : Ufe::SceneItemResultUndoableCommand()
 #else
     : Ufe::UndoableCommand()
@@ -57,8 +60,9 @@ UsdUndoDuplicateCommand::UsdUndoDuplicateCommand(const UsdSceneItem::Ptr& srcIte
     auto newName = uniqueChildName(parentPrim, srcPrim.GetName());
     _usdDstPath = parentPrim.GetPath().AppendChild(TfToken(newName));
 
-    _srcLayer = MayaUsdUtils::getDefiningLayerAndPath(srcPrim).layer;
-    _dstLayer = getEditRouterLayer(PXR_NS::TfToken("duplicate"), srcPrim);
+    auto primSpec = UsdUfe::getDefiningPrimSpec(srcPrim);
+    if (primSpec)
+        _srcLayer = primSpec->GetLayer();
 }
 
 UsdUndoDuplicateCommand::~UsdUndoDuplicateCommand() { }
@@ -73,16 +77,18 @@ UsdSceneItem::Ptr UsdUndoDuplicateCommand::duplicatedItem() const
     return createSiblingSceneItem(_ufeSrcPath, _usdDstPath.GetElementString());
 }
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
 void UsdUndoDuplicateCommand::execute()
 {
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    UsdUfe::InAddOrDeleteOperation ad;
 
     UsdUndoBlock undoBlock(&_undoableItem);
 
     auto prim = ufePathToPrim(_ufeSrcPath);
     auto path = prim.GetPath();
     auto stage = prim.GetStage();
+
+    OperationEditRouterContext ctx(UsdUfe::EditRoutingTokens->RouteDuplicate, prim);
+    _dstLayer = stage->GetEditTarget().GetLayer();
 
     auto                               item = Ufe::Hierarchy::createItem(_ufeSrcPath);
     MayaUsd::ufe::ReplicateExtrasToUSD extras;
@@ -97,20 +103,19 @@ void UsdUndoDuplicateCommand::execute()
     // otherwise SdfCopySepc will fail.
     SdfJustCreatePrimInLayer(_dstLayer, _usdDstPath.GetParentPath());
 
-    // Retrieve the layers where there are opinion and order them from weak
-    // to strong. We will copy the weakest opinions first, so that they will
-    // get over-written by the stronger opinions.
-    using namespace MayaUsdUtils;
-    std::vector<LayerAndPath> authLayerAndPaths = getAuthoredLayerAndPaths(prim);
+    // Retrieve the local layers around where the prim is defined and order them
+    // from weak to strong. That weak-to-strong order allows us to copy the weakest
+    // opinions first, so that they will get over-written by the stronger opinions.
+    SdfPrimSpecHandleVector authLayerAndPaths = getDefiningPrimStack(prim);
     std::reverse(authLayerAndPaths.begin(), authLayerAndPaths.end());
 
-    MergePrimsOptions options;
-    options.verbosity = MergeVerbosity::None;
+    MayaUsdUtils::MergePrimsOptions options;
+    options.verbosity = MayaUsdUtils::MergeVerbosity::None;
     bool isFirst = true;
 
-    for (const LayerAndPath& layerAndPath : authLayerAndPaths) {
-        const auto layer = layerAndPath.layer;
-        const auto path = layerAndPath.path;
+    for (const SdfPrimSpecHandle& layerAndPath : authLayerAndPaths) {
+        const auto layer = layerAndPath->GetLayer();
+        const auto path = layerAndPath->GetPath();
         const bool result = isFirst
             ? SdfCopySpec(layer, path, _dstLayer, _usdDstPath)
             : mergePrims(stage, layer, path, stage, _dstLayer, _usdDstPath, options);
@@ -130,72 +135,17 @@ void UsdUndoDuplicateCommand::execute()
 
 void UsdUndoDuplicateCommand::undo()
 {
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    UsdUfe::InAddOrDeleteOperation ad;
 
     _undoableItem.undo();
 }
 
 void UsdUndoDuplicateCommand::redo()
 {
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    UsdUfe::InAddOrDeleteOperation ad;
 
     _undoableItem.redo();
 }
-#else
-bool UsdUndoDuplicateCommand::duplicateUndo()
-{
-    // USD sends a ResyncedPaths notification after the prim is removed, but
-    // at that point the prim is no longer valid, and thus a UFE post delete
-    // notification is no longer possible.  To respect UFE object delete
-    // notification semantics, which require the object to be alive when
-    // the notification is sent, we send a pre delete notification here.
-    auto                 ufeDstItem = duplicatedItem();
-    Ufe::ObjectPreDelete notification(ufeDstItem);
-
-#ifdef UFE_V2_FEATURES_AVAILABLE
-    Ufe::Scene::instance().notify(notification);
-#else
-    Ufe::Scene::notifyObjectDelete(notification);
-#endif
-    auto prim = ufePathToPrim(_ufeSrcPath);
-    prim.GetStage()->RemovePrim(_usdDstPath);
-
-    return true;
-}
-
-bool UsdUndoDuplicateCommand::duplicateRedo()
-{
-    auto prim = ufePathToPrim(_ufeSrcPath);
-    SdfJustCreatePrimInLayer(_dstLayer, _usdDstPath.GetParentPath());
-    return SdfCopySpec(_srcLayer, prim.GetPath(), _dstLayer, _usdDstPath);
-}
-
-void UsdUndoDuplicateCommand::undo()
-{
-    try {
-        MayaUsd::ufe::InAddOrDeleteOperation ad;
-        if (!duplicateUndo()) {
-            UFE_LOG("duplicate undo failed");
-        }
-    } catch (const std::exception& e) {
-        UFE_LOG(e.what());
-        throw; // re-throw the same exception
-    }
-}
-
-void UsdUndoDuplicateCommand::redo()
-{
-    try {
-        MayaUsd::ufe::InAddOrDeleteOperation ad;
-        if (!duplicateRedo()) {
-            UFE_LOG("duplicate redo failed");
-        }
-    } catch (const std::exception& e) {
-        UFE_LOG(e.what());
-        throw; // re-throw the same exception
-    }
-}
-#endif
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

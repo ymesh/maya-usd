@@ -1,5 +1,5 @@
 #
-# Copyright 2020 Autodesk
+# Copyright 2023 Autodesk
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,10 +24,7 @@ option(BUILD_MAYAUSD_LIBRARY "Build Core USD libraries." ON)
 option(BUILD_ADSK_PLUGIN "Build Autodesk USD plugin." ON)
 option(BUILD_PXR_PLUGIN "Build the Pixar USD plugin and libraries." ON)
 option(BUILD_AL_PLUGIN "Build the Animal Logic USD plugin and libraries." ON)
-# Default value made dependent on maya + usd version - see below
-#   Convert back to a normal option if we no longer support maya-2019, or
-#   no longer support USD-20.11
-#option(BUILD_HDMAYA "Build the Maya-To-Hydra plugin and scene delegate." ON)
+option(BUILD_HDMAYA "Build the legacy Maya-To-Hydra plugin and scene delegate." OFF)
 option(BUILD_RFM_TRANSLATORS "Build translators for RenderMan for Maya shaders." ON)
 option(BUILD_TESTS "Build tests." ON)
 option(BUILD_STRICT_MODE "Enforce all warnings as errors." ON)
@@ -37,8 +34,10 @@ if(APPLE)
     option(BUILD_UB2 "Build Universal Binary 2 (UB2) Intel64+arm64" OFF)
 endif()
 set(BUILD_WITH_PYTHON_3_VERSION 3.7 CACHE STRING "The version of Python 3 to build with")
-option(CMAKE_WANT_UFE_BUILD "Enable building with UFE (if found)." ON)
 option(CMAKE_WANT_MATERIALX_BUILD "Enable building with MaterialX (experimental)." OFF)
+option(CMAKE_WANT_VALIDATE_UNDO_ITEM "Enable validating undo items list." OFF)
+
+option(BUILD_WITH_QT_6 "Build with QT 6." OFF)
 
 set(PXR_OVERRIDE_PLUGINPATH_NAME PXR_PLUGINPATH_NAME
     CACHE STRING "Name of env var USD searches to find plugins")
@@ -83,7 +82,9 @@ endif()
 # modules and definitions
 #------------------------------------------------------------------------------
 include(cmake/utils.cmake)
-find_package(Maya 2018 REQUIRED)
+if (BUILD_MAYAUSD_LIBRARY)
+    find_package(Maya 2022 REQUIRED)
+endif()
 
 if(APPLE AND BUILD_UB2 AND NOT MAYA_MACOSX_BUILT_WITH_UB2)
     message(WARNING  "Maya was NOT built with Universal Binary 2")
@@ -115,9 +116,16 @@ message(STATUS "   PYTHON_INCLUDE_DIRS = ${PYTHON_INCLUDE_DIRS}")
 message(STATUS "   PYTHON_LIBRARIES    = ${PYTHON_LIBRARIES}")
 message(STATUS "   Python_EXECUTABLE   = ${Python_EXECUTABLE}")
 
-include(cmake/jinja.cmake)
+if (BUILD_MAYAUSD_LIBRARY)
+    include(cmake/jinja.cmake)
+endif()
 
-find_package(USD 0.20.05 REQUIRED)
+find_package(USD 0.21.11 REQUIRED)
+if (BUILD_MAYAUSD_LIBRARY OR BUILD_AL_PLUGIN OR BUILD_TESTS)
+    if(NOT USD_GENSCHEMA)
+        message(FATAL_ERROR "Building MayaUsd requires usdGenSchema (from USD)")
+    endif()
+endif()
 if (CMAKE_WANT_MATERIALX_BUILD)
     # Requires at least USD 21.08 for hdMtlx module and USD must have been built with MaterialX:
     if(NOT TARGET hdMtlx)
@@ -127,32 +135,11 @@ if (CMAKE_WANT_MATERIALX_BUILD)
 endif()
 include(cmake/usd.cmake)
 
-if( MAYA_APP_VERSION LESS 2020 AND PXR_VERSION GREATER 2005 AND PXR_VERSION LESS 2102 )
-    # Default to OFF if maya==2019 AND USD==(20.08||20.11)
-    #   Due to a problem with glew - if you force on with these versions, you
-    #   will probably need to LD_PRELOAD your glew lib.
-    #   See:
-    #      https://github.com/Autodesk/maya-usd/discussions/1017
-    option(BUILD_HDMAYA "Build the Maya-To-Hydra plugin and scene delegate." OFF)
-else()
-    option(BUILD_HDMAYA "Build the Maya-To-Hydra plugin and scene delegate." ON)
-endif()
-
-if(${MAYA_APP_VERSION} STRLESS "2019" AND CMAKE_WANT_UFE_BUILD)
-    set(CMAKE_WANT_UFE_BUILD OFF)
-    message(AUTHOR_WARNING "========================================================================================= \
-                            UFE is not available in Maya${MAYA_MAJOR_VERSION}. Maya2019 and later are supported only. \
-                            ========================================================================================= ")
-endif()
-
-if(CMAKE_WANT_UFE_BUILD)
-    find_package(UFE QUIET)
-    if(UFE_FOUND)
-        message(STATUS "Building with UFE ${UFE_VERSION} features enabled.")
-    else()
-        message(STATUS "UFE not found. UFE features will be disabled.")
-    endif()
-endif()
+find_package(UFE 0.2.0 REQUIRED)
+message(STATUS "Build MayaUsd with UFE version ${UFE_VERSION}")
+message(STATUS "   UFE include dir: ${UFE_INCLUDE_DIR}")
+message(STATUS "   UFE library: ${UFE_LIBRARY}")
+message(STATUS "   UFE preview features: ${UFE_PREVIEW_FEATURES}")
 
 if(CMAKE_WANT_MATERIALX_BUILD AND MAYA_LIGHTAPI_VERSION LESS 2)
     set(CMAKE_WANT_MATERIALX_BUILD OFF)
@@ -169,17 +156,25 @@ endif()
 
 if(DEFINED QT_LOCATION)
     if(NOT DEFINED QT_VERSION)
-        if(${MAYA_APP_VERSION} STRLESS_EQUAL "2019")
-            set(QT_VERSION "5.6")
-        else()
-            set(QT_VERSION "5.12")
+		if(BUILD_WITH_QT_6)
+			set(QT_VERSION "6.5")
+        else() # Maya 2022, 2023, 2024
+            set(QT_VERSION "5.15")
         endif()
+        message(STATUS "Setting Qt version to Qt ${QT_VERSION}")
     endif()
     set(CMAKE_PREFIX_PATH "${QT_LOCATION}")
-    find_package(Qt5 ${QT_VERSION} COMPONENTS Core Gui Widgets REQUIRED)
-    if(Qt5_FOUND)
-        message(STATUS "Building with Qt features enabled.")
-    endif()
+	if(BUILD_WITH_QT_6)
+		find_package(Qt6 ${QT_VERSION} COMPONENTS Core Gui Widgets REQUIRED)
+		if(Qt6_FOUND)
+			message(STATUS "Building with Qt ${QT_VERSION} features enabled.")
+		endif()
+	else()
+		find_package(Qt5 ${QT_VERSION} COMPONENTS Core Gui Widgets REQUIRED)
+		if(Qt5_FOUND)
+			message(STATUS "Building with Qt ${QT_VERSION} features enabled.")
+		endif()
+	endif()
 else()
     message(STATUS "QT_LOCATION not set. Building Qt features will be disabled.")
 endif()
@@ -192,7 +187,9 @@ include(cmake/compiler_config.cmake)
 #------------------------------------------------------------------------------
 # gulrak filesystem
 #------------------------------------------------------------------------------
-include(cmake/gulrak.cmake)
+if (BUILD_MAYAUSD_LIBRARY OR BUILD_AL_PLUGIN)
+    include(cmake/gulrak.cmake)
+endif()
 
 #------------------------------------------------------------------------------
 # test
@@ -209,13 +206,17 @@ endif()
 #------------------------------------------------------------------------------
 # lib
 #------------------------------------------------------------------------------
-if (BUILD_MAYAUSD_LIBRARY)
-    add_subdirectory(lib)
-endif()
+add_subdirectory(lib)
 
 #------------------------------------------------------------------------------
 # plugins
 #------------------------------------------------------------------------------
+if (BUILD_PXR_PLUGIN OR BUILD_AL_PLUGIN OR BUILD_ADSK_PLUGIN)
+    if (NOT BUILD_MAYAUSD_LIBRARY)
+        message(FATAL_ERROR "Building plugins requires MayaUsd core libraries.")
+    endif()
+endif()
+
 if (BUILD_PXR_PLUGIN)
     add_subdirectory(plugin/pxr)
 endif()
@@ -252,6 +253,11 @@ if (BUILD_ADSK_PLUGIN)
         configure_file("modules/mayaUSD.mod.template" ${PROJECT_BINARY_DIR}/mayaUSD.mod)
     endif()
     install(FILES ${PROJECT_BINARY_DIR}/mayaUSD.mod DESTINATION ${CMAKE_INSTALL_PREFIX})
+endif()
+
+if (BUILD_HDMAYA)
+    configure_file("modules/mtoh.mod.template" ${PROJECT_BINARY_DIR}/mtoh.mod)
+    install(FILES ${PROJECT_BINARY_DIR}/mtoh.mod DESTINATION ${CMAKE_INSTALL_PREFIX})
 endif()
 
 if (BUILD_PXR_PLUGIN)

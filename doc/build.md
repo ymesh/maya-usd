@@ -10,28 +10,28 @@ Before building the project, consult the following table to ensure you use the r
 
 |        Required       | ![](images/windows.png)   |                            ![](images/mac.png)               |   ![](images/linux.png)     |
 |:---------------------:|:-------------------------:|:------------------------------------------------------------:|:---------------------------:|
-|    Operating System   |         Windows 10        | High Sierra (10.13)<br>Mojave (10.14)<br>Catalina (10.15)<br>Big Sur (11.2.x)    |       CentOS 7/8              |
-|   Compiler Requirement| Maya 2019 (VS 2017)<br>Maya 2020 (VS 2017)<br>Maya 2022 (VS 2017/2019)<br>Maya 2023 (VS 2019) | Maya 2019 (Xcode 7.3.1)<br>Maya 2020 (Xcode 10.2.1)<br>Maya 2022 (Xcode 10.2.1)<br>Maya 2023 (Xcode 10.2.1) | Maya 2019 (gcc 6.3.1)<br>Maya 2020 (gcc 6.3.1)<br>Maya 2022 (gcc 6.3.1/9.3.1)<br>Maya 2023 (gcc 9.3.1) |
+|    Operating System   |       Windows 10/11        | High Sierra (10.13)<br>Mojave (10.14)<br>Catalina (10.15)<br>Big Sur (11.2.x)<br>Monterey (12.6) | CentOS 7/8<br>RHEL 8.6<br>Rocky 8.6    |
+|   Compiler Requirement| Maya 2022 (VS 2017/2019)<br>Maya 2023 (VS 2019)<br>Maya 2024 (VS 2022) | Maya 2022 (Xcode 10.2.1)<br>Maya 2023 (Xcode 10.2.1)<br>Maya 2024 (Xcode 13.4) | Maya 2022 (gcc 6.3.1/9.3.1)<br>Maya 2023 (gcc 9.3.1)<br>Maya 2024 (gcc 11.2.1) |
 | CMake Version (min/max) |        3.13 - 3.17      |                              3.13 - 3.17                     |           3.13 - 3.17       |
 |         Python        | 2.7.15 or 3.7.7 or 3.9.7  |                       2.7.15 or 3.7.7 or 3.9.7               |  2.7.15 or 3.7.7 or 3.9.7   |
 |    Python Packages    | PyYAML, PySide, PyOpenGL, Jinja2        | PyYAML, PySide2, PyOpenGL, Jinja2              | PyYAML, PySide, PyOpenGL, Jinja2 |
 |    Build generator    | Visual Studio, Ninja (Recommended)    |  XCode, Ninja (Recommended)                      |    Ninja (Recommended)      |
 |    Command processor  | Visual Studio X64 2017 or 2019 command prompt  |                     bash                |             bash            |
-| Supported Maya Version|  2019, 2020, 2022, 2023   |                   2019, 2020, 2022, 2023                    |   2019, 2020, 2022, 2023    |
+| Supported Maya Version| 2022, 2023, 2024 | 2022, 2023, 2024 | 2022, 2023, 2024 |
 
 |        Optional       | ![](images/windows.png)   |                            ![](images/mac.png)               |   ![](images/linux.png)     |
 |:---------------------:|:-------------------------:|:------------------------------------------------------------:|:---------------------------:|
-|          Qt           | Maya 2019 = 5.6.1<br>Maya 2020 = 5.12.5<br>Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2 | Maya 2019 = 5.6.1<br>Maya 2020 = 5.12.5<br>Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2 | Maya 2019 = 5.6.1<br>Maya 2020 = 5.12.5<br>Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2 |
+|          Qt           | Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2<br>Maya 2024 = 5.15.2 | Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2<br>Maya 2024 = 5.15.2 | Maya 2022 = 5.15.2<br>Maya 2023 = 5.15.2<br>Maya 2024 = 5.15.2 |
 
 ***NOTE:*** Visit the online Maya developer help document under ***Setting up your build environment*** for additional compiler requirements on different platforms.
 
 #### 2. Download and Build Pixar USD 
 
-See Pixar's official github page for instructions on how to build USD: https://github.com/PixarAnimationStudios/USD . Pixar has recently removed support for building Maya USD libraries/plug-ins in their github repository and ```build_usd.py```. When building the maya-usd project, it is important the recommended ```Pixar USD``` commitID or tag from the table below are used: 
+See Pixar's official github page for instructions on how to build USD: https://github.com/PixarAnimationStudios/USD . Pixar has removed support for building Maya USD libraries/plug-ins in their github repository and ```build_usd.py```. When building the maya-usd project, it is important the recommended ```Pixar USD``` commitID or tag from the table below are used: 
 
-|               |      ![](images/pxr.png)          |        
-|:------------: |:---------------:                  |
-|  CommitID/Tags | release: [v21.02](https://github.com/PixarAnimationStudios/USD/releases/tag/v21.02) or [v21.05](https://github.com/PixarAnimationStudios/USD/releases/tag/v21.05) or [v21.08](https://github.com/PixarAnimationStudios/USD/releases/tag/v21.08) or [v21.11](https://github.com/PixarAnimationStudios/USD/releases/tag/v21.11) or [v22.05b](https://github.com/PixarAnimationStudios/USD/releases/tag/v22.05b) or [v22.08](https://github.com/PixarAnimationStudios/USD/releases/tag/v22.08) <br> dev: [48460d1 (tag v22.08)](https://github.com/PixarAnimationStudios/USD/commit/48460d145f8665f233234ae2f6e6f0e16914faa8) |
+|               |      ![](images/pxr.png)          | USD version used in Maya |
+|:------------: |:---------------:                  |:------------------------:|
+|  CommitID/Tags | release: [v21.11](https://github.com/PixarAnimationStudios/USD/releases/tag/v21.11) or [v22.05b](https://github.com/PixarAnimationStudios/USD/releases/tag/v22.05b) or [v22.08](https://github.com/PixarAnimationStudios/USD/releases/tag/v22.08) or [v22.11](https://github.com/PixarAnimationStudios/USD/releases/tag/v22.11)<br> dev: [97d2ba3 (tag v23.02)](https://github.com/PixarAnimationStudios/USD/commit/97d2ba37cc8749b147694d0dd5f9e7127e1b6919) | Maya 2022 = v21.11<br>Maya 2023 = v21.11<br>Maya 2024 = v22.11 |
 
 For additional information on building Pixar USD, see the ***Additional Build Instruction*** section below.
 
@@ -46,14 +46,15 @@ The Universal Front End (UFE) is a DCC-agnostic component that allows Maya to br
 | v1.0.0                     | Maya 2019.x                                            | |
 | v1.0.0                     | Maya 2020.x                                            | |
 | v2.0.0<br>v2.0.3<br>v2.1.0 | Maya 2022 <br>Maya 2022.1/2022.2/2022.3<br>Maya 2022.4 | https://help.autodesk.com/view/MAYAUL/2022/ENU/?guid=Maya_SDK_ufe_ref_index_html |
-| v3.0.0<br>v3.2.0           | Maya 2023/2023.1<br>Maya 2023.2                        | https://help.autodesk.com/view/MAYAUL/2023/ENU/?guid=Maya_SDK_ufe_ref_index_html |
-| v0.4.x                     | Maya PR                                                | |
+| v3.0.0<br>v3.2.0<br>v3.3.0 | Maya 2023/2023.1<br>Maya 2023.2<br>Maya 2023.3         | https://help.autodesk.com/view/MAYAUL/2023/ENU/?guid=MAYA_API_REF_ufe_ref_index_html |
+| v4.0.0                     | Maya 2024                                              | https://help.autodesk.com/view/MAYAUL/2024/ENU/?guid=MAYA_API_REF_ufe_ref_index_html |
+| v0.5.x                     | Maya PR                                                | |
 
 To build the project with UFE support, you will need to use the headers and libraries included in the ***Maya Devkit***:
 
 https://www.autodesk.com/developer-network/platform-technologies/maya
 
-***NOTE:*** UFE is only supported in Maya 2019 and later. Earlier versions of Maya should still be able to load the plug-ins but without the features enabled by UFE.
+***NOTE:*** UFE is only supported in Maya 2019 and later.
 
 #### 4. Download the source code
 
@@ -87,20 +88,27 @@ There are four arguments that must be passed to the script:
 
 ```
 Linux:
-➜ maya-usd python build.py --maya-location /usr/autodesk/maya2020 --pxrusd-location /usr/local/USD-Release --devkit-location /usr/local/devkitBase /usr/local/workspace
+➜ maya-usd python build.py --maya-location /usr/autodesk/maya2024 --pxrusd-location /usr/local/USD-Release --devkit-location /usr/local/devkitBase /usr/local/workspace
 
 MacOSX:
-➜ maya-usd python build.py --maya-location /Applications/Autodesk/maya2020 --pxrusd-location /opt/local/USD-Release --devkit-location /opt/local/devkitBase /opt/local/workspace
+➜ maya-usd python build.py --maya-location /Applications/Autodesk/maya2024 --pxrusd-location /opt/local/USD-Release --devkit-location /opt/local/devkitBase /opt/local/workspace
 
 Windows:
-c:\maya-usd> python build.py --maya-location "C:\Program Files\Autodesk\Maya2020" --pxrusd-location C:\USD-Release --devkit-location C:\devkitBase C:\workspace
+c:\maya-usd> python build.py --maya-location "C:\Program Files\Autodesk\Maya2024" --pxrusd-location C:\USD-Release --devkit-location C:\devkitBase C:\workspace
 ```
 
-##### Build Arguments
+##### Default Build Arguments
+
+| Flag                  | Description                                                                           |
+|--------------------   |---------------------------------------------------------------------------------------|
+|   --materialx         | build with MaterialX features enabled                                                 |
+
+##### Optional Build Arguments
 
 | Flag                  | Description                                                                           |
 |--------------------   |---------------------------------------------------------------------------------------|
 |   --build-args        | comma-separated list of cmake variables can be also passed to build system.           |
+|   --no-materialx      | do not build MaterialX support in MayaUSD.                                            |
 
 ```
 --build-args="-DBUILD_ADSK_PLUGIN=ON,-DBUILD_PXR_PLUGIN=OFF,-DBUILD_TESTS=OFF"
@@ -114,13 +122,14 @@ BUILD_MAYAUSD_LIBRARY       | builds Core USD libraries.                        
 BUILD_ADSK_PLUGIN           | builds Autodesk USD plugin.                                | ON
 BUILD_PXR_PLUGIN            | builds the Pixar USD plugin and libraries.                 | ON
 BUILD_AL_PLUGIN             | builds the Animal Logic USD plugin and libraries.          | ON
-BUILD_HDMAYA                | builds the Maya-To-Hydra plugin and scene delegate.        | ON
+BUILD_HDMAYA                | builds the legacy Maya-To-Hydra plugin and scene delegate. | OFF
 BUILD_RFM_TRANSLATORS       | builds translators for RenderMan for Maya shaders.         | ON
 BUILD_TESTS                 | builds all unit tests.                                     | ON
 BUILD_STRICT_MODE           | enforces all warnings as errors.                           | ON
 BUILD_WITH_PYTHON_3			| build with python 3.										 | OFF
 BUILD_SHARED_LIBS			| build libraries as shared or static.						 | ON
-CMAKE_WANT_UFE_BUILD        | enables building with UFE (if found).                      | ON
+BUILD_UB2                   | build universal binary 2 (UB2) Intel64+arm64 (apple only)  | OFF
+CMAKE_WANT_MATERIALX_BUILD  | enable building with MaterialX (experimental). | OFF
 
 ##### Stages
 
@@ -199,9 +208,9 @@ Test project /Users/sabrih/Desktop/workspace/build/Debug/plugin/al
 
 It is important to use the Python version shipped with Maya and not the system version when building USD on MacOS. Note that this is primarily an issue on MacOS, where Maya's version of Python is likely to conflict with the version provided by the system. 
 
-To build USD and the Maya plug-ins on MacOS for Maya (2019, 2020, 2022, 2023), run:
+To build USD and the Maya plug-ins on MacOS for Maya (2022, 2023, 2024), run:
 ```
-/Applications/Autodesk/maya2019/Maya.app/Contents/bin/mayapy build_usd.py ~/Desktop/BUILD
+/Applications/Autodesk/maya2024/Maya.app/Contents/bin/mayapy build_usd.py ~/Desktop/BUILD
 ```
 By default, ``usdview`` is built which has a dependency on PyOpenGL. Since the Python version of Maya doesn't ship with PyOpenGL you will be prompted with the following error message:
 ```

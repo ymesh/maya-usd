@@ -17,6 +17,27 @@
 
 #include <mayaUsd/nodes/proxyShapeBase.h>
 #include <mayaUsd/undo/OpUndoItems.h>
+#include <mayaUsd/utils/colorSpace.h>
+
+#include <pxr/base/gf/gamma.h>
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/vec4f.h>
+#include <pxr/base/js/json.h>
+#include <pxr/base/tf/hashmap.h>
+#include <pxr/base/tf/staticTokens.h>
+#include <pxr/base/tf/stringUtils.h>
+#include <pxr/base/tf/token.h>
+#include <pxr/base/vt/array.h>
+#include <pxr/base/vt/types.h>
+#include <pxr/base/vt/value.h>
+#include <pxr/usd/sdf/path.h>
+#include <pxr/usd/sdf/tokens.h>
+#include <pxr/usd/sdr/registry.h>
+#include <pxr/usd/usdGeom/camera.h>
+#include <pxr/usd/usdGeom/mesh.h>
+#include <pxr/usd/usdGeom/metrics.h>
+#include <pxr/usd/usdGeom/xformCache.h>
 
 #include <maya/MAnimControl.h>
 #include <maya/MAnimUtil.h>
@@ -37,6 +58,7 @@
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnSet.h>
 #include <maya/MFnSingleIndexedComponent.h>
+#include <maya/MFnStandardSurfaceShader.h>
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MGlobal.h>
 #include <maya/MItDag.h>
@@ -56,39 +78,12 @@
 
 #include <boost/functional/hash.hpp>
 
+#include <cctype>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#if MAYA_API_VERSION >= 20200000
-#include <maya/MFnStandardSurfaceShader.h>
-#endif
-
-#include <mayaUsd/utils/colorSpace.h>
-
-#include <pxr/base/gf/gamma.h>
-#include <pxr/base/gf/vec2f.h>
-#include <pxr/base/gf/vec3f.h>
-#include <pxr/base/gf/vec4f.h>
-#include <pxr/base/js/json.h>
-#include <pxr/base/tf/hashmap.h>
-#include <pxr/base/tf/staticTokens.h>
-#include <pxr/base/tf/stringUtils.h>
-#include <pxr/base/tf/token.h>
-#include <pxr/base/vt/array.h>
-#include <pxr/base/vt/types.h>
-#include <pxr/base/vt/value.h>
-#include <pxr/usd/sdf/path.h>
-#include <pxr/usd/sdf/tokens.h>
-#include <pxr/usd/usdGeom/camera.h>
-#include <pxr/usd/usdGeom/mesh.h>
-#include <pxr/usd/usdGeom/metrics.h>
-#include <pxr/usd/usdGeom/xformCache.h>
-
-#include <cctype>
-
-using namespace MAYAUSD_NS_DEF;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -184,6 +179,14 @@ MDistance::Unit UsdMayaUtil::ConvertUsdGeomLinearUnitToMDistanceUnit(const doubl
     return MDistance::kCentimeters;
 }
 
+double UsdMayaUtil::GetExportDistanceConversionScalar(const double metersPerUnit)
+{
+    auto internalUnits
+        = UsdMayaUtil::ConvertMDistanceUnitToUsdGeomLinearUnit(MDistance::internalUnit());
+    auto internalToMetersScalar = metersPerUnit / internalUnits;
+    return 1.0 / internalToMetersScalar;
+}
+
 std::string UsdMayaUtil::GetMayaNodeName(const MObject& mayaNode)
 {
     MString nodeName;
@@ -240,18 +243,22 @@ MStatus UsdMayaUtil::GetMObjectByName(const std::string& nodeName, MObject& mObj
     return GetMObjectByName(MString(nodeName.c_str()), mObj);
 }
 
-UsdStageRefPtr UsdMayaUtil::GetStageByProxyName(const std::string& proxyPath)
+MayaUsdProxyShapeBase* UsdMayaUtil::GetProxyShapeByProxyName(const std::string& proxyPath)
 {
     MObject mobj;
     MStatus status = UsdMayaUtil::GetMObjectByName(proxyPath, mobj);
-    if (status == MStatus::kSuccess) {
-        MFnDependencyNode fn;
-        fn.setObject(mobj);
-        MayaUsdProxyShapeBase* pShape = static_cast<MayaUsdProxyShapeBase*>(fn.userNode());
-        return pShape ? pShape->getUsdStage() : nullptr;
-    }
+    if (status != MStatus::kSuccess)
+        return nullptr;
 
-    return nullptr;
+    MFnDependencyNode fn;
+    fn.setObject(mobj);
+    return static_cast<MayaUsdProxyShapeBase*>(fn.userNode());
+}
+
+UsdStageRefPtr UsdMayaUtil::GetStageByProxyName(const std::string& proxyPath)
+{
+    MayaUsdProxyShapeBase* pShape = UsdMayaUtil::GetProxyShapeByProxyName(proxyPath);
+    return pShape ? pShape->getUsdStage() : nullptr;
 }
 
 MStatus UsdMayaUtil::GetPlugByName(const std::string& attrPath, MPlug& plug)
@@ -719,37 +726,6 @@ std::string UsdMayaUtil::stripNamespaces(const std::string& nodeName, const int 
     return ss.str();
 }
 
-std::string UsdMayaUtil::SanitizeName(const std::string& name)
-{
-    return TfStringReplace(name, ":", "_");
-}
-
-std::string UsdMayaUtil::prettifyName(const std::string& name)
-{
-    std::string prettyName(1, std::toupper(name[0]));
-    size_t      nbChars = name.size();
-    bool        capitalizeNext = false;
-    for (size_t i = 1; i < nbChars; ++i) {
-        unsigned char nextLetter = name[i];
-        if (capitalizeNext) {
-            nextLetter = std::toupper(nextLetter);
-            capitalizeNext = false;
-        }
-        if (std::isupper(name[i]) && !std::isdigit(name[i - 1])) {
-            if (((i < (nbChars - 1)) && !std::isupper(name[i + 1])) || std::islower(name[i - 1])) {
-                prettyName += ' ';
-            }
-            prettyName += nextLetter;
-        } else if (name[i] == '_' || name[i] == ':') {
-            prettyName += " ";
-            capitalizeNext = true;
-        } else {
-            prettyName += nextLetter;
-        }
-    }
-    return prettyName;
-}
-
 // This to allow various pipeline to sanitize the colorset name for output
 std::string UsdMayaUtil::SanitizeColorSetName(const std::string& name)
 {
@@ -871,7 +847,6 @@ bool _GetColorAndTransparencyFromStandardSurface(
     GfVec3f*       rgb,
     float*         alpha)
 {
-#if MAYA_API_VERSION >= 20200000
     MStatus                  status;
     MFnStandardSurfaceShader surfaceFn(shaderObj, &status);
     if (status == MS::kSuccess) {
@@ -889,7 +864,6 @@ bool _GetColorAndTransparencyFromStandardSurface(
         }
         return true;
     }
-#endif
     return false;
 }
 
@@ -1236,6 +1210,14 @@ bool UsdMayaUtil::IsAuthored(const MPlug& plug)
     // make a copy of plug here.
     MPlug plugCopy(plug);
 
+    // MPlug::isFromReferencedFile did not seem to be accurate, so this checks the node state.
+    // If the node is referenced, use MPlug::isDefaultValue - it is not clear if isDefaultValue
+    // works in all contexts as the code below uses MPlug::getSetAttrCmds.
+    //
+    MFnDependencyNode nodeFn(plug.node());
+    if (nodeFn.isFromReferencedFile() && !plug.isDefaultValue())
+        return true;
+
     MStringArray setAttrCmds;
     status = plugCopy.getSetAttrCmds(setAttrCmds, MPlug::kChanged);
     CHECK_MSTATUS_AND_RETURN(status, false);
@@ -1285,7 +1267,7 @@ MPlug UsdMayaUtil::GetConnected(const MPlug& plug)
 
 void UsdMayaUtil::Connect(const MPlug& srcPlug, const MPlug& dstPlug, const bool clearDstPlug)
 {
-    MDGModifier& dgMod = MDGModifierUndoItem::create("Generic plug connection");
+    MDGModifier& dgMod = MayaUsd::MDGModifierUndoItem::create("Generic plug connection");
     Connect(srcPlug, dstPlug, clearDstPlug, dgMod);
 }
 
@@ -2345,11 +2327,9 @@ double UsdMayaUtil::ConvertMTimeUnitToDouble(const MTime::Unit& unit)
     case MTime::k80FPS: {
         ret = 80.0;
     } break;
-#if MAYA_API_VERSION >= 20200000
     case MTime::k90FPS: {
         ret = 90.0;
     } break;
-#endif
     case MTime::k100FPS: {
         ret = 100.0;
     } break;
@@ -2551,4 +2531,35 @@ void UsdMayaUtil::AddMayaExtents(GfBBox3d& bbox, const UsdPrim& root, const UsdT
             bbox = GfBBox3d::Combine(bbox, GfBBox3d(localExtents, xform));
         }
     }
+}
+
+SdrShaderNodePtrVec UsdMayaUtil::GetSurfaceShaderNodeDefs()
+{
+    // TODO: Replace hard-coded materials with dynamically generated list.
+    static const std::set<TfToken> vettedSurfaces = { TfToken("ND_standard_surface_surfaceshader"),
+                                                      TfToken("ND_gltf_pbr_surfaceshader"),
+                                                      TfToken("ND_UsdPreviewSurface_surfaceshader"),
+                                                      TfToken("UsdPreviewSurface") };
+
+    SdrShaderNodePtrVec surfaceShaderNodeDefs;
+
+    auto& registry = SdrRegistry::GetInstance();
+    for (auto&& id : vettedSurfaces) {
+        SdrShaderNodeConstPtr shaderNodeDef = registry.GetShaderNodeByIdentifier(id);
+        if (shaderNodeDef) {
+            surfaceShaderNodeDefs.emplace_back(shaderNodeDef);
+        }
+    }
+
+    for (auto&& sdrNode : registry.GetShaderNodesByFamily()) {
+        // Any shader that has the "shader/surface" role will
+        // be exposed in the material creation menus. This
+        // includes nodes from Arnold, but also VRay, PRMan,
+        // if they use the same string to tag surface nodes.
+        if (sdrNode->GetRole() == "shader/surface") {
+            surfaceShaderNodeDefs.emplace_back(sdrNode);
+        }
+    }
+
+    return surfaceShaderNodeDefs;
 }

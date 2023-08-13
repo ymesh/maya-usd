@@ -15,8 +15,9 @@
 //
 #pragma once
 
-#include <mayaUsd/ufe/UfeVersionCompat.h>
 #include <mayaUsd/ufe/UsdTransform3dBase.h>
+
+#include <usdUfe/ufe/UfeVersionCompat.h>
 
 #include <pxr/usd/usdGeom/xformable.h>
 
@@ -40,6 +41,7 @@ public:
     enum OpNdx
     {
         NdxTranslate = 0,
+        NdxPivot,
         NdxRotatePivotTranslate,
         NdxRotatePivot,
         NdxRotate,
@@ -50,6 +52,7 @@ public:
         NdxShear,
         NdxScale,
         NdxScalePivotInverse,
+        NdxPivotInverse,
         NbOpNdx
     };
 
@@ -114,7 +117,7 @@ private:
     Ufe::TranslateUndoableCommand::Ptr
     pivotCmd(const PXR_NS::TfToken& pvtOpSuffix, double x, double y, double z);
 
-    void enforceAttributeEditAllowed(const PXR_NS::TfToken attrName) const;
+    bool isAttributeEditAllowed(const PXR_NS::TfToken attrName, std::string& errMsg) const;
 }; // UsdTransform3dMayaXformStack
 
 //! \brief Factory to create a UsdTransform3dMayaXformStack interface object.
@@ -134,9 +137,9 @@ public:
 
     // Ufe::Transform3dHandler overrides
     Ufe::Transform3d::Ptr transform3d(const Ufe::SceneItem::Ptr& item) const override;
-    Ufe::Transform3d::Ptr editTransform3d(const Ufe::SceneItem::Ptr& item UFE_V2(
-        ,
-        const Ufe::EditTransform3dHint& hint)) const override;
+    Ufe::Transform3d::Ptr editTransform3d(
+        const Ufe::SceneItem::Ptr&      item,
+        const Ufe::EditTransform3dHint& hint) const override;
 
 private:
     Ufe::Transform3dHandler::Ptr _nextHandler;

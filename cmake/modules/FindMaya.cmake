@@ -9,13 +9,14 @@
 # MAYA_<lib>_FOUND    Defined if <lib> has been found
 # MAYA_<lib>_LIBRARY  Path to <lib> library
 # MAYA_INCLUDE_DIRS   Path to the devkit's include directories
-# MAYA_API_VERSION    Maya version (6-8 digits)
-# MAYA_APP_VERSION    Maya app version (4 digits)
+# MAYA_API_VERSION    Maya API version (6-8 digits) - defined in MTypes.h
+# MAYA_APP_VERSION    Maya app version (4 digits) - either from MTypes.h or first 4 digits of MAYA_API_VERSION
 # MAYA_LIGHTAPI_VERSION Maya light API version (1 or 2 or 3)
 # MAYA_PREVIEW_RELEASE_VERSION Preview Release number (3 or more digits) in preview releases, 0 in official releases
 #
 # Cache variables:
 # MAYA_HAS_DEFAULT_MATERIAL_API Presence of a default material API on MRenderItem.
+# MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API Maya API provides color management support
 # MAYA_NEW_POINT_SNAPPING_SUPPORT Presence of point new snapping support.
 # MAYA_CURRENT_UFE_CAMERA_SUPPORT Presence of MFrameContext::getCurrentUfeCameraPath.
 # MAYA_HAS_CRASH_DETECTION Presence of isInCrashHandler API
@@ -88,8 +89,8 @@ endif()
 
 if(IS_MACOSX)
     # On OSX, setting MAYA_LOCATION to either the base installation dir (ie,
-    # `/Application/Autodesk/maya20xx`), or the Contents folder in the Maya.app dir
-    # (ie, `/Application/Autodesk/maya20xx/Maya.app/Contents`) are supported.
+    # `/Application/Autodesk/maya202x`), or the Contents folder in the Maya.app dir
+    # (ie, `/Application/Autodesk/maya202x/Maya.app/Contents`) are supported.
     find_path(MAYA_BASE_DIR
             include/maya/MFn.h
         HINTS
@@ -97,12 +98,6 @@ if(IS_MACOSX)
             "$ENV{MAYA_LOCATION}/../.."
             "${MAYA_LOCATION}"
             "$ENV{MAYA_LOCATION}"
-            "/Applications/Autodesk/maya2020"
-            "/Applications/Autodesk/maya2019"
-            "/Applications/Autodesk/maya2018"
-            "/Applications/Autodesk/maya2017"
-            "/Applications/Autodesk/maya2016.5"
-            "/Applications/Autodesk/maya2016"
         DOC
             "Maya installation root directory"
     )
@@ -124,12 +119,6 @@ elseif(IS_LINUX)
         HINTS
             "${MAYA_LOCATION}"
             "$ENV{MAYA_LOCATION}"
-            "/usr/autodesk/maya2020-x64"
-            "/usr/autodesk/maya2019-x64"
-            "/usr/autodesk/maya2018-x64"
-            "/usr/autodesk/maya2017-x64"
-            "/usr/autodesk/maya2016.5-x64"
-            "/usr/autodesk/maya2016-x64"
         DOC
             "Maya installation root directory"
     )
@@ -150,12 +139,6 @@ elseif(IS_WINDOWS)
         HINTS
             "${MAYA_LOCATION}"
             "$ENV{MAYA_LOCATION}"
-            "C:/Program Files/Autodesk/Maya2020"
-            "C:/Program Files/Autodesk/Maya2019"
-            "C:/Program Files/Autodesk/Maya2018"
-            "C:/Program Files/Autodesk/Maya2017"
-            "C:/Program Files/Autodesk/Maya2016.5"
-            "C:/Program Files/Autodesk/Maya2016"
         DOC
             "Maya installation root directory"
     )
@@ -289,10 +272,8 @@ endif()
 
 # Determine the Python version and switch between mayapy and mayapy2.
 set(MAYAPY_EXE mayapy)
-set(MAYA_PY_VERSION 2)
-if(${MAYA_APP_VERSION} STRGREATER_EQUAL "2021")
-    set(MAYA_PY_VERSION 3)
-
+set(MAYA_PY_VERSION 3)
+if(MAYA_APP_VERSION VERSION_EQUAL 2022)
     # check to see if we have a mayapy2 executable
     find_program(MAYA_PY_EXECUTABLE2
             mayapy2
@@ -372,6 +353,15 @@ if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MHWGeometry.h")
     if(MAYA_HAS_API)
         set(MAYA_HAS_DEFAULT_MATERIAL_API TRUE CACHE INTERNAL "setDefaultMaterialHandling")
         message(STATUS "Maya has setDefaultMaterialHandling API")
+    endif()
+endif()
+
+set(MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API FALSE CACHE INTERNAL "getColorManagementFragmentInfo")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFragmentManager.h")
+    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MFragmentManager.h MAYA_HAS_API REGEX "getColorManagementFragmentInfo")
+    if(MAYA_HAS_API)
+        set(MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API TRUE CACHE INTERNAL "getColorManagementFragmentInfo")
+        message(STATUS "Maya has getColorManagementFragmentInfo API")
     endif()
 endif()
 

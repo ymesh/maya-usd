@@ -16,12 +16,10 @@
 #pragma once
 
 #include <mayaUsd/base/api.h>
-#include <mayaUsd/ufe/UfeVersionCompat.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <mayaUsd/undo/UsdUndoableItem.h>
-#endif
+#include <usdUfe/ufe/UfeVersionCompat.h>
+#include <usdUfe/ufe/UsdSceneItem.h>
+#include <usdUfe/undo/UsdUndoableItem.h>
 
 #include <pxr/usd/usd/prim.h>
 
@@ -48,17 +46,13 @@ public:
     //! Create a UsdUndoDeleteCommand from a USD prim.
     static UsdUndoDeleteCommand::Ptr create(const PXR_NS::UsdPrim& prim);
 
-    UFE_V2(void execute() override;)
+    void execute() override;
     void undo() override;
     void redo() override;
 
 private:
     PXR_NS::UsdPrim _prim;
-    UFE_V2(UsdUndoableItem _undoableItem;)
-
-#ifndef UFE_V2_FEATURES_AVAILABLE
-    void perform(bool state);
-#endif
+    UsdUndoableItem _undoableItem;
 
 }; // UsdUndoDeleteCommand
 

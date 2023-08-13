@@ -16,7 +16,11 @@
 
 #include "layerEditorCommand.h"
 
+#include <mayaUsd/ufe/Global.h>
 #include <mayaUsd/utils/query.h>
+#include <mayaUsd/utils/utilFileSystem.h>
+
+#include <usdUfe/ufe/Utils.h>
 
 #include <pxr/base/tf/diagnostic.h>
 
@@ -24,14 +28,10 @@
 #include <maya/MArgParser.h>
 #include <maya/MStringArray.h>
 #include <maya/MSyntax.h>
-
-#if defined(WANT_UFE_BUILD)
-#include <mayaUsd/ufe/Global.h>
-#include <mayaUsd/ufe/Utils.h>
-
 #include <ufe/globalSelection.h>
 #include <ufe/observableSelection.h>
-#endif
+
+#include <ghc/filesystem.hpp>
 
 #include <cstddef>
 #include <string>
@@ -160,6 +160,7 @@ public:
             if (!validateAndReportIndex(layer, _index, (int)layer->GetNumSubLayerPaths())) {
                 return false;
             }
+            saveSelection();
             _subPath = layer->GetSubLayerPaths()[_index];
             holdOnPathIfDirty(layer, _subPath);
 
@@ -255,6 +256,7 @@ public:
             } else {
                 return false;
             }
+            restoreSelection();
         }
         return true;
     }
@@ -275,8 +277,38 @@ public:
         }
     }
 
+    void saveSelection()
+    {
+        // Make a copy of the global selection, to restore it on undo.
+        auto globalSn = Ufe::GlobalSelection::get();
+        _savedSn.replaceWith(*globalSn);
+        // Filter the global selection, removing items below our proxy shape.
+        // We know the path to the proxy shape has a single segment. Not
+        // using Ufe::PathString::path() for UFE v1 compatibility, which
+        // unfortunately reveals leading "world" path component implementation
+        // detail.
+        Ufe::Path path(
+            Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
+        globalSn->replaceWith(UsdUfe::removeDescendants(_savedSn, path));
+    }
+
+    void restoreSelection()
+    {
+        // Restore the saved selection to the global selection.  If a saved
+        // selection item started with the proxy shape path, re-create it.
+        // We know the path to the proxy shape has a single segment.  Not
+        // using Ufe::PathString::path() for UFE v1 compatibility, which
+        // unfortunately reveals leading "world" path component implementation
+        // detail.
+        Ufe::Path path(
+            Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
+        auto globalSn = Ufe::GlobalSelection::get();
+        globalSn->replaceWith(UsdUfe::recreateDescendants(_savedSn, path));
+    }
+
 protected:
-    std::string _editTargetPath;
+    std::string    _editTargetPath;
+    Ufe::Selection _savedSn;
 
     UsdStageWeakPtr getStage()
     {
@@ -333,6 +365,7 @@ public:
         _oldIndex = subPathIndex; // save for undo
 
         SdfLayerHandle newParentLayer;
+        std::string    newPath = _path;
 
         if (layer->GetIdentifier() == _newParentLayer) {
 
@@ -359,11 +392,41 @@ public:
                 return false;
             }
 
+            // See if the path should be reparented
+            ghc::filesystem::path filePath(_path);
+            bool                  needsRepathing = !SdfLayer::IsAnonymousLayerIdentifier(_path);
+            needsRepathing &= filePath.is_relative();
+            needsRepathing &= !layer->GetRealPath().empty();
+            needsRepathing &= !newParentLayer->GetRealPath().empty();
+
+            // Reparent the path if needed
+            if (needsRepathing) {
+                auto oldLayerDir = ghc::filesystem::path(layer->GetRealPath()).remove_filename();
+                auto newLayerDir
+                    = ghc::filesystem::path(newParentLayer->GetRealPath()).remove_filename();
+
+                std::string absolutePath
+                    = (oldLayerDir / filePath).lexically_normal().generic_string();
+                auto result = UsdMayaUtilFileSystem::makePathRelativeTo(
+                    absolutePath, newLayerDir.lexically_normal().generic_string());
+
+                if (result.second) {
+                    newPath = result.first;
+                } else {
+                    newPath = absolutePath;
+                    TF_WARN(
+                        "File name (%s) cannot be resolved as relative to the layer %s, "
+                        "using the absolute path.",
+                        absolutePath.c_str(),
+                        newParentLayer->GetIdentifier().c_str());
+                }
+            }
+
             // make sure the subpath is not already in the new parent layer.
             // Otherwise, the SdfLayer::InsertSubLayerPath() below will do nothing
             // and the subpath will be removed from it's current parent.
-            if (newParentLayer->GetSubLayerPaths().Find(_path) != size_t(-1)) {
-                std::string message = std::string("SubPath ") + _path
+            if (newParentLayer->GetSubLayerPaths().Find(newPath) != size_t(-1)) {
+                std::string message = std::string("SubPath ") + newPath
                     + std::string(" already exist in layer ") + newParentLayer->GetIdentifier();
                 MPxCommand::displayError(message.c_str());
                 return false;
@@ -376,7 +439,7 @@ public:
         // oterwise InsertSubLayerPath() will fail because the subLayer
         // already exists.
         layer->RemoveSubLayerPath(subPathIndex);
-        newParentLayer->InsertSubLayerPath(_path, _newIndex);
+        newParentLayer->InsertSubLayerPath(newPath, _newIndex);
 
         return true;
     }
@@ -593,7 +656,6 @@ private:
 
     void saveSelection()
     {
-#if defined(WANT_UFE_BUILD)
         // Make a copy of the global selection, to restore it on unmute.
         auto globalSn = Ufe::GlobalSelection::get();
         _savedSn.replaceWith(*globalSn);
@@ -604,13 +666,11 @@ private:
         // detail.
         Ufe::Path path(
             Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
-        globalSn->replaceWith(MayaUsd::ufe::removeDescendants(_savedSn, path));
-#endif
+        globalSn->replaceWith(UsdUfe::removeDescendants(_savedSn, path));
     }
 
     void restoreSelection()
     {
-#if defined(WANT_UFE_BUILD)
         // Restore the saved selection to the global selection.  If a saved
         // selection item started with the proxy shape path, re-create it.
         // We know the path to the proxy shape has a single segment.  Not
@@ -620,13 +680,10 @@ private:
         Ufe::Path path(
             Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
         auto globalSn = Ufe::GlobalSelection::get();
-        globalSn->replaceWith(MayaUsd::ufe::recreateDescendants(_savedSn, path));
-#endif
+        globalSn->replaceWith(UsdUfe::recreateDescendants(_savedSn, path));
     }
 
-#if defined(WANT_UFE_BUILD)
-    Ufe::Selection _savedSn;
-#endif
+    Ufe::Selection         _savedSn;
     PXR_NS::SdfLayerRefPtr _mutedLayer;
 };
 

@@ -52,8 +52,6 @@
 
 #include <cmath>
 
-using namespace MAYAUSD_NS_DEF;
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 // clang-format off
@@ -77,7 +75,7 @@ REGISTER_SHADING_MODE_EXPORT_MATERIAL_CONVERSION(
     TrMtlxTokens->niceName,
     TrMtlxTokens->exportDescription);
 
-UsdMayaShaderWriter::ContextSupport
+UsdMayaPrimWriter::ContextSupport
 MtlxUsd_BaseWriter::CanExport(const UsdMayaJobExportArgs& exportArgs)
 {
     return exportArgs.convertMaterialsTo == TrMtlxTokens->conversionName
@@ -571,7 +569,7 @@ bool MtlxUsd_BaseWriter::AuthorShaderInputFromShadingNodeAttr(
         return false;
     }
 
-    SdfValueTypeName shaderInputTypeName = Converter::getUsdTypeName(shadingNodePlug);
+    SdfValueTypeName shaderInputTypeName = MayaUsd::Converter::getUsdTypeName(shadingNodePlug);
 
     // We know exactly which types are supported by MaterialX, so we can adjust here:
     if (shaderInputTypeName == SdfValueTypeNames->Double) {

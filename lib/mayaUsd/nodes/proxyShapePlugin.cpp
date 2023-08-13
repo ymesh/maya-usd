@@ -16,8 +16,10 @@
 #include "proxyShapePlugin.h"
 
 #include <mayaUsd/nodes/hdImagingShape.h>
+#include <mayaUsd/nodes/layerManager.h>
 #include <mayaUsd/nodes/pointBasedDeformerNode.h>
 #include <mayaUsd/nodes/proxyShapeBase.h>
+#include <mayaUsd/nodes/proxyShapeListenerBase.h>
 #include <mayaUsd/nodes/proxyShapeStageExtraData.h>
 #include <mayaUsd/nodes/stageData.h>
 #include <mayaUsd/nodes/stageNode.h>
@@ -36,10 +38,6 @@
 #include <maya/MGlobal.h>
 #include <maya/MPxNode.h>
 #include <maya/MStatus.h>
-
-#if defined(WANT_UFE_BUILD)
-#include <mayaUsd/nodes/layerManager.h>
-#endif
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -108,14 +106,19 @@ MStatus MayaUsdProxyShapePlugin::initialize(MFnPlugin& plugin)
         MPxNode::kDeformerNode);
     CHECK_MSTATUS_AND_RETURN_IT(status);
 
-#if defined(WANT_UFE_BUILD)
     status = plugin.registerNode(
         MayaUsd::LayerManager::typeName,
         MayaUsd::LayerManager::typeId,
         MayaUsd::LayerManager::creator,
         MayaUsd::LayerManager::initialize);
     CHECK_MSTATUS(status);
-#endif
+
+    status = plugin.registerNode(
+        MayaUsdProxyShapeListenerBase::typeName,
+        MayaUsdProxyShapeListenerBase::typeId,
+        MayaUsdProxyShapeListenerBase::creator,
+        MayaUsdProxyShapeListenerBase::initialize);
+    CHECK_MSTATUS(status);
 
     // Hybrid Hydra / VP2 rendering uses a draw override to draw the proxy
     // shape.  The Pixar and MayaUsd plugins use the UsdMayaProxyDrawOverride,
@@ -159,7 +162,7 @@ MStatus MayaUsdProxyShapePlugin::initialize(MFnPlugin& plugin)
         PxrMayaHdImagingShapeDrawOverride::creator);
     CHECK_MSTATUS(status);
 
-    status = MAYAUSD_NS::MayaUsdProxyShapeStageExtraData::initialize();
+    status = MayaUsd::MayaUsdProxyShapeStageExtraData::initialize();
     CHECK_MSTATUS(status);
 
     return status;
@@ -186,7 +189,7 @@ MStatus MayaUsdProxyShapePlugin::finalize(MFnPlugin& plugin)
     MStatus status = HdVP2ShaderFragments::deregisterFragments();
     CHECK_MSTATUS(status);
 
-    status = MAYAUSD_NS::MayaUsdProxyShapeStageExtraData::finalize();
+    status = MayaUsd::MayaUsdProxyShapeStageExtraData::finalize();
     CHECK_MSTATUS(status);
 
     status = MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(
@@ -212,10 +215,11 @@ MStatus MayaUsdProxyShapePlugin::finalize(MFnPlugin& plugin)
     status = plugin.deregisterNode(UsdMayaPointBasedDeformerNode::typeId);
     CHECK_MSTATUS(status);
 
-#if defined(WANT_UFE_BUILD)
+    status = plugin.deregisterNode(MayaUsdProxyShapeListenerBase::typeId);
+    CHECK_MSTATUS(status);
+
     status = plugin.deregisterNode(MayaUsd::LayerManager::typeId);
     CHECK_MSTATUS(status);
-#endif
 
     status = plugin.deregisterNode(UsdMayaStageNode::typeId);
     CHECK_MSTATUS(status);

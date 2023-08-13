@@ -7,6 +7,7 @@
 
 #include "Nodes/SurfaceNodeMaya.h"
 
+#include <mayaUsd/render/MaterialXGenOgsXml/GlslOcioNodeImpl.h>
 #include <mayaUsd/render/MaterialXGenOgsXml/OgsXmlGenerator.h>
 
 #include <MaterialXGenGlsl/GlslShaderGenerator.h>
@@ -146,6 +147,10 @@ GlslFragmentGenerator::GlslFragmentGenerator()
             = "g_lightData"; // Store Maya lights in global non-const
         _tokenSubstitutions[HW::T_NUM_ACTIVE_LIGHT_SOURCES] = "g_numActiveLightSources";
     }
+
+    for (auto&& implName : GlslOcioNodeImpl::getOCIOImplementations()) {
+        registerImplementation(implName, GlslOcioNodeImpl::create);
+    }
 }
 
 ShaderGeneratorPtr GlslFragmentGenerator::create()
@@ -284,8 +289,13 @@ ShaderPtr GlslFragmentGenerator::generate(
     _tokenSubstitutions[ShaderGenerator::T_FILE_TRANSFORM_UV]
         = (context.getOptions().fileTextureVerticalFlip ? "mx_transform_uv_vflip.glsl"
                                                         : "mx_transform_uv.glsl");
+#if MX_COMBINED_VERSION <= 13806
     _tokenSubstitutions[HW::T_REFRACTION_ENV] = MX_REFRACTION_SUBSTITUTION;
-#endif
+#else
+    // Renamed in 1.38.7
+    _tokenSubstitutions[HW::T_REFRACTION_TWO_SIDED] = MX_REFRACTION_SUBSTITUTION;
+#endif // <= 13806
+#endif // <= 13804
 
     // Add all functions for node implementations
     emitFunctionDefinitions(graph, context, pixelStage);

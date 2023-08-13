@@ -2,7 +2,7 @@
 icons: 
 plug-ins: 
 presets: 
-scripts: 
+scripts: lib/python
 resources: 
 PYTHONPATH+:=lib/python
 PATH+:=bin
@@ -24,17 +24,12 @@ resources:
 PATH+:=lib
 PXR_USD_WINDOWS_DLL_PATH+:=lib
 PYTHONPATH+:=lib/python
+MAYA_SCRIPT_PATH+:=lib/python
 ${PXR_OVERRIDE_PLUGINPATH_NAME}+:=lib/usd
 MAYAUSD_VERSION=${MAYAUSD_VERSION}
 PXR_MTLX_STDLIB_SEARCH_PATHS+:=libraries
 ${MAYAUSD_GTEST_PATH}
+MAYAUSD_LIB_LOCATION:=lib
 
 + MayaUSD ${MAYAUSD_VERSION} ${CMAKE_INSTALL_PREFIX}/plugin/adsk
 plug-ins: plugin
-
-+ MTOH ${MAYAUSD_VERSION} ${CMAKE_INSTALL_PREFIX}/lib
-icons: 
-plug-ins: maya
-presets: 
-scripts: 
-resources: 

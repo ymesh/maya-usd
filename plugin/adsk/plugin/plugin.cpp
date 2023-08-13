@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 #include "ProxyShape.h"
+#include "ProxyShapeListener.h"
 #include "adskExportCommand.h"
 #include "adskImportCommand.h"
 #include "adskListJobContextsCommand.h"
@@ -31,12 +32,14 @@
 #include <mayaUsd/fileio/shaderReaderRegistry.h>
 #include <mayaUsd/fileio/shaderWriterRegistry.h>
 #include <mayaUsd/listeners/notice.h>
+#include <mayaUsd/nodes/layerManager.h>
 #include <mayaUsd/nodes/proxyShapeBase.h>
 #include <mayaUsd/nodes/proxyShapePlugin.h>
 #include <mayaUsd/nodes/stageData.h>
 #include <mayaUsd/render/pxrUsdMayaGL/proxyShapeUI.h>
 #include <mayaUsd/render/vp2RenderDelegate/proxyRenderDelegate.h>
-#include <mayaUsd/undo/UsdUndoBlock.h>
+#include <mayaUsd/ufe/Global.h>
+#include <mayaUsd/undo/MayaUsdUndoBlock.h>
 #include <mayaUsd/utils/diagnosticDelegate.h>
 #include <mayaUsd/utils/undoHelperCommand.h>
 
@@ -47,6 +50,7 @@
 #include <maya/MDrawRegistry.h>
 #include <maya/MFnPlugin.h>
 #include <maya/MStatus.h>
+#include <ufe/runTimeMgr.h>
 
 #include <basePxrUsdPreviewSurface/usdPreviewSurfacePlugin.h>
 
@@ -55,21 +59,6 @@
 #if defined(WANT_QT_BUILD)
 #include <mayaUsdUI/ui/USDImportDialogCmd.h>
 #include <mayaUsdUI/ui/initStringResources.h>
-#endif
-
-#if defined(WANT_UFE_BUILD)
-#include <mayaUsd/nodes/layerManager.h>
-#include <mayaUsd/ufe/Global.h>
-
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <mayaUsd/ufe/UsdTransform3dHandler.h>
-
-#include <ufe/runTimeMgr.h>
-
-// For Maya preview release 121 enabling and disabling of new Transform3d
-// functionality.  PPT, 1-Dec-2020.
-#include <maya/MGlobal.h>
-#include <maya/MPxCommand.h>
 #endif
 
 #ifdef UFE_V3_FEATURES_AVAILABLE
@@ -81,8 +70,6 @@
 
 #if defined(WANT_QT_BUILD)
 #include <mayaUsdUI/ui/batchSaveLayersUIDelegate.h>
-#endif
-
 #endif
 
 #if defined(MAYAUSD_VERSION)
@@ -99,52 +86,6 @@ namespace {
 const MTypeId MayaUsdPreviewSurface_typeId(0x58000096);
 const MString MayaUsdPreviewSurface_typeName("usdPreviewSurface");
 const MString MayaUsdPreviewSurface_registrantId("mayaUsdPlugin");
-
-#if defined(WANT_UFE_BUILD) && defined(UFE_V2_FEATURES_AVAILABLE)
-// Keep a reference to the existing USD Transform3d handler, to restore on
-// finalization.
-Ufe::Transform3dHandler::Ptr g_OldTransform3dHandler;
-Ufe::Transform3dHandler::Ptr g_NewTransform3dHandler;
-
-class ToggleTransform3d : public MPxCommand
-{
-public:
-    ToggleTransform3d() { }
-    static void* creator() { return new ToggleTransform3d(); }
-
-    static const MString commandName;
-
-    MStatus doIt(const MArgList&) override { return redoIt(); }
-
-    void toggle() const
-    {
-        bool toNew
-            = (Ufe::RunTimeMgr::instance().transform3dHandler(MayaUsd::ufe::getUsdRunTimeId())
-               == g_OldTransform3dHandler);
-        Ufe::RunTimeMgr::instance().setTransform3dHandler(
-            MayaUsd::ufe::getUsdRunTimeId(),
-            toNew ? g_NewTransform3dHandler : g_OldTransform3dHandler);
-        MGlobal::displayInfo(
-            toNew ? MString("Using chain of responsibility Transform3d handlers.")
-                  : MString("Using legacy Transform3d handler."));
-    }
-
-    MStatus redoIt() override
-    {
-        toggle();
-        return MS::kSuccess;
-    }
-    MStatus undoIt() override
-    {
-        toggle();
-        return MS::kSuccess;
-    }
-    bool isUndoable() const override { return true; }
-};
-
-const MString ToggleTransform3d::commandName { "toggleTransform3d" };
-
-#endif
 
 template <typename T> void registerCommandCheck(MFnPlugin& plugin)
 {
@@ -233,39 +174,20 @@ MStatus initializePlugin(MObject obj)
     registerCommandCheck<MayaUsd::ufe::DuplicateCommand>(plugin);
     registerCommandCheck<MayaUsd::ADSKMayaUSDGetMaterialsForRenderersCommand>(plugin);
     registerCommandCheck<MayaUsd::ADSKMayaUSDGetMaterialsInStageCommand>(plugin);
+    registerCommandCheck<MayaUsd::ADSKMayaUSDMaterialBindingsCommand>(plugin);
 #endif
 
     status = plugin.registerCommand(
-        MayaUsd::UsdUndoBlockCmd::commandName, MayaUsd::UsdUndoBlockCmd::creator);
+        MayaUsd::MayaUsdUndoBlockCmd::commandName, MayaUsd::MayaUsdUndoBlockCmd::creator);
     CHECK_MSTATUS(status);
 
     status = MayaUsdProxyShapePlugin::initialize(plugin);
     CHECK_MSTATUS(status);
 
-#if defined(WANT_UFE_BUILD)
     status = MayaUsd::ufe::initialize();
     if (!status) {
         status.perror("mayaUsdPlugin: unable to initialize ufe.");
     }
-
-#ifdef UFE_V2_FEATURES_AVAILABLE
-    // For backward compatibility, provide a command to revert to UFE v1 (Maya
-    // 2020) Ufe::Transform3d handling, which is based on the USD common
-    // transform API:
-    // https://graphics.pixar.com/usd/docs/api/class_usd_geom_xform_common_a_p_i.html
-    auto& runTimeMgr = Ufe::RunTimeMgr::instance();
-    auto  usdRtid = MayaUsd::ufe::getUsdRunTimeId();
-    g_NewTransform3dHandler = runTimeMgr.transform3dHandler(usdRtid);
-    g_OldTransform3dHandler = MayaUsd::ufe::UsdTransform3dHandler::create();
-
-    status = plugin.registerCommand(ToggleTransform3d::commandName, ToggleTransform3d::creator);
-    if (!status) {
-        status.perror(
-            MString("mayaUsdPlugin: unable to register command ") + ToggleTransform3d::commandName);
-    }
-#endif
-
-#endif
 
     status = plugin.registerShape(
         MayaUsd::ProxyShape::typeName,
@@ -274,6 +196,13 @@ MStatus initializePlugin(MObject obj)
         MayaUsd::ProxyShape::initialize,
         UsdMayaProxyShapeUI::creator,
         MayaUsdProxyShapePlugin::getProxyShapeClassification());
+    CHECK_MSTATUS(status);
+
+    status = plugin.registerNode(
+        MayaUsd::ProxyShapeListener::typeName,
+        MayaUsd::ProxyShapeListener::typeId,
+        MayaUsd::ProxyShapeListener::creator,
+        MayaUsd::ProxyShapeListener::initialize);
     CHECK_MSTATUS(status);
 
     status = plugin.registerNode(
@@ -337,12 +266,10 @@ MStatus initializePlugin(MObject obj)
         }
     }
 
-#if defined(WANT_UFE_BUILD)
-    MayaUsd::LayerManager::addSupportForNodeType(MAYAUSD_NS::ProxyShape::typeId);
+    MayaUsd::LayerManager::addSupportForNodeType(MayaUsd::ProxyShape::typeId);
 #if defined(WANT_QT_BUILD)
     UsdLayerEditor::initialize();
     MayaUsd::LayerManager::SetBatchSaveDelegate(UsdLayerEditor::batchSaveLayersUIDelegate);
-#endif
 #endif
 
     UsdMayaSceneResetNotice::InstallListener();
@@ -416,7 +343,11 @@ MStatus uninitializePlugin(MObject obj)
     deregisterCommandCheck<MayaUsd::ufe::DuplicateCommand>(plugin);
     deregisterCommandCheck<MayaUsd::ADSKMayaUSDGetMaterialsForRenderersCommand>(plugin);
     deregisterCommandCheck<MayaUsd::ADSKMayaUSDGetMaterialsInStageCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::ADSKMayaUSDMaterialBindingsCommand>(plugin);
 #endif
+
+    status = plugin.deregisterNode(MayaUsd::ProxyShapeListener::typeId);
+    CHECK_MSTATUS(status);
 
     status = plugin.deregisterNode(MayaUsd::ProxyShape::typeId);
     CHECK_MSTATUS(status);
@@ -427,35 +358,15 @@ MStatus uninitializePlugin(MObject obj)
     status = MayaUsdProxyShapePlugin::finalize(plugin);
     CHECK_MSTATUS(status);
 
-    status = plugin.deregisterCommand(MayaUsd::UsdUndoBlockCmd::commandName);
+    status = plugin.deregisterCommand(MayaUsd::MayaUsdUndoBlockCmd::commandName);
     CHECK_MSTATUS(status);
-
-#if defined(WANT_UFE_BUILD)
-#ifdef UFE_V2_FEATURES_AVAILABLE
-    status = plugin.deregisterCommand(ToggleTransform3d::commandName);
-    if (!status) {
-        status.perror(
-            MString("mayaUsdPlugin: unable to deregister command ")
-            + ToggleTransform3d::commandName);
-    }
-
-    // Restore the initial maya-usd Transform3d handler.
-    Ufe::RunTimeMgr::instance().setTransform3dHandler(
-        MayaUsd::ufe::getUsdRunTimeId(), g_OldTransform3dHandler);
-
-    g_OldTransform3dHandler = nullptr;
-    g_NewTransform3dHandler = nullptr;
-#endif
 
     status = MayaUsd::ufe::finalize();
     CHECK_MSTATUS(status);
-#endif
 
-#if defined(WANT_UFE_BUILD)
-    MayaUsd::LayerManager::removeSupportForNodeType(MAYAUSD_NS::ProxyShape::typeId);
+    MayaUsd::LayerManager::removeSupportForNodeType(MayaUsd::ProxyShape::typeId);
 #if defined(WANT_QT_BUILD)
     MayaUsd::LayerManager::SetBatchSaveDelegate(nullptr);
-#endif
 #endif
 
     UsdMayaSceneResetNotice::RemoveListener();

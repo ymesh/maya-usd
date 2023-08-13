@@ -50,8 +50,6 @@ extern Ufe::Rtid g_MayaRtid;
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF
 
-using namespace MAYAUSD_NS_DEF;
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 UsdMayaPrimUpdater::UsdMayaPrimUpdater(
@@ -73,8 +71,15 @@ bool UsdMayaPrimUpdater::canEditAsMaya() const
     // prim will round-trip back through export, so we do not check for
     // exporter (to USD) capability.
     auto prim = MayaUsd::ufe::ufePathToPrim(_path);
-    TF_AXIOM(prim);
-    return (UsdMayaPrimReaderRegistry::Find(prim.GetTypeName()) != nullptr);
+    // Invalid prim cannot be edited.
+    if (!prim)
+        return false;
+
+    UsdMayaJobImportArgs jobArgs = UsdMayaJobImportArgs::CreateFromDictionary(
+        _context->GetUserArgs(),
+        /* importWithProxyShapes = */ false,
+        GfInterval::GetFullInterval());
+    return (UsdMayaPrimReaderRegistry::Find(prim.GetTypeName(), jobArgs, prim) != nullptr);
 }
 
 bool UsdMayaPrimUpdater::editAsMaya() { return true; }
@@ -90,7 +95,7 @@ bool UsdMayaPrimUpdater::discardEdits()
     // the reference is unloaded. Don't try to delete them here.
     MFnDependencyNode depNode(objectToDelete);
     if (!depNode.isFromReferencedFile()) {
-        MStatus status = NodeDeletionUndoItem::deleteNode(
+        MStatus status = MayaUsd::NodeDeletionUndoItem::deleteNode(
             "Discard edits delete individual pulled node", depNode.absoluteName(), objectToDelete);
 
         if (status != MS::kSuccess) {
