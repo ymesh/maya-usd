@@ -95,15 +95,28 @@ function(mayaUsd_compile_config TARGET)
                 ${GNU_CLANG_FLAGS}
         )
         if(IS_LINUX)
+            message("*** TARGET = ${TARGET}")
+            # message("*** MAYA_API_VERSION = ${MAYA_API_VERSION}")
+            # message("*** MAYA_APP_VERSION = ${MAYA_APP_VERSION}")
+            # message("*** MAYA_PREVIEW_RELEASE_VERSION = ${MAYA_PREVIEW_RELEASE_VERSION}")
+            message("*** MAYA_LINUX_BUILT_WITH_CXX11_ABI = ${MAYA_LINUX_BUILT_WITH_CXX11_ABI}")
             # target_compile_definitions(${TARGET}
             #     PRIVATE
             #         _GLIBCXX_USE_CXX11_ABI=$<IF:$<BOOL:${MAYA_LINUX_BUILT_WITH_CXX11_ABI}>,1,0>
             # )
+            if (MAYA_APP_VERSION LESS 2024)
+                target_compile_definitions(${TARGET}
+                    PRIVATE
+                        _GLIBCXX_USE_CXX11_ABI=0
+                )
+                message ("*** SET _GLIBCXX_USE_CXX11_ABI=0")
+            else ()
+                message ("*** DO NOT SET _GLIBCXX_USE_CXX11_ABI=0")
+            endif ()
             # target_compile_definitions(${TARGET}
             #     PRIVATE
             #         _GLIBCXX_USE_CXX11_ABI=0
             # )
-            message ("======= Skip _GLIBCXX_USE_CXX11_ABI=0")
         endif()
     elseif(IS_MSVC)
         target_compile_options(${TARGET} 

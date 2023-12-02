@@ -344,7 +344,9 @@ void HdMayaProxyDelegate::PopulateSelectionList(
 #endif
 
             const Ufe::PathSegment pathSegment
-                = MayaUsd::ufe::usdPathToUfePathSegment(usdPath);
+                // XXX
+                // = MayaUsd::ufe::usdPathToUfePathSegment(usdPath);
+                = UsdUfe::usdPathToUfePathSegment(usdPath);
             auto si = Ufe::Hierarchy::createItem(adapter->GetProxy()->ufePath() + pathSegment);
             if (!si) {
                 TF_WARN("Failed to create UFE scene item for '%s'", objectId.GetText());
