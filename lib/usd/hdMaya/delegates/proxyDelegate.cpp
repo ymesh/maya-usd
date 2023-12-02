@@ -344,8 +344,6 @@ void HdMayaProxyDelegate::PopulateSelectionList(
 #endif
 
             const Ufe::PathSegment pathSegment
-                // XXX
-                // = MayaUsd::ufe::usdPathToUfePathSegment(usdPath);
                 = UsdUfe::usdPathToUfePathSegment(usdPath);
             auto si = Ufe::Hierarchy::createItem(adapter->GetProxy()->ufePath() + pathSegment);
             if (!si) {
