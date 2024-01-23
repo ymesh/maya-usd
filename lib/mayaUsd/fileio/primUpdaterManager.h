@@ -44,22 +44,26 @@ public:
     MAYAUSD_CORE_PUBLIC
     ~PrimUpdaterManager();
 
+    /// \brief merges edited Maya data into its corresponding USD stage.
     MAYAUSD_CORE_PUBLIC
     bool mergeToUsd(
         const MFnDependencyNode& depNodeFn,
         const Ufe::Path&         pulledPath,
         const VtDictionary&      userArgs = VtDictionary());
 
+    /// \brief edit USD data as Maya data.
     MAYAUSD_CORE_PUBLIC
     bool editAsMaya(const Ufe::Path& path, const VtDictionary& userArgs = VtDictionary());
 
-    // Can the prim at the argument path be edited as Maya.
+    /// \brief Verify if the prim at the argument path be edited as Maya.
     MAYAUSD_CORE_PUBLIC
     bool canEditAsMaya(const Ufe::Path& path) const;
 
+    /// \brief discards edited Maya data.
     MAYAUSD_CORE_PUBLIC
     bool discardEdits(const MDagPath& dagPath);
 
+    /// \brief Copy USD data into USD or Maya data.
     MAYAUSD_CORE_PUBLIC
     bool duplicate(
         const Ufe::Path&    srcPath,
@@ -70,7 +74,15 @@ public:
     MAYAUSD_CORE_PUBLIC
     static PrimUpdaterManager& getInstance();
 
+    /// \brief Verify if there are any data edited as Maya data.
+    MAYAUSD_CORE_PUBLIC
     bool hasPulledPrims() const;
+
+    using PulledPrimPaths = std::vector<std::pair<Ufe::Path, MDagPath>>;
+
+    /// \brief Retrieve the UFE path of the edited USD data and the corresponding path of Maya data.
+    MAYAUSD_CORE_PUBLIC
+    PulledPrimPaths getPulledPrimPaths() const;
 
 private:
     PrimUpdaterManager();
@@ -102,8 +114,11 @@ private:
     //! Create the pull parent and set it into the prim updater context.
     MDagPath setupPullParent(const Ufe::Path& pulledPath, VtDictionary& args);
 
-    //! Record pull information for the pulled path, for inspection on
-    //! scene changes.
+    //! Verify if the given prim at the given UFE path is an ancestor of an already edited prim.
+    bool hasEditedDescendant(const Ufe::Path& ufeQueryPath) const;
+
+//! Record pull information for the pulled path, for inspection on
+//! scene changes.
 #ifdef HAS_ORPHANED_NODES_MANAGER
     // Maya file new or open callback.  Member function to access other private
     // member functions.

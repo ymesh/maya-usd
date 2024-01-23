@@ -52,6 +52,10 @@ public:
     MAYAUSD_CORE_PUBLIC
     virtual ~OpUndoItem() = default;
 
+    /// \brief execute a single sub-operation. By default calls redo.
+    MAYAUSD_CORE_PUBLIC
+    virtual bool execute() { return redo(); }
+
     /// \brief undo a single sub-operation.
     MAYAUSD_CORE_PUBLIC
     virtual bool undo() = 0;
@@ -104,6 +108,11 @@ public:
     /// \brief add a undo item. This takes ownership of the item.
     MAYAUSD_CORE_PUBLIC
     void addItem(OpUndoItem::Ptr&& item);
+
+    const std::vector<OpUndoItem::Ptr>& getItems() const { return _undoItems; }
+
+    /// \brief verify if the list is empty.
+    bool isEmpty() const { return _undoItems.empty(); }
 
     /// \brief clear all undo/redo information contained here.
     MAYAUSD_CORE_PUBLIC

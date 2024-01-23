@@ -24,17 +24,6 @@ proc string expandToSelection(string $obj)
     }
 }
 
-proc int canEditAsMaya(string $obj)
-{
-    if (!hasPrimUpdater())
-        return 0;
-
-    if (size($obj) != 0) {
-        return `python("from mayaUsd.lib import PrimUpdaterManager; PrimUpdaterManager.canEditAsMaya('" + $obj + "')")`;
-    }
-    return 0;
-}
-
 global proc mayaUsdMenu_editAsMaya(string $obj)
 {
     if (!hasPrimUpdater())
@@ -45,14 +34,81 @@ global proc mayaUsdMenu_editAsMaya(string $obj)
     }
 }
 
-global proc mayaUsdMenu_duplicate(string $ufePath)
+global proc mayaUsdMenu_EditAsMayaDataOptionsCallback(string $optionsString)
 {
-    if (!hasPrimUpdater())
-        return;
-        
-    if (size($ufePath)) {
-        mayaUsdDuplicate $ufePath "|world";
+    optionVar -stringValue usdMaya_EditAsMayaDataOptions $optionsString;
+}
+
+global proc mayaUsdMenu_EditAsMayaDataOptionsReset(string $obj)
+{
+    optionVar -remove usdMaya_EditAsMayaDataOptions;
+    mayaUsdMenu_EditAsMayaDataOptions($obj);
+}
+
+global proc mayaUsdMenu_ApplyEditAsMayaDataOptions(string $obj, int $closeDialog)
+{
+    mayaUsdTranslatorImport ("", "query", "", "mayaUsdMenu_EditAsMayaDataOptionsCallback");
+
+    if ($closeDialog) {
+        hideOptionBox;
     }
+
+    if (size($obj)) {
+        waitCursor -state 1; 
+        mayaUsdMenu_editAsMaya $obj; 
+        waitCursor -state 0;
+    }
+}
+
+global proc mayaUsdMenu_EditAsMayaDataOptions(string $obj)
+{
+    global string $gOptionBoxOptions;
+    $gOptionBoxOptions = "noToolAndAction";
+    string $layout = getOptionBox();
+    setParent $layout;
+
+    setOptionBoxTitle(getMayaUsdString("kEditAsMayaDataOptions"));
+
+    string $optionsString = ";readAnimData=1";
+    if (`optionVar -exists usdMaya_EditAsMayaDataOptions`) {
+        $optionsString = `optionVar -query usdMaya_EditAsMayaDataOptions`;
+    }
+
+    string $optionsScroll = `scrollLayout -cr true editAsMayaDataOptionsFrame`;
+    mayaUsdTranslatorImport ($optionsScroll, "post", $optionsString, "mayaUsdMenu_EditAsMayaDataOptionsCallback");
+
+    string $applyCloseBtn = getOptionBoxApplyAndCloseBtn();
+    button -edit -label `getMayaUsdString("kEditAsMayaData")`
+        -command ("mayaUsdMenu_ApplyEditAsMayaDataOptions(\"" + $obj + "\", 1);")
+        $applyCloseBtn;
+
+    string $applyBtn = getOptionBoxApplyBtn();
+    button -edit
+        -command ("mayaUsdMenu_ApplyEditAsMayaDataOptions(\"" + $obj + "\", 0);")
+        $applyBtn;
+
+    string $resetBtn = getOptionBoxResetBtn();
+    button -edit 
+        -command ("mayaUsdMenu_EditAsMayaDataOptionsReset(\"" + $obj + "\");")
+        $resetBtn;
+
+    string $saveBtn = getOptionBoxSaveBtn();
+    button -edit 
+        -command "mayaUsdTranslatorImport(\"\", \"query\", \"\", \"mayaUsdMenu_EditAsMayaDataOptionsCallback\")"
+        $saveBtn;
+
+	string $helpItem = getOptionBoxHelpItem(); 
+	if ($helpItem != "") {
+		menuItem -edit 
+			-label `getMayaUsdString("kHelpOnEditAsMayaDataOptions")`
+            -command ("python(\"from mayaUsdUtils import showHelpMayaUSD; showHelpMayaUSD('UsdImportOptionsConfig');\")")
+			$helpItem;
+	}
+
+    showOptionBox();
+
+    global string $gOptionBox;
+    window -e -height 260 $gOptionBox;
 }
 
 // On right click in the viewport, either through selection or through a pick
@@ -61,21 +117,12 @@ global proc mayaUsdMenu_duplicate(string $ufePath)
 // following procedure.
 global proc USDMenuProc(string $parent, string $obj)
 {
-    if (!hasPrimUpdater())
-        return;
-        
     $obj = expandToSelection($obj);
-    if (size($obj) != 0)
-    {
-        popupMenu -e -dai $parent;
-        setParent -menu $parent;
 
-        setParent -menu ..;
-        if (canEditAsMaya($obj)) {
-            menuItem -label "Edit As Maya Data" -image "edit_as_Maya.png" -command ("{waitCursor -state 1; mayaUsdMenu_editAsMaya \"" + $obj + "\"; waitCursor -state 0;}");
-        }
-        menuItem -label "Duplicate As Maya Data" -command ("{waitCursor -state 1; mayaUsdMenu_duplicate \"" + $obj + "\"; waitCursor -state 0;}");
-    }
+    popupMenu -e -dai $parent;
+    setParent -menu $parent;
+    
+    python("import maya.app.ufe.outlinerSupport; maya.app.ufe.outlinerSupport.buildNonMayaContextMenu('''" + $obj + "''')");
 
     // Allow the user to define a proc with additional menu items
     if (`exists USDUserMenuProc`)

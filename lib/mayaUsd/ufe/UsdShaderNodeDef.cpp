@@ -16,14 +16,17 @@
 
 #include "UsdShaderNodeDef.h"
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
+#include <mayaUsd/ufe/Utils.h>
+#ifdef UFE_V4_FEATURES_AVAILABLE
 #include <mayaUsd/ufe/UsdShaderAttributeDef.h>
 #include <mayaUsd/ufe/UsdUndoCreateFromNodeDefCommand.h>
+#include <mayaUsd/ufe/UsdUndoMaterialCommands.h>
 #endif
 
 #include "Global.h"
 #include "Utils.h"
 
+#include <mayaUsd/base/tokens.h>
 #include <mayaUsd/utils/util.h>
 
 #include <pxr/base/tf/token.h>
@@ -43,6 +46,7 @@ namespace ufe {
 PXR_NAMESPACE_USING_DIRECTIVE
 
 constexpr char UsdShaderNodeDef::kNodeDefCategoryShader[];
+constexpr char UsdShaderNodeDef::kNodeDefCategorySurface[];
 
 template <Ufe::AttributeDef::IOType IOTYPE>
 Ufe::ConstAttributeDefs getAttrs(const SdrShaderNodeConstPtr& shaderNodeDef)
@@ -60,7 +64,7 @@ Ufe::ConstAttributeDefs getAttrs(const SdrShaderNodeConstPtr& shaderNodeDef)
             // SdrNode::GetShaderInput has to downcast a NdrProperty pointer.
             continue;
         }
-#if (UFE_PREVIEW_VERSION_NUM < 4010)
+#ifndef UFE_V4_FEATURES_AVAILABLE
         std::ostringstream defaultValue;
         defaultValue << property->GetDefaultValue();
         Ufe::Attribute::Type type = usdTypeToUfe(property);
@@ -74,11 +78,9 @@ Ufe::ConstAttributeDefs getAttrs(const SdrShaderNodeConstPtr& shaderNodeDef)
 
 UsdShaderNodeDef::UsdShaderNodeDef(const SdrShaderNodeConstPtr& shaderNodeDef)
     : Ufe::NodeDef()
-#if (UFE_PREVIEW_VERSION_NUM < 4010)
-    , fType(shaderNodeDef ? shaderNodeDef->GetName() : "")
-#endif
     , fShaderNodeDef(shaderNodeDef)
-#if (UFE_PREVIEW_VERSION_NUM < 4010)
+#ifndef UFE_V4_FEATURES_AVAILABLE
+    , fType(shaderNodeDef ? shaderNodeDef->GetName() : "")
     , fInputs(
           shaderNodeDef ? getAttrs<Ufe::AttributeDef::INPUT_ATTR>(shaderNodeDef)
                         : Ufe::ConstAttributeDefs())
@@ -94,7 +96,7 @@ UsdShaderNodeDef::UsdShaderNodeDef(const SdrShaderNodeConstPtr& shaderNodeDef)
 
 UsdShaderNodeDef::~UsdShaderNodeDef() { }
 
-#if (UFE_PREVIEW_VERSION_NUM < 4010)
+#ifndef UFE_V4_FEATURES_AVAILABLE
 const std::string& UsdShaderNodeDef::type() const { return fType; }
 
 const Ufe::ConstAttributeDefs& UsdShaderNodeDef::inputs() const { return fInputs; }
@@ -105,7 +107,7 @@ const Ufe::ConstAttributeDefs& UsdShaderNodeDef::outputs() const { return fOutpu
 
 std::string UsdShaderNodeDef::type() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     return fShaderNodeDef->GetIdentifier();
 }
 
@@ -116,6 +118,7 @@ TF_DEFINE_PRIVATE_TOKENS(
 
     (arnold)
     (shader)
+    (glslfx)
 );
 // clang-format on
 
@@ -134,7 +137,7 @@ bool _isArnoldWithIssue1214(const PXR_NS::SdrShaderNode& shaderNodeDef)
 
 std::size_t UsdShaderNodeDef::nbClassifications() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
 
     // Based on a review of all items found in the Sdr registry as of USD 21.11:
 
@@ -153,16 +156,20 @@ std::size_t UsdShaderNodeDef::nbClassifications() const
         // This might change in some future and fallback to the last case below.
     }
 
-    // Regular shader nodes provide 3 classification levels:
+    // We have a client that stores Maya shader classifications in the Role. Let's split that into
+    // subclassifications:
+    auto splitRoles = splitString(fShaderNodeDef->GetRole(), "/");
+
+    // Regular shader nodes provide at least 3 classification levels:
     //    - family
-    //    - role
+    //    - role (which might be splittable at / boundaries)
     //    - sourceType
-    return 3;
+    return 2 + splitRoles.size();
 }
 
 std::string UsdShaderNodeDef::classification(std::size_t level) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     if (fShaderNodeDef->GetFamily().IsEmpty()) {
         switch (level) {
         // UsdLux:
@@ -177,30 +184,38 @@ std::string UsdShaderNodeDef::classification(std::size_t level) const
         case 1: return fShaderNodeDef->GetSourceType().GetString();
         }
     }
-    switch (level) {
-    // UsdShade: These work with MaterialX and Preview surface. Need to recheck against
-    // third-party renderers as we discover their shading nodes.
-    case 0: {
+
+    if (level == 0) {
         return fShaderNodeDef->GetFamily().GetString();
     }
-    case 1: {
-        if (fShaderNodeDef->GetRole() == fShaderNodeDef->GetName()) {
-            // See https://github.com/AcademySoftwareFoundation/MaterialX/issues/921
-            return "other";
-        } else {
-            return fShaderNodeDef->GetRole();
-        }
+
+    if (level == 1 && fShaderNodeDef->GetRole() == fShaderNodeDef->GetName()) {
+        // See https://github.com/AcademySoftwareFoundation/MaterialX/issues/921
+        return "other";
     }
-    case 2: {
+
+    // We have a client that stores Maya shader classifications in the Role. Let's split that into
+    // subclassifications:
+    auto splitRoles = splitString(fShaderNodeDef->GetRole(), "/");
+
+    if (level - 1 < splitRoles.size()) {
+        return UsdMayaUtil::prettifyName(splitRoles[splitRoles.size() - level]);
+    }
+
+    if (level - 1 == splitRoles.size()) {
+        // MAYA-126533: GLSLFX to go inside of USD
+        if (fShaderNodeDef->GetSourceType() == _tokens->glslfx) {
+            return "USD";
+        }
         return fShaderNodeDef->GetSourceType().GetString();
     }
-    }
+
     return {};
 }
 
 std::vector<std::string> UsdShaderNodeDef::inputNames() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     std::vector<std::string> retVal;
     auto names = fShaderNodeDef->GetInputNames();
     retVal.reserve(names.size());
@@ -212,13 +227,13 @@ std::vector<std::string> UsdShaderNodeDef::inputNames() const
 
 bool UsdShaderNodeDef::hasInput(const std::string& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     return fShaderNodeDef->GetShaderInput(TfToken(name));
 }
 
 Ufe::AttributeDef::ConstPtr UsdShaderNodeDef::input(const std::string& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     if (SdrShaderPropertyConstPtr property = fShaderNodeDef->GetShaderInput(TfToken(name))) {
         return Ufe::AttributeDef::ConstPtr(new UsdShaderAttributeDef(property));
     }
@@ -227,13 +242,13 @@ Ufe::AttributeDef::ConstPtr UsdShaderNodeDef::input(const std::string& name) con
 
 Ufe::ConstAttributeDefs UsdShaderNodeDef::inputs() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     return getAttrs<Ufe::AttributeDef::INPUT_ATTR>(fShaderNodeDef);
 }
 
 std::vector<std::string> UsdShaderNodeDef::outputNames() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     std::vector<std::string> retVal;
     auto names = fShaderNodeDef->GetOutputNames();
     retVal.reserve(names.size());
@@ -245,13 +260,13 @@ std::vector<std::string> UsdShaderNodeDef::outputNames() const
 
 bool UsdShaderNodeDef::hasOutput(const std::string& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     return fShaderNodeDef->GetShaderOutput(TfToken(name));
 }
 
 Ufe::AttributeDef::ConstPtr UsdShaderNodeDef::output(const std::string& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     if (SdrShaderPropertyConstPtr property = fShaderNodeDef->GetShaderOutput(TfToken(name))) {
         return Ufe::AttributeDef::ConstPtr(new UsdShaderAttributeDef(property));
     }
@@ -260,7 +275,7 @@ Ufe::AttributeDef::ConstPtr UsdShaderNodeDef::output(const std::string& name) co
 
 Ufe::ConstAttributeDefs UsdShaderNodeDef::outputs() const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     return getAttrs<Ufe::AttributeDef::OUTPUT_ATTR>(fShaderNodeDef);
 }
 
@@ -269,7 +284,7 @@ typedef std::unordered_map<std::string, std::function<Ufe::Value(const PXR_NS::S
     MetadataMap;
 static const MetadataMap _metaMap = {
     // Conversion map between known USD metadata and its MaterialX equivalent:
-    { "uiname",
+    { MayaUsdMetadata->UIName.GetString(),
       [](const PXR_NS::SdrShaderNode& n) {
           std::string uiname;
           if (!n.GetLabel().IsEmpty()) {
@@ -290,7 +305,7 @@ static const MetadataMap _metaMap = {
 
 Ufe::Value UsdShaderNodeDef::getMetadata(const std::string& key) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     const NdrTokenMap& metadata = fShaderNodeDef->GetMetadata();
     auto it = metadata.find(TfToken(key));
     if (it != metadata.cend()) {
@@ -307,7 +322,7 @@ Ufe::Value UsdShaderNodeDef::getMetadata(const std::string& key) const
 
 bool UsdShaderNodeDef::hasMetadata(const std::string& key) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     const NdrTokenMap& metadata = fShaderNodeDef->GetMetadata();
     auto it = metadata.find(TfToken(key));
     if (it != metadata.cend()) {
@@ -326,7 +341,7 @@ Ufe::SceneItem::Ptr UsdShaderNodeDef::createNode(
     const Ufe::SceneItem::Ptr& parent,
     const Ufe::PathComponent& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     UsdSceneItem::Ptr parentItem = std::dynamic_pointer_cast<UsdSceneItem>(parent);
     if (parentItem) {
         UsdUndoCreateFromNodeDefCommand::Ptr cmd
@@ -343,9 +358,13 @@ Ufe::InsertChildCommand::Ptr UsdShaderNodeDef::createNodeCmd(
     const Ufe::SceneItem::Ptr& parent,
     const Ufe::PathComponent& name) const
 {
-    TF_AXIOM(fShaderNodeDef);
+    TF_DEV_AXIOM(fShaderNodeDef);
     UsdSceneItem::Ptr parentItem = std::dynamic_pointer_cast<UsdSceneItem>(parent);
     if (parentItem) {
+        if (UsdUndoAddNewMaterialCommand::CompatiblePrim(parentItem)) {
+            return UsdUndoAddNewMaterialCommand::create(
+                parentItem, fShaderNodeDef->GetIdentifier());
+        }
         return UsdUndoCreateFromNodeDefCommand::create(
             fShaderNodeDef, parentItem, UsdMayaUtil::SanitizeName(name.string()));
     }
@@ -364,11 +383,21 @@ UsdShaderNodeDef::Ptr UsdShaderNodeDef::create(const SdrShaderNodeConstPtr& shad
 
 Ufe::NodeDefs UsdShaderNodeDef::definitions(const std::string& category)
 {
+    static std::unordered_set<std::string> validCategories = {
+        Ufe::NodeDefHandler::kNodeDefCategoryAll, kNodeDefCategoryShader, kNodeDefCategorySurface
+    };
+
     Ufe::NodeDefs result;
-    if (category == std::string(Ufe::NodeDefHandler::kNodeDefCategoryAll)
-        || category == std::string(kNodeDefCategoryShader)) {
-        SdrRegistry&        registry = SdrRegistry::GetInstance();
-        SdrShaderNodePtrVec shaderNodeDefs = registry.GetShaderNodesByFamily();
+    if (validCategories.count(category)) {
+        SdrShaderNodePtrVec shaderNodeDefs;
+
+        if (category == kNodeDefCategorySurface) {
+            shaderNodeDefs = UsdMayaUtil::GetSurfaceShaderNodeDefs();
+        } else {
+            SdrRegistry& registry = SdrRegistry::GetInstance();
+            shaderNodeDefs = registry.GetShaderNodesByFamily();
+        }
+
         result.reserve(shaderNodeDefs.size());
         for (const SdrShaderNodeConstPtr& shaderNodeDef : shaderNodeDefs) {
             result.emplace_back(UsdShaderNodeDef::create(shaderNodeDef));

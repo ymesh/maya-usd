@@ -88,6 +88,12 @@ public:
     /// Get a string that is unique for each environment settings possible:
     static std::string getSpecularEnvKey();
 
+    /// Prepare all data structures to handle an internal Maya OCIO fragment:
+    static std::string registerOCIOFragment(const std::string& fragName);
+
+    /// Get a library with all known internal Maya OCIO fragment:
+    static mx::DocumentPtr getOCIOLibrary();
+
 private:
     /// The constructor implementation that public constructors delegate to.
     template <typename GLSL_GENERATOR_WRAPPER>

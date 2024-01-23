@@ -1,6 +1,8 @@
 #include "OgsFragment.h"
 
+#include <mayaUsd/render/MaterialXGenOgsXml/CombinedMaterialXVersion.h>
 #include <mayaUsd/render/MaterialXGenOgsXml/GlslFragmentGenerator.h>
+#include <mayaUsd/render/MaterialXGenOgsXml/GlslOcioNodeImpl.h>
 #include <mayaUsd/render/MaterialXGenOgsXml/OgsXmlGenerator.h>
 
 #include <MaterialXFormat/XmlIo.h>
@@ -145,7 +147,8 @@ protected:
 
         // Maya images require a texture coordinates to be flipped in V.
         genOptions.fileTextureVerticalFlip = true;
-        genOptions.hwTransparency = mx::isTransparentSurface(_element, generator.getTarget());
+        // Enabling hwTransparency to ensure a vec4 output with correct alpha value.
+        genOptions.hwTransparency = true;
 
         // Maya viewport uses texture atlas for tile image so enabled
         // texture coordinate transform to go from original UDIM range to
@@ -493,6 +496,18 @@ std::string OgsFragment::getSpecularEnvKey()
     }
 
     return retVal;
+}
+
+std::string OgsFragment::registerOCIOFragment(const std::string& fragName)
+{
+    // Delegate to the GlslOcioNodeImpl:
+    return mx::GlslOcioNodeImpl::registerOCIOFragment(fragName);
+}
+
+mx::DocumentPtr OgsFragment::getOCIOLibrary()
+{
+    // Delegate to the GlslOcioNodeImpl:
+    return mx::GlslOcioNodeImpl::getOCIOLibrary();
 }
 
 } // namespace MaterialXMaya

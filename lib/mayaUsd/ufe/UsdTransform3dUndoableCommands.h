@@ -15,7 +15,9 @@
 //
 #pragma once
 
-#include <mayaUsd/ufe/UsdUndoableCommand.h>
+#include <mayaUsd/base/api.h>
+
+#include <usdUfe/ufe/UsdUndoableCommand.h>
 
 #include <ufe/baseUndoableCommands.h>
 #include <ufe/types.h>
@@ -29,7 +31,7 @@ namespace ufe {
 // derived classes, with undo / redo support.
 //
 class MAYAUSD_CORE_PUBLIC UsdSetMatrix4dUndoableCommand
-    : public UsdBaseUndoableCommand<Ufe::SetMatrix4dUndoableCommand>
+    : public UsdUfe::UsdUndoableCommand<Ufe::SetMatrix4dUndoableCommand>
 {
 public:
     UsdSetMatrix4dUndoableCommand(const Ufe::Path& path, const Ufe::Matrix4d& newM);
@@ -40,7 +42,7 @@ public:
     bool set(const Ufe::Matrix4d&) override;
 
 protected:
-    void executeUndoBlock() override;
+    void executeImplementation() override;
 
 private:
     Ufe::Vector3d _newT;

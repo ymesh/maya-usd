@@ -19,8 +19,11 @@
 
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/translators/translatorUtil.h>
+#include <mayaUsd/fileio/utils/meshReadUtils.h>
+#include <mayaUsd/fileio/utils/roundTripUtil.h>
 #include <mayaUsd/fileio/utils/writeUtil.h>
 #include <mayaUsd/fileio/writeJobContext.h>
+#include <mayaUsd/utils/json.h>
 #include <mayaUsd/utils/util.h>
 
 #include <pxr/base/tf/diagnostic.h>
@@ -55,10 +58,18 @@
 #include <maya/MPlug.h>
 #include <maya/MStatus.h>
 #include <maya/MString.h>
+#include <maya/MUuid.h>
 
 #include <regex>
 #include <string>
 #include <utility>
+
+// Certain applications do not currently support reading
+// TexCoord names via connections, and instead expect a default value.
+TF_DEFINE_ENV_SETTING(
+    MAYAUSD_PROVIDE_DEFAULT_TEXCOORD_PRIMVAR_NAME,
+    false,
+    "Add a default value for texcoord names in addition to connections");
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -337,7 +348,8 @@ UsdMayaShadingModeExportContext::GetAssignments() const
                     faceIndices.push_back(faceIt.index());
                 }
             }
-            ret.push_back(Assignment { usdPath, faceIndices, TfToken(dagNode.name().asChar()) });
+            ret.push_back(Assignment {
+                usdPath, faceIndices, TfToken(dagNode.name().asChar()), dagNode.object() });
         }
     }
     return ret;
@@ -506,8 +518,10 @@ class _UVMappingManager
 public:
     _UVMappingManager(
         const UsdShadeMaterial&                                  material,
-        const UsdMayaShadingModeExportContext::AssignmentVector& assignmentsToBind)
+        const UsdMayaShadingModeExportContext::AssignmentVector& assignmentsToBind,
+        const UsdMayaJobExportArgs&                              exportArgs)
         : _material(material)
+        , _exportArgs(exportArgs)
     {
         // Find out the nodes requiring mapping:
         //
@@ -582,15 +596,13 @@ public:
 
                 MString uvSetName = uvNamePlug.asString();
 
-                // All UV sets now get renamed st, st1, st2 in the order returned by getUVSetNames
+                // UV set renaming still exists. See if the UV was renamed:
                 MStringArray uvSets;
                 meshFn.getUVSetNames(uvSets);
                 for (unsigned int i = 0; i < uvSets.length(); i++) {
                     if (uvSets[i] == uvSetName) {
-                        uvSetName = "st";
-                        if (i) {
-                            uvSetName += i;
-                        }
+                        uvSetName = UsdMayaWriteUtil::UVSetExportedName(
+                            uvSets, _exportArgs.preserveUVSetNames, _exportArgs.remapUVSetsTo, i);
                         break;
                     }
                 }
@@ -643,6 +655,47 @@ public:
                 }
             }
             _uvNamesToMaterial[largestSet] = material;
+        }
+
+        if (TfGetEnvSetting(MAYAUSD_PROVIDE_DEFAULT_TEXCOORD_PRIMVAR_NAME)) {
+            // We'll traverse the material prims children and look for items
+            // with connections, and use that to set the value
+            TfToken readerType { "UsdPrimvarReader_float2" };
+            TfToken shaderID;
+
+            UsdShadeConnectableAPI source;
+            TfToken                sourceInputName;
+            UsdShadeAttributeType  sourceType;
+            VtValue                varnameValue;
+            auto                   materialPrim = material.GetPrim();
+            for (const auto child : materialPrim.GetDescendants()) {
+                if (!child.IsA<UsdShadeShader>()) {
+                    continue;
+                }
+
+                auto shader = UsdShadeShader(child);
+                if (shader.GetShaderId(&shaderID) && shaderID != readerType) {
+                    continue;
+                }
+
+                auto varnameInput = shader.GetInput(TfToken("varname"));
+                if (!varnameInput) {
+                    continue;
+                }
+
+                if (!UsdShadeConnectableAPI::GetConnectedSource(
+                        varnameInput, &source, &sourceInputName, &sourceType)) {
+                    continue;
+                }
+
+                auto targetVarname = material.GetInput(sourceInputName);
+                if (!targetVarname) {
+                    continue;
+                }
+
+                targetVarname.Get(&varnameValue);
+                varnameInput.Set(varnameValue);
+            }
         }
     }
 
@@ -704,6 +757,8 @@ public:
 private:
     /// The original material:
     const UsdShadeMaterial& _material;
+    /// The export args (for UV set remapping)
+    const UsdMayaJobExportArgs& _exportArgs;
     /// Helper structures for UV set mappings:
     TfTokenVector _nodesWithUVInput;
     using ShapeToStreams = std::map<TfToken, TfTokenVector>;
@@ -711,6 +766,109 @@ private:
     using MaterialMappings = std::map<TfTokenVector, UsdShadeMaterial>;
     MaterialMappings _uvNamesToMaterial;
 };
+
+/// We might have one or more component tags that have roundtrip data that covers this
+// set of faces. Assign them to those tags and return the remaining unhandled faces.
+VtIntArray _AssignComponentTags(
+    const UsdMayaShadingModeExportContext* ctx,
+    const UsdShadeMaterial&                materialToBind,
+    const MObjectHandle&                   geomHandle,
+    const std::vector<UsdGeomSubset>&      currentGeomSubsets,
+    const VtIntArray&                      faceIndices,
+    SdfPathSet* const                      boundPrimPaths)
+{
+    if (currentGeomSubsets.empty() || faceIndices.empty() || !geomHandle.isValid()) {
+        return faceIndices;
+    }
+
+    JsValue info;
+    if (UsdMayaMeshReadUtils::getGeomSubsetInfo(geomHandle.object(), info) && info) {
+        auto subsetInfoDict = info.GetJsObject();
+
+        std::set<VtIntArray::ElementType> faceSet, handledSet;
+        faceSet.insert(faceIndices.cbegin(), faceIndices.cend());
+
+        MFnDependencyNode shadingGroupDepFn(ctx->GetShadingEngine());
+        std::string       shadingGroupUUID = shadingGroupDepFn.uuid().asString().asChar();
+
+        for (auto&& geomSubset : currentGeomSubsets) {
+            std::string ssName = geomSubset.GetPrim().GetName();
+            const auto  infoIt = subsetInfoDict.find(ssName);
+            if (infoIt != subsetInfoDict.cend()) {
+                // Check candidate:
+                if (!infoIt->second.IsObject()) {
+                    TF_RUNTIME_ERROR(
+                        "Invalid GeomSubset roundtrip info on node '%s': "
+                        "info for subset '%s' is not a dictionary.",
+                        UsdMayaUtil::GetMayaNodeName(geomHandle.object()).c_str(),
+                        ssName.c_str());
+                    continue;
+                }
+                const auto& geomSubsetInfo = infoIt->second.GetJsObject();
+                const auto  uuidIt = geomSubsetInfo.find(UsdMayaGeomSubsetTokens->MaterialUuidKey);
+                if (uuidIt == geomSubsetInfo.cend()) {
+                    continue;
+                }
+                if (!uuidIt->second.IsString()) {
+                    TF_RUNTIME_ERROR(
+                        "Invalid GeomSubset roundtrip info on node '%s': "
+                        "material info for subset '%s' is not a string.",
+                        UsdMayaUtil::GetMayaNodeName(geomHandle.object()).c_str(),
+                        ssName.c_str());
+                    continue;
+                }
+                if (uuidIt->second.GetString() != shadingGroupUUID) {
+                    continue;
+                }
+
+                VtIntArray subsetIndices;
+                geomSubset.GetIndicesAttr().Get(&subsetIndices);
+
+                // We bind if the componentTag is a subset of the material indices
+                bool bindMaterial = true;
+                for (auto it = subsetIndices.cbegin(); it != subsetIndices.cend(); ++it) {
+                    if (faceSet.count(*it) == 0) {
+                        // The componentTag is out of sync with the material assignment.
+                        // We currently do not try to reconcile as we have no idea how
+                        // the situation happened.
+                        bindMaterial = false;
+                        break;
+                    }
+                }
+
+                if (!bindMaterial) {
+                    continue;
+                }
+
+                if (!ctx->GetExportArgs().exportCollectionBasedBindings) {
+                    UsdShadeMaterialBindingAPI subsetBindingAPI
+                        = UsdMayaTranslatorUtil::GetAPISchemaForAuthoring<
+                            UsdShadeMaterialBindingAPI>(geomSubset.GetPrim());
+                    subsetBindingAPI.Bind(materialToBind);
+                }
+
+                if (boundPrimPaths) {
+                    boundPrimPaths->insert(geomSubset.GetPath());
+                }
+
+                // Mark those faces as handled
+                handledSet.insert(subsetIndices.cbegin(), subsetIndices.cend());
+            }
+        }
+        if (!handledSet.empty()) {
+            // Prune handled faces:
+            for (auto&& handledFace : handledSet) {
+                faceSet.erase(handledFace);
+            }
+            VtIntArray unhandledFaces;
+            unhandledFaces.assign(faceSet.begin(), faceSet.end());
+            return unhandledFaces;
+        }
+    }
+
+    return faceIndices;
+}
+
 } // namespace
 
 void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
@@ -724,7 +882,7 @@ void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
         return;
     }
 
-    _UVMappingManager uvMappingManager(material, assignmentsToBind);
+    _UVMappingManager uvMappingManager(material, assignmentsToBind, GetExportArgs());
 
     UsdStageRefPtr stage = GetUsdStage();
     TfToken        materialNameToken(materialPrim.GetName());
@@ -771,10 +929,25 @@ void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
                 = UsdMayaTranslatorUtil::GetAPISchemaForAuthoring<UsdShadeMaterialBindingAPI>(
                     boundPrim);
 
+            const auto currentGeomSubsets = bindingAPI.GetMaterialBindSubsets();
+            VtIntArray unhandledFaceIndices = _AssignComponentTags(
+                this,
+                materialToBind,
+                iter.shapeObj,
+                currentGeomSubsets,
+                faceIndices,
+                boundPrimPaths);
+
+            // If we assigned all faces to component tags, then we are done for this
+            // material.
+            if (unhandledFaceIndices.empty()) {
+                continue;
+            }
+
             UsdGeomSubset faceSubset;
 
             // Try to re-use existing subset if any:
-            for (auto subset : bindingAPI.GetMaterialBindSubsets()) {
+            for (auto subset : currentGeomSubsets) {
                 TfToken elementType;
                 if (subset.GetPrim().GetName() == materialNameToken
                     && subset.GetElementTypeAttr().Get(&elementType)
@@ -790,7 +963,7 @@ void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
                 UsdAttribute indicesAttribute = faceSubset.GetIndicesAttr();
                 indicesAttribute.Get(&mergedIndices);
                 std::set<int> uniqueIndices(mergedIndices.cbegin(), mergedIndices.cend());
-                uniqueIndices.insert(faceIndices.cbegin(), faceIndices.cend());
+                uniqueIndices.insert(unhandledFaceIndices.cbegin(), unhandledFaceIndices.cend());
                 mergedIndices.assign(uniqueIndices.cbegin(), uniqueIndices.cend());
                 indicesAttribute.Set(mergedIndices);
                 continue;
@@ -798,8 +971,9 @@ void UsdMayaShadingModeExportContext::BindStandardMaterialPrim(
 
             faceSubset = bindingAPI.CreateMaterialBindSubset(
                 /* subsetName */ materialNameToken,
-                faceIndices,
+                unhandledFaceIndices,
                 /* elementType */ UsdGeomTokens->face);
+            UsdMayaRoundTripUtil::MarkPrimAsMayaGenerated(faceSubset.GetPrim());
 
             if (!GetExportArgs().exportCollectionBasedBindings) {
                 UsdShadeMaterialBindingAPI subsetBindingAPI

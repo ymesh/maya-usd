@@ -49,6 +49,20 @@ namespace {
 //                       ],
 //                   },
 //                ],
+//                "more pull info": [
+//                   {
+//                      "editedAsMayaRoot": "DAG-path-of-root-of-generated-Maya-data"
+//                      "variantSetDescriptors": [
+//                         {
+//                            "path": "UFE-path-of-one-ancestor",
+//                            "variantSelections": [
+//                               [ "variant-set-1-name", "variant-set-1-selection" ],
+//                               [ "variant-set-2-name", "variant-set-2-selection" ],
+//                            ],
+//                         },
+//                      ],
+//                   },
+//                ],
 //             },
 //          },
 //       },
@@ -59,6 +73,7 @@ namespace {
 
 static const std::string ufeComponentPrefix = "/";
 static const std::string pullInfoJsonKey = "pull info";
+static const std::string morePullInfoJsonKey = "more pull info";
 static const std::string editedAsMayaRootJsonKey = "editedAsMayaRoot";
 static const std::string variantSetDescriptorsJsonKey = "variantSetDescriptors";
 static const std::string pathJsonKey = "path";
@@ -74,22 +89,24 @@ using VariantSelection = OrphanedNodesManager::VariantSelection;
 using VariantSetDesc = OrphanedNodesManager::VariantSetDescriptor;
 using VariantSetDescList = std::list<VariantSetDesc>;
 using PullVariantInfo = OrphanedNodesManager::PullVariantInfo;
-using PullInfoTrie = Ufe::Trie<PullVariantInfo>;
-using PullInfoTrieNode = Ufe::TrieNode<PullVariantInfo>;
+using PullVariantInfos = std::vector<PullVariantInfo>;
+using PullInfoTrie = OrphanedNodesManager::PulledPrims;
+using PullInfoTrieNode = OrphanedNodesManager::PulledPrimNode;
 using Memento = OrphanedNodesManager::Memento;
 
 ////////////////////////////////////////////////////////////////////////////
 //
 // Conversion functions to and from JSON for orphaned nodes types.
 
-using MAYAUSD_NS_DEF::convertToArray;
-using MAYAUSD_NS_DEF::convertToObject;
-using MAYAUSD_NS_DEF::convertToValue;
+using MayaUsd::convertToArray;
+using MayaUsd::convertToObject;
+using MayaUsd::convertToValue;
 
 PXR_NS::JsArray  convertToArray(const VariantSelection& variantSel);
 PXR_NS::JsObject convertToObject(const VariantSetDesc& variantDesc);
 PXR_NS::JsArray  convertToArray(const std::list<VariantSetDesc>& allVariantDesc);
 PXR_NS::JsObject convertToObject(const PullVariantInfo& pullInfo);
+PXR_NS::JsObject convertToObject(const PullVariantInfos& pullInfos);
 PXR_NS::JsObject convertToObject(const PullInfoTrieNode::Ptr& pullInfoNode);
 PXR_NS::JsObject convertToObject(const PullInfoTrie& allPulledInfo);
 
@@ -97,6 +114,7 @@ VariantSelection   convertToVariantSelection(const PXR_NS::JsArray& variantSelJs
 VariantSetDesc     convertToVariantSetDescriptor(const PXR_NS::JsObject& variantDescJson);
 VariantSetDescList convertToVariantSetDescList(const PXR_NS::JsArray& allVariantDescJson);
 PullVariantInfo    convertToPullVariantInfo(const PXR_NS::JsObject& pullInfoJson);
+PullVariantInfos   convertToPullVariantInfos(const PXR_NS::JsObject& pullInfoJson);
 void         convertToPullInfoTrieNodePtr(const PXR_NS::JsObject&, PullInfoTrieNode::Ptr intoRoot);
 PullInfoTrie convertToPullInfoTrie(const PXR_NS::JsObject& allPulledInfoJson);
 
@@ -199,6 +217,44 @@ PullVariantInfo convertToPullVariantInfo(const PXR_NS::JsObject& pullInfoJson)
     return pullInfo;
 }
 
+PXR_NS::JsObject convertToObject(const PullVariantInfos& pullInfos)
+{
+    PXR_NS::JsObject pullInfoJson;
+
+    if (pullInfos.size() > 0) {
+        pullInfoJson = convertToObject(pullInfos[0]);
+    }
+
+    if (pullInfos.size() > 1) {
+        PXR_NS::JsArray morePullInfoJson;
+        for (size_t i = 1; i < pullInfos.size(); ++i) {
+            PXR_NS::JsObject moreInfoJson = convertToObject(pullInfos[i]);
+            morePullInfoJson.emplace_back(moreInfoJson);
+        }
+        pullInfoJson[morePullInfoJsonKey] = morePullInfoJson;
+    }
+
+    return pullInfoJson;
+}
+
+PullVariantInfos convertToPullVariantInfos(const PXR_NS::JsObject& pullInfoJson)
+{
+    PullVariantInfos pullInfos;
+
+    if (pullInfoJson.count(editedAsMayaRootJsonKey)) {
+        pullInfos.emplace_back(convertToPullVariantInfo(pullInfoJson));
+    }
+
+    if (pullInfoJson.count(morePullInfoJsonKey)) {
+        PXR_NS::JsArray morePullInfoJson
+            = convertToArray(convertJsonKeyToValue(pullInfoJson, morePullInfoJsonKey));
+        for (const PXR_NS::JsValue& value : morePullInfoJson) {
+            pullInfos.emplace_back(convertToPullVariantInfo(convertToObject(value)));
+        }
+    }
+    return pullInfos;
+}
+
 PXR_NS::JsObject convertToObject(const PullInfoTrieNode::Ptr& pullInfoNodePtr)
 {
     if (!pullInfoNodePtr)
@@ -208,7 +264,7 @@ PXR_NS::JsObject convertToObject(const PullInfoTrieNode::Ptr& pullInfoNodePtr)
 
     PXR_NS::JsObject pullInfoNodeJson;
 
-    if (pullInfoNode.hasData()) {
+    if (pullInfoNode.hasData() && pullInfoNode.data().size() > 0) {
         pullInfoNodeJson[pullInfoJsonKey] = convertToObject(pullInfoNode.data());
     }
 
@@ -232,7 +288,7 @@ void convertToPullInfoTrieNodePtr(
         if (key.size() <= 0) {
             continue;
         } else if (key == pullInfoJsonKey) {
-            intoRoot->setData(convertToPullVariantInfo(convertToObject(value)));
+            intoRoot->setData(convertToPullVariantInfos(convertToObject(value)));
 
         } else if (key[0] == '/') {
             PullInfoTrieNode::Ptr child = std::make_shared<PullInfoTrieNode>(key.substr(1));
@@ -268,7 +324,7 @@ std::string Memento::convertToJson(const Memento& memento)
         return PXR_NS::JsWriteToString(convertToObject(memento._pulledPrims));
     } catch (const std::exception& e) {
         // Note: the TF_RUNTIME_ERROR macro needs to be used within the PXR_NS.
-        using namespace PXR_NS;
+        PXR_NAMESPACE_USING_DIRECTIVE
         TF_RUNTIME_ERROR(
             "Unable to convert the orphaned nodes manager state to JSON: %s", e.what());
     }
@@ -284,7 +340,7 @@ Memento Memento::convertFromJson(const std::string& json)
         memento._pulledPrims = convertToPullInfoTrie(convertToObject(PXR_NS::JsParseString(json)));
     } catch (const std::exception& e) {
         // Note: the TF_RUNTIME_ERROR macro needs to be used within the PXR_NS.
-        using namespace PXR_NS;
+        PXR_NAMESPACE_USING_DIRECTIVE
         TF_RUNTIME_ERROR(
             "Unable to convert the JSON text to the orphaned nodes manager state: %s", e.what());
     }

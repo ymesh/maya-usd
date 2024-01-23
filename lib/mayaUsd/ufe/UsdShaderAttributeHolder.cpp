@@ -29,6 +29,8 @@
 #include <pxr/base/vt/value.h>
 #include <pxr/pxr.h>
 
+#include <ufe/log.h>
+
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
@@ -50,7 +52,9 @@ UsdShaderAttributeHolder::UsdShaderAttributeHolder(
 
     // sdrProp must be valid at creation and will stay valid.
     PXR_NAMESPACE_USING_DIRECTIVE
-    TF_AXIOM(sdrProp && sdrType != PXR_NS::UsdShadeAttributeType::Invalid);
+    if (!TF_VERIFY(sdrProp && sdrType != PXR_NS::UsdShadeAttributeType::Invalid)) {
+        throw std::runtime_error("Invalid shader attribute holder");
+    }
 }
 
 UsdAttributeHolder::UPtr UsdShaderAttributeHolder::create(
@@ -74,9 +78,16 @@ std::string UsdShaderAttributeHolder::isEditAllowedMsg() const
 
 std::string UsdShaderAttributeHolder::defaultValue() const
 {
+    // TODO: Add a PXR_VERSION if a fix is introduced in OpenUSD.
     if (_sdrProp->GetType() == PXR_NS::SdfValueTypeNames->Matrix3d.GetAsToken()) {
-        // There is no Matrix3d type in Sdr, so the MaterialX default value is not kept
-        return "0,0,0,0,0,0,0,0,0";
+        const std::string val = UsdShaderAttributeDef(_sdrProp).defaultValue();
+        if (val.empty()) {
+            // There is no Matrix3d type in Sdr, so the MaterialX default value is not kept
+            return "0,0,0,0,0,0,0,0,0";
+        }
+        // But if https://github.com/PixarAnimationStudios/OpenUSD/issues/2523 gets fixed
+        // then return that value:
+        return val;
     }
 #if PXR_VERSION < 2205
     if (_sdrProp->GetType() == PXR_NS::SdfValueTypeNames->Bool.GetAsToken()) {
@@ -89,6 +100,10 @@ std::string UsdShaderAttributeHolder::defaultValue() const
 
 std::string UsdShaderAttributeHolder::nativeType() const { return _sdrProp->GetType(); }
 
+//! A List of {info:id|property_name} of the properties that lack the default value, to avoid
+//! repeating the warnings on console.
+static std::unordered_set<std::string> s_ListPropertiesWithoutDefaultValue {};
+
 bool UsdShaderAttributeHolder::get(PXR_NS::VtValue& value, PXR_NS::UsdTimeCode time) const
 {
     if (isAuthored()) {
@@ -96,6 +111,23 @@ bool UsdShaderAttributeHolder::get(PXR_NS::VtValue& value, PXR_NS::UsdTimeCode t
     }
     // No prim check is required as we can get the value from the attribute definition
     value = vtValueFromString(usdAttributeType(), defaultValue());
+
+    if (defaultValue().empty()) {
+        PXR_NS::VtValue infoIdVariant;
+        usdPrim().GetAttribute(PXR_NS::TfToken("info:id")).Get(&infoIdVariant);
+        const auto shaderInfoId = infoIdVariant.Get<PXR_NS::TfToken>().GetString();
+        const auto propertyName = _sdrProp->GetName().GetString();
+        const auto listElement = shaderInfoId + "/" + propertyName;
+        const auto warningAlreadySpawn = s_ListPropertiesWithoutDefaultValue.find(listElement)
+            != s_ListPropertiesWithoutDefaultValue.end();
+        if (!warningAlreadySpawn) {
+            s_ListPropertiesWithoutDefaultValue.insert(listElement);
+            const std::string msg = "Warning: Shader property '" + propertyName
+                + "' does not have a default value. (Shader info:id: " + shaderInfoId + ").";
+            UFE_LOG(msg.c_str());
+        }
+    }
+
     return !value.IsEmpty();
 }
 
@@ -131,11 +163,18 @@ std::string UsdShaderAttributeHolder::documentation() const { return _sdrProp->G
 #ifdef UFE_V3_FEATURES_AVAILABLE
 Ufe::Value UsdShaderAttributeHolder::getMetadata(const std::string& key) const
 {
-    Ufe::Value retVal = _Base::getMetadata(key);
+    Ufe::Value retVal;
+    if (key == PXR_NS::MayaUsdMetadata->UIName) {
+        retVal = UsdShaderAttributeDef(_sdrProp).getMetadata(key);
+        if (!retVal.empty()) {
+            return retVal;
+        }
+    }
+    retVal = _Base::getMetadata(key);
     if (retVal.empty()) {
         return UsdShaderAttributeDef(_sdrProp).getMetadata(key);
     }
-    return Ufe::Value();
+    return retVal;
 }
 
 bool UsdShaderAttributeHolder::setMetadata(const std::string& key, const Ufe::Value& value)

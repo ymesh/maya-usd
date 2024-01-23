@@ -18,6 +18,7 @@
 
 import unittest
 import tempfile
+import testUtils
 from os import path
 from maya import cmds, mel
 import mayaUsd_createStageWithNewLayer
@@ -488,6 +489,47 @@ class MayaUsdLayerEditorCommandsTestCase(unittest.TestCase):
         self.assertEqual(rootLayer.subLayerPaths, originalSubLayerPaths)
         self.assertEqual(layer1.subLayerPaths, [layerId3])
 
+    def testMoveRelativeSubPath(self):
+        """ test 'mayaUsdLayerEditor' command 'moveSubPath' paramater for relative subpaths """
+
+        shapePath, stage = getCleanMayaStage()
+        rootLayer = stage.GetRootLayer()
+
+        # Create a temporary directory in the current diretory
+        myDir = testUtils.TemporaryDirectory(suffix="testMoveRelativeSubPathDir")
+        myDir_path, myDir_name = path.split(myDir.name)
+
+        # Create a new usda file in the current diretory and add it to the root layer through absolute path
+        absLayer1File = tempfile.NamedTemporaryFile(suffix=".usda", prefix="absLayer1", dir=myDir_path, delete=False, mode="w")
+        absLayer1File.write("#usda 1.0")
+        absLayer1File.close()
+        absLayer1Id = path.normpath(absLayer1File.name)
+        cmds.mayaUsdLayerEditor(rootLayer.identifier, edit=True, insertSubPath=[0, absLayer1Id])
+        absLayer1 = Sdf.Layer.Find(absLayer1Id)
+
+        # Create a new usda file in the new temporary diretory and add it to the root layer through absolute path
+        absLayer2File = tempfile.NamedTemporaryFile(suffix=".usda", prefix="absLayer2", dir=myDir.name, delete=False, mode="w")
+        absLayer2File.write("#usda 1.0")
+        absLayer2File.close()
+        absLayer2Id = path.normpath(absLayer2File.name)
+        cmds.mayaUsdLayerEditor(rootLayer.identifier, edit=True, insertSubPath=[1, absLayer2Id])
+        absLayer2 = Sdf.Layer.Find(absLayer2Id)
+
+        # Create a new usda file in the new temporary diretory and add it to absLayer2 through its relative path
+        relLayerFile = tempfile.NamedTemporaryFile(suffix=".usda", prefix="relLayer", dir=myDir.name, delete=False, mode="w")
+        relLayerFile.write("#usda 1.0")
+        relLayerFile.close()
+        relLayerFileId = path.basename(relLayerFile.name) # relative path
+        cmds.mayaUsdLayerEditor(absLayer2.identifier, edit=True, insertSubPath=[0, relLayerFileId])
+
+        # Now move the relative sublayer from absLayer2 to absLayer1
+        cmds.mayaUsdLayerEditor(absLayer2.identifier, edit=True, moveSubPath=[relLayerFileId, absLayer1.identifier, 0])
+
+        # The relative sublayer's path should change now to include the directory name
+        relLayerNewFileId = myDir_name + "/" + relLayerFileId
+        self.assertTrue(len(absLayer1.subLayerPaths) == 1)
+        self.assertEqual(absLayer1.subLayerPaths[0], relLayerNewFileId)
+
     def testMuteLayer(self):
         """ test 'mayaUsdLayerEditor' command 'muteLayer' paramater """
 
@@ -557,3 +599,22 @@ class MayaUsdLayerEditorCommandsTestCase(unittest.TestCase):
         testMuteLayerImpl(addAnonymousLayer)
         testMuteLayerImpl(addFileBakedLayer)
         testMuteLayerImpl(addFileBakedLayerByPath)
+
+    def testPathRelativeToMayaSceneFile(self):
+        # Function mayaUsdLib.Util.getPathRelativeToMayaSceneFile is used during 
+        # USD root layer saving/loading, and since we cannot test the full workflow
+        # as it opens a file dialog and requires user input, we make sure to test 
+        # the function itself here.
+        
+        ballFilePath = path.normpath(testUtils.getTestScene('ballset', 'StandaloneScene', 'top_layer.usda')).replace('\\', '/')
+
+        # Without Maya scene file, the absolute path is returned
+        cmds.file(newFile=True, force=True)
+        filePathAbs = mayaUsd.lib.Util.getPathRelativeToMayaSceneFile(ballFilePath)
+        self.assertEqual(filePathAbs, ballFilePath)
+
+        # With Maya scene file, the relative path is returned
+        mayaSceneFilePath = testUtils.getTestScene("ballset", "StandaloneScene", "top_layer.ma")
+        cmds.file(mayaSceneFilePath, force=True, open=True)
+        filePathRel = mayaUsd.lib.Util.getPathRelativeToMayaSceneFile(ballFilePath)
+        self.assertEqual(filePathRel, 'top_layer.usda')

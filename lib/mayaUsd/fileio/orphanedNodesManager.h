@@ -42,11 +42,11 @@ namespace MAYAUSD_NS_DEF {
 /// and edit orphaning is the set of variant selections of all ancestors of
 /// the prim being edited.
 
-class OrphanedNodesManager : public Ufe::Observer
+class MAYAUSD_CORE_PUBLIC OrphanedNodesManager : public Ufe::Observer
 {
 public:
     /// \brief Records a single variant selection of a single variant set.
-    struct VariantSelection
+    struct MAYAUSD_CORE_PUBLIC VariantSelection
     {
         VariantSelection() = default;
         VariantSelection(const std::string& vsn, const std::string& vs)
@@ -65,7 +65,7 @@ public:
     };
 
     /// \brief Records all variant selections of a single prim.
-    struct VariantSetDescriptor
+    struct MAYAUSD_CORE_PUBLIC VariantSetDescriptor
     {
         VariantSetDescriptor() = default;
         VariantSetDescriptor(const Ufe::Path& p, const std::list<VariantSelection>& vs)
@@ -84,7 +84,7 @@ public:
 
     /// \brief Records all variant selections of all ancestors of the prim edited as maya,
     ///        with the DAG path of the root of Maya nodes corresponding to the edited prim.
-    struct PullVariantInfo
+    struct MAYAUSD_CORE_PUBLIC PullVariantInfo
     {
         PullVariantInfo() = default;
         PullVariantInfo(const MDagPath& editedMayaRoot, const std::list<VariantSetDescriptor>& vsd)
@@ -96,8 +96,12 @@ public:
         std::list<VariantSetDescriptor> variantSetDescriptors;
     };
 
+    using PullVariantInfos = std::vector<PullVariantInfo>;
+    using PulledPrims = Ufe::Trie<PullVariantInfos>;
+    using PulledPrimNode = Ufe::TrieNode<PullVariantInfos>;
+
     /// \brief Entire state of the OrphanedNodesManager at a point in time, used for undo/redo.
-    class Memento
+    class MAYAUSD_CORE_PUBLIC Memento
     {
     public:
         // Can create an initial empty state, for it to be overwritten later.
@@ -117,11 +121,11 @@ public:
         // Private, for opacity.
         friend class OrphanedNodesManager;
 
-        Memento(Ufe::Trie<PullVariantInfo>&& pulledPrims);
+        Memento(PulledPrims&& pulledPrims);
 
-        Ufe::Trie<PullVariantInfo> release();
+        PulledPrims release();
 
-        Ufe::Trie<PullVariantInfo> _pulledPrims;
+        PulledPrims _pulledPrims;
     };
 
     // Construct an empty orphan manager.
@@ -135,10 +139,17 @@ public:
     // Asserts that the pulled path is not in the trie.
     void add(const Ufe::Path& pulledPath, const MDagPath& editedAsMayaRoot);
 
+    // Verify if the pulled path and the root of the generated
+    // Maya nodes to the trie of pulled prims are alredy tracked.
+    bool has(const Ufe::Path& pulledPath, const MDagPath& editedAsMayaRoot) const;
+
+    // Verify if the pulled path with its current variant set is alredy tracked.
+    bool has(const Ufe::Path& pulledPath) const;
+
     // Remove the pulled path from the trie of pulled prims.  Asserts that the
     // path is in the trie.  Returns a memento (see Memento Pattern) for undo
     // purposes, to be used as argument to restore().
-    Memento remove(const Ufe::Path& pulledPath);
+    Memento remove(const Ufe::Path& pulledPath, const MDagPath& editedAsMayaRoot);
 
     // Preserve the trie of pulled prims into a memento.
     Memento preserve() const;
@@ -154,33 +165,39 @@ public:
 
     // Return whether the Dag hierarchy corresponding to the pulled path is
     // orphaned.
-    bool isOrphaned(const Ufe::Path& pulledPath) const;
+    bool isOrphaned(const Ufe::Path& pulledPath, const MDagPath& editedAsMayaRoot) const;
+
+    const PulledPrims& getPulledPrims() const { return _pulledPrims; }
 
 private:
     void handleOp(const Ufe::SceneCompositeNotification::Op& op);
 
-    Ufe::Trie<PullVariantInfo>&       pulledPrims();
-    const Ufe::Trie<PullVariantInfo>& pulledPrims() const;
+    static void recursiveSetOrphaned(const PulledPrimNode::Ptr& trieNode, bool orphaned);
+    static void recursiveSwitch(
+        const PulledPrimNode::Ptr& trieNode,
+        const Ufe::Path&           ufePath,
+        const bool                 processOrphans);
 
-    static void
-    recursiveSetOrphaned(const Ufe::TrieNode<PullVariantInfo>::Ptr& trieNode, bool orphaned);
-    static void
-    recursiveSwitch(const Ufe::TrieNode<PullVariantInfo>::Ptr& trieNode, const Ufe::Path& ufePath);
-
-    static bool setOrphaned(const Ufe::TrieNode<PullVariantInfo>::Ptr& trieNode, bool orphaned);
+    static bool setOrphaned(const PulledPrimNode::Ptr& trieNode, bool orphaned);
+    static bool setOrphaned(
+        const PulledPrimNode::Ptr& trieNode,
+        const PullVariantInfo&     variantInfo,
+        bool                       orphaned);
 
     // Member function to access private nested classes.
     static std::list<VariantSetDescriptor> variantSetDescriptors(const Ufe::Path& path);
 
-    static Ufe::Trie<PullVariantInfo> deepCopy(const Ufe::Trie<PullVariantInfo>& src);
-    static void                       deepCopy(
-                              const Ufe::TrieNode<PullVariantInfo>::Ptr& src,
-                              const Ufe::TrieNode<PullVariantInfo>::Ptr& dst);
+    static PulledPrims deepCopy(const PulledPrims& src);
+    static void        deepCopy(const PulledPrimNode::Ptr& src, const PulledPrimNode::Ptr& dst);
 
     // Trie for fast lookup of descendant pulled prims.  The Trie key is the
     // UFE pulled path, and the Trie value is the corresponding Dag pull parent
     // and all ancestor variant set selections.
-    Ufe::Trie<PullVariantInfo> _pulledPrims;
+    PulledPrims _pulledPrims;
+
+    // Flag to tell that the orphaned nodes manager is currently orphaning
+    // nodes and should not react to its own actions.
+    int _inOrphaning = 0;
 };
 
 } // namespace MAYAUSD_NS_DEF

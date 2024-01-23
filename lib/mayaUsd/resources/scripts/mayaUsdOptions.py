@@ -36,25 +36,62 @@ def setAnimateOption(nodeName, textOptions):
     else:
         return textOptions + ';' + animateOption
 
+def _cleanupOptionsText(text):
+    """
+    The saved option variables can have been polluted by forced values from
+    environment variables saved in a previous run of Maya. If these forced
+    values are no longer forced, because they were saved, they would still
+    be forced. Since all code paths that use MayaUSD export-like options like
+    duplicate-to-USD, merge-to-USD and cache-to-USD go through here
+    we do the cleanup here.
+
+    Note: this kind of cleanup is only correct to do for options that have
+    no UI at all and are intended to only be controlled by such an environment
+    variable. Currently, only "materialsScopeName" is set like this, through
+    the env var "MAYAUSD_MATERIALS_SCOPE_NAME".
+    """
+    options = text.split(';')
+    options = [opt for opt in options if not "materialsScopeName=" in opt]
+    return ';'.join(options)
+
 
 def getOptionsText(varName, defaultOptions):
     """
     Retrieves the current options as text with column-separated key/value pairs.
     If the options don't exist, return the default options in the same text format.
+    The given defualt options can be in text form or a dict.
     """
     if cmds.optionVar(exists=varName):
-        return cmds.optionVar(query=varName)
+        return _cleanupOptionsText(cmds.optionVar(query=varName))
     elif isinstance(defaultOptions, dict):
-        return convertOptionsDictToText(defaultOptions)
+        return _cleanupOptionsText(convertOptionsDictToText(defaultOptions))
     else:
-        return defaultOptions
-    
+        return _cleanupOptionsText(defaultOptions)
+
+
+def getOptionsDict(varName, defaultOptions):
+    """
+    Retrieves the current options as a dictionary.
+    If the options don't exist, return the default options in the same text format.
+    The given defualt options can be in text form or a dict.
+    """
+    optionsText = getOptionsText(varName, defaultOptions)
+    return convertOptionsTextToDict(optionsText, defaultOptions)
+
 
 def setOptionsText(varName, optionsText):
     """
     Sets the current options as text with column-separated key/value pairs.
     """
     return cmds.optionVar(stringValue=(varName, optionsText))
+
+
+def setOptionsDict(varName, options):
+    """
+    Sets the current options as text by converting the given dictionary.
+    """
+    optionsText = convertOptionsDictToText(options)
+    setOptionsText(varName, optionsText)
 
 
 def convertOptionsDictToText(optionsDict):

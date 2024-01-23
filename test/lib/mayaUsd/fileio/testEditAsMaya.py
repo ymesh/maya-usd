@@ -25,6 +25,7 @@ from maya import OpenMayaAnim as OMA
 
 import mayaUsd.lib
 
+import ufeUtils
 import mayaUtils
 import mayaUsd.ufe
 
@@ -324,7 +325,7 @@ class EditAsMayaTestCase(unittest.TestCase):
 
         verifyEditedScene()
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4029', 'Test only available in UFE preview version 0.4.29 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testEditAsMayaUIInfo(self):
         '''Edit a USD transform as a Maya Object and test the UI Info.'''
 
@@ -371,8 +372,19 @@ class EditAsMayaTestCase(unittest.TestCase):
         stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
         blendShape = stage.DefinePrim('/BlendShape1', 'BlendShape')
         scope = stage.DefinePrim('/Scope1', 'Scope')
-        scope = stage.DefinePrim('/Mesh1', 'Mesh')
-        scope = stage.DefinePrim('/Material1', 'Material')
+        self.assertIsNotNone(scope)
+        mesh = stage.DefinePrim('/Mesh1', 'Mesh')
+        self.assertIsNotNone(mesh)
+        mat = stage.DefinePrim('/Material1', 'Material')
+        self.assertIsNotNone(mat)
+        instanced = stage.DefinePrim('/Instanced', 'Xform')
+        self.assertIsNotNone(instanced)
+        proto = stage.DefinePrim('/Proto', 'Xform')
+        self.assertIsNotNone(proto)
+        protoMesh = stage.DefinePrim('/Proto/Mesh', 'Mesh')
+        self.assertIsNotNone(protoMesh)
+        instanced.GetReferences().AddInternalReference('/Proto')
+        instanced.SetInstanceable(True)
 
         blendShapePathStr = proxyShapePathStr + ',/BlendShape1'
         scopePathStr = proxyShapePathStr + ',/Scope1'
@@ -396,6 +408,10 @@ class EditAsMayaTestCase(unittest.TestCase):
         # Material cannot be edited as Maya: it explicitly disables this
         # capability.
         self.assertFalse(mayaUsd.lib.PrimUpdaterManager.canEditAsMaya(proxyShapePathStr + ',/Material1'))
+
+        # Instance proxies cannot be edited as Maya: it explicitly disables this
+        # capability.
+        self.assertFalse(mayaUsd.lib.PrimUpdaterManager.canEditAsMaya(proxyShapePathStr + ',/Instanced/Proto/Mesh'))
 
     def testSessionLayer(self):
         '''Verify that the edit gets on the sessionLayer instead of the editTarget layer.'''

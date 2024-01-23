@@ -21,27 +21,32 @@ from maya import OpenMaya as OM
 from maya import cmds
 from maya.app.general import mayaMixin
 
-from PySide2 import QtCore
+try:
+    from PySide2 import QtCore
+except:
+    from PySide6 import QtCore
+
 try:
     # Maya 2020 and later use Qt/PySide2 5.12.5, where QStringListModel is
     # exported with QtCore, which is also where it lives in C++.
-    from PySide2.QtCore import QStringListModel
+    try:
+        from PySide2.QtCore import QStringListModel
+    except:
+        from PySide6.QtCore import QStringListModel
 except ImportError:
     # Maya 2019 and earlier use Qt 5.6.1 and PySide2 2.0.0-alpha, where
     # QStringListModel was incorrectly exported with QtGui.
     # See this bug for more detail:
     # https://bugreports.qt.io/browse/PYSIDE-614
-    from PySide2.QtGui import QStringListModel
-from PySide2.QtWidgets import QAbstractItemView
-from PySide2.QtWidgets import QCheckBox
-from PySide2.QtWidgets import QComboBox
-from PySide2.QtWidgets import QLabel
-from PySide2.QtWidgets import QListView
-from PySide2.QtWidgets import QPushButton
-from PySide2.QtWidgets import QStyledItemDelegate
-from PySide2.QtWidgets import QTableView
-from PySide2.QtWidgets import QVBoxLayout
-from PySide2.QtWidgets import QWidget
+    try:
+        from PySide2.QtGui import QStringListModel
+    except:
+        from PySide6.QtGui import QStringListModel
+
+try:
+    from PySide2.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QListView, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
+except:
+    from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QListView, QPushButton, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
 
 import json
 
@@ -209,6 +214,9 @@ class ExportedAttribute(object):
                 self._usdAttrType == other._usdAttrType and
                 self._usdAttrName == other._usdAttrName)
 
+    def __hash__(self):
+        return hash((self._mayaAttrName, self._usdAttrType, self._usdAttrName))
+
     @property
     def mayaAttrName(self):
         return self._mayaAttrName
@@ -335,8 +343,7 @@ class ExportedAttribute(object):
         exportedAttrs = ExportedAttribute.GetExportedAttributesFromNode(nodeName)
 
         # Filter out the attrs whose names are in mayaAttrNames.
-        exportedAttrs = filter(
-            lambda x: x.mayaAttrName not in mayaAttrNames, exportedAttrs)
+        exportedAttrs = [x for x in exportedAttrs if x.mayaAttrName not in mayaAttrNames]
 
         ExportedAttribute._WriteExportedAttributesToNode(nodeName, exportedAttrs)
 

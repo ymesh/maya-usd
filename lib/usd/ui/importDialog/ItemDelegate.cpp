@@ -85,7 +85,11 @@ void ItemDelegate::paint(
     // 	painter->drawRect(QRect(0, option.rect.y(), option.rect.right(), option.rect.bottom()));
     // 	painter->restore();
 
-    ParentClass::paint(painter, option, index);
+    QStyleOptionViewItem adjustedOption(option);
+    adjustedOption.decorationPosition = QStyleOptionViewItem::Right;
+    adjustedOption.decorationAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+
+    ParentClass::paint(painter, adjustedOption, index);
 }
 
 void ItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const
@@ -252,7 +256,13 @@ QLayout* VariantsEditorWidget::createVariantSet(
     QComboBox* cb = new QComboBox;
 
     ItemDelegate* id = const_cast<ItemDelegate*>(itemDelegate);
-#if QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    connect(
+        cb,
+        static_cast<void (QComboBox::*)(const QString&)>(&QComboBox::textActivated),
+        id,
+        [this, id] { id->commitVariantSelection(this); });
+#elif QT_VERSION >= QT_VERSION_CHECK(5, 7, 0)
     connect(cb, QOverload<const QString&>::of(&QComboBox::activated), id, [this, id] {
         id->commitVariantSelection(this);
     });

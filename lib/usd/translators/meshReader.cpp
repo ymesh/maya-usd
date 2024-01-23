@@ -79,10 +79,17 @@ bool MayaUsdPrimReaderMesh::Read(UsdMayaPrimReaderContext& context)
 
     auto    parentNode = context.GetMayaNode(prim.GetPath().GetParentPath(), true);
     MObject transformObj;
-    bool    retStatus = UsdMayaTranslatorUtil::CreateTransformNode(
-        prim, parentNode, _GetArgs(), &context, &status, &transformObj);
-    if (!retStatus) {
-        return false;
+    // Note: in prototype instances, we don't need an intermediary transform node.
+    //       See: EMSUSD-80
+    const bool inPrototype = UsdPrim::IsPathInPrototype(prim.GetPath());
+    if (inPrototype) {
+        transformObj = parentNode;
+    } else {
+        bool retStatus = UsdMayaTranslatorUtil::CreateTransformNode(
+            prim, parentNode, _GetArgs(), &context, &status, &transformObj);
+        if (!retStatus) {
+            return false;
+        }
     }
 
     // get the USD stage node from the context's registry
@@ -126,17 +133,16 @@ bool MayaUsdPrimReaderMesh::Read(UsdMayaPrimReaderContext& context)
 
     // assign primvars to mesh
     UsdMayaMeshReadUtils::assignPrimvarsToMesh(
-        mesh, meshRead.meshObject(), _GetArgs().GetExcludePrimvarNames());
+        mesh,
+        meshRead.meshObject(),
+        _GetArgs().GetExcludePrimvarNames(),
+        _GetArgs().GetExcludePrimvarNamespaces());
 
     // assign invisible faces
     UsdMayaMeshReadUtils::assignInvisibleFaces(mesh, meshRead.meshObject());
 
-#if MAYA_API_VERSION >= 20220000
-
     // Read componentTags
     UsdMayaMeshReadUtils::createComponentTags(mesh, meshRead.meshObject());
-
-#endif
 
     // assign material
     assignMaterial(mesh, _GetArgs(), meshRead.meshObject(), &context);

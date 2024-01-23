@@ -28,6 +28,7 @@
 #include <mayaUsd/render/vp2ShaderFragments/shaderFragments.h>
 #include <mayaUsd/utils/hash.h>
 
+#include <pxr/base/tf/envSetting.h>
 #include <pxr/imaging/hd/bprim.h>
 #include <pxr/imaging/hd/camera.h>
 #include <pxr/imaging/hd/instancer.h>
@@ -44,7 +45,13 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+TF_DEFINE_ENV_SETTING(
+    MAYAUSD_VP2_USE_ONLY_PREVIEWSURFACE,
+    false,
+    "This env tells the viewport to only draw glslfx UsdPreviewSurface shading networks.");
+
 namespace {
+
 /*! \brief List of supported Rprims by VP2 render delegate
  */
 inline const TfTokenVector& _SupportedRprimTypes()
@@ -558,14 +565,8 @@ const HdVP2BBoxGeom* sSharedBBoxGeom
 
 } // namespace
 
-const int HdVP2RenderDelegate::sProfilerCategory = MProfiler::addCategory(
-#if MAYA_API_VERSION >= 20190000
-    "HdVP2RenderDelegate",
-    "HdVP2RenderDelegate"
-#else
-    "HdVP2RenderDelegate"
-#endif
-);
+const int HdVP2RenderDelegate::sProfilerCategory
+    = MProfiler::addCategory("HdVP2RenderDelegate", "HdVP2RenderDelegate");
 
 std::mutex                  HdVP2RenderDelegate::_renderDelegateMutex;
 std::atomic_int             HdVP2RenderDelegate::_renderDelegateCounter;
@@ -930,7 +931,8 @@ TfTokenVector HdVP2RenderDelegate::GetShaderSourceTypes() const
 {
 #ifdef WANT_MATERIALX_BUILD
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
-    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
+    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile
+        && !TfGetEnvSetting(MAYAUSD_VP2_USE_ONLY_PREVIEWSURFACE)) {
         return { HdVP2Tokens->mtlx, HdVP2Tokens->glslfx };
     } else {
         return { HdVP2Tokens->glslfx };
@@ -939,30 +941,13 @@ TfTokenVector HdVP2RenderDelegate::GetShaderSourceTypes() const
     return { HdVP2Tokens->glslfx };
 #endif
 }
-
-#if PXR_VERSION < 2105
-
-TfToken HdVP2RenderDelegate::GetMaterialNetworkSelector() const
-{
-#ifdef WANT_MATERIALX_BUILD
-    MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
-    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
-        return HdVP2Tokens->mtlx;
-    } else {
-        return HdVP2Tokens->glslfx;
-    }
-#else
-    return HdVP2Tokens->glslfx;
-#endif
-}
-
-#else // PXR_VERSION < 2105
 
 TfTokenVector HdVP2RenderDelegate::GetMaterialRenderContexts() const
 {
 #ifdef WANT_MATERIALX_BUILD
     MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
-    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile) {
+    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile
+        && !TfGetEnvSetting(MAYAUSD_VP2_USE_ONLY_PREVIEWSURFACE)) {
         return { HdVP2Tokens->mtlx, HdVP2Tokens->glslfx };
     } else {
         return { HdVP2Tokens->glslfx };
@@ -971,7 +956,6 @@ TfTokenVector HdVP2RenderDelegate::GetMaterialRenderContexts() const
     return { HdVP2Tokens->glslfx };
 #endif
 }
-#endif // PXR_VERSION < 2105
 
 /*! \brief  Returns a node name made as a child of delegate's id.
  */

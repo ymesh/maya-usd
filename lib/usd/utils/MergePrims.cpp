@@ -20,6 +20,7 @@
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/usd/sdf/copyUtils.h>
 #include <pxr/usd/usd/editContext.h>
+#include <pxr/usd/usd/variantSets.h>
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 
 #include <algorithm>
@@ -27,7 +28,7 @@
 
 namespace MayaUsdUtils {
 
-PXR_NAMESPACE_USING_DIRECTIVE;
+PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 
@@ -383,15 +384,17 @@ bool isDataAtPathsModified(
 {
     DiffResult quickDiff = DiffResult::Same;
 
-    UsdPrim srcPrim = ctx.srcStage->GetPrimAtPath(src.path.GetPrimPath());
-    UsdPrim dstPrim = ctx.dstStage->GetPrimAtPath(dst.path.GetPrimPath());
+    UsdPrim srcPrim
+        = ctx.srcStage->GetPrimAtPath(src.path.GetPrimPath().StripAllVariantSelections());
+    UsdPrim dstPrim
+        = ctx.dstStage->GetPrimAtPath(dst.path.GetPrimPath().StripAllVariantSelections());
     if (!srcPrim.IsValid() || !dstPrim.IsValid()) {
         printInvalidField(ctx, src, "prim", srcPrim.IsValid(), dstPrim.IsValid());
         return srcPrim.IsValid() != dstPrim.IsValid();
     }
 
     if (src.path.ContainsPropertyElements()) {
-        const UsdProperty srcProp = srcPrim.GetPropertyAtPath(src.path);
+        const UsdProperty srcProp = srcPrim.GetPropertyAtPath(src.path.StripAllVariantSelections());
 
         // Note: we only return early for transform property if the local transform has
         //       not changed. The reason is that when the transform has changed, we *do*
@@ -411,7 +414,7 @@ bool isDataAtPathsModified(
             }
         }
 
-        const UsdProperty dstProp = dstPrim.GetPropertyAtPath(dst.path);
+        const UsdProperty dstProp = dstPrim.GetPropertyAtPath(dst.path.StripAllVariantSelections());
         if (!srcProp.IsValid() || !dstProp.IsValid()) {
             printInvalidField(ctx, src, "prop", srcProp.IsValid(), dstProp.IsValid());
             return srcProp.IsValid() != dstProp.IsValid();
@@ -932,12 +935,54 @@ bool mergeDiffPrims(
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-/// Create any missing parents as "over". Parents may be missing because we are targeting a
-/// different layer than where the destination prim is authored. The SdfCopySpec function does not
-/// automatically create the missing parent, unlike other functions like UsdStage::CreatePrim.
-void createMissingParents(const SdfLayerRefPtr& dstLayer, const SdfPath& dstPath)
+// Augment a USD SdfPath with the variants selections currently active at all levels.
+std::pair<SdfPath, UsdEditTarget> augmentPathWithVariants(
+    const UsdStageRefPtr& stage,
+    const SdfLayerRefPtr& layer,
+    const SdfPath&        path)
 {
-    SdfJustCreatePrimInLayer(dstLayer, dstPath.GetParentPath());
+    SdfPath       pathWithVariants;
+    UsdEditTarget target = stage->GetEditTarget();
+
+    SdfPathVector rootToLeaf;
+    path.GetPrefixes(&rootToLeaf);
+    for (const SdfPath& prefix : rootToLeaf) {
+        if (pathWithVariants.IsEmpty()) {
+            pathWithVariants = prefix;
+        } else {
+            pathWithVariants = pathWithVariants.AppendChild(prefix.GetNameToken());
+        }
+
+        const UsdPrim prim = stage->GetPrimAtPath(prefix.StripAllVariantSelections());
+        if (prim.IsValid()) {
+            UsdVariantSets variants = prim.GetVariantSets();
+            for (const std::string& setName : variants.GetNames()) {
+                UsdVariantSet varSet = variants.GetVariantSet(setName);
+                pathWithVariants = pathWithVariants.AppendVariantSelection(
+                    varSet.GetName(), varSet.GetVariantSelection());
+            }
+        }
+    }
+
+    // Note: any trailing variant selection must be used to create a UsdEditContext,
+    //       it must not be part of the destination path, otherwise SdfCopySpec()
+    //       will fail: it does not handle destination paths ending with a variant
+    //       selection correctly.
+    //
+    //       If SdfCopySpec() is called with a path ending with a variant selection,
+    //       it assumes that it is inside its own iterations, about to add the
+    //       selection name even though what is about to be added is a prim. So
+    //       The GetParentPath() called in CreateSpec() in usd/sdf/childrenUtils.cpp
+    //       around line 108 will strip the variant selection instead of stripping
+    //       the prim (including variant selection). That will end-up causing an
+    //       error when trying to create a field in SdfData::_GetOrCreateFieldValue
+    //       in usd\sdf\data.cpp around line 260.
+    if (pathWithVariants.IsPrimVariantSelectionPath()) {
+        target = target.ForLocalDirectVariant(layer, pathWithVariants);
+        pathWithVariants = pathWithVariants.GetPrimPath();
+    }
+
+    return std::make_pair(pathWithVariants, target);
 }
 
 } // namespace
@@ -957,7 +1002,22 @@ bool mergePrims(
     const SdfPath&           dstPath,
     const MergePrimsOptions& options)
 {
-    createMissingParents(dstLayer, dstPath);
+    SdfPath       augmentedDstPath = dstPath;
+    UsdEditTarget target = dstStage->GetEditTarget();
+
+    if (!options.ignoreVariants) {
+        const auto pathAndTarget = augmentPathWithVariants(dstStage, dstLayer, dstPath);
+        augmentedDstPath = pathAndTarget.first;
+        target = pathAndTarget.second;
+    }
+
+    UsdEditContext editCtx(dstStage, target);
+
+    /// Create any missing prim in the dst hierarchy as "over". Prims may be missing because we are
+    /// targeting a different layer than where the destination prim is authored. The SdfCopySpec
+    /// function does not automatically create the missing parent, unlike other functions like
+    /// UsdStage::CreatePrim.
+    SdfJustCreatePrimInLayer(dstLayer, augmentedDstPath);
 
     if (options.ignoreUpperLayerOpinions) {
         auto           tempStage = UsdStage::CreateInMemory();
@@ -965,15 +1025,16 @@ bool mergePrims(
 
         tempLayer->TransferContent(dstLayer);
 
-        const bool success
-            = mergeDiffPrims(options, srcStage, srcLayer, srcPath, tempStage, tempLayer, dstPath);
+        const bool success = mergeDiffPrims(
+            options, srcStage, srcLayer, srcPath, tempStage, tempLayer, augmentedDstPath);
 
         if (success)
             dstLayer->TransferContent(tempLayer);
 
         return success;
     } else {
-        return mergeDiffPrims(options, srcStage, srcLayer, srcPath, dstStage, dstLayer, dstPath);
+        return mergeDiffPrims(
+            options, srcStage, srcLayer, srcPath, dstStage, dstLayer, augmentedDstPath);
     }
 }
 

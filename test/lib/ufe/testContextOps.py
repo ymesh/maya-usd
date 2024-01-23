@@ -22,6 +22,7 @@ import usdUtils
 import ufeUtils
 import testUtils
 import mayaUsd
+import mayaUsd_createStageWithNewLayer
 
 from pxr import UsdGeom
 from pxr import UsdShade
@@ -32,6 +33,8 @@ from pxr import Vt
 from maya import cmds
 from maya import standalone
 from maya.internal.ufeSupport import ufeCmdWrapper as ufeCmd
+
+import maya.api.OpenMaya as om
 
 import ufe
 
@@ -149,6 +152,76 @@ class ContextOpsTestCase(unittest.TestCase):
             if c.checked:
                 self.assertEqual(c.item, 'Ball_8')
 
+    def testGetBulkItems(self):
+        # The top-level context items are:
+        #   Bulk Menu Header
+        #   -----------------
+        #   Make Visible
+        #   Make Invisible
+        #   Activate Prim
+        #   Deactivate Prim
+        #   Mark as Instanceable
+        #   Unmark as Instanceable
+        #   -----------------
+        #   Assign New Material
+        #   Assign Existing Material
+        #   Unassign Material
+
+        # The default setup selects a single prim (Ball_35) and creates context item
+        # for it. We want multiple selection to make a bulk context.
+        for ball in ['Ball_32', 'Ball_33', 'Ball_34']:
+            ballPath = ufe.Path([
+                mayaUtils.createUfePathSegment("|transform1|proxyShape1"), 
+                usdUtils.createUfePathSegment("/Room_set/Props/%s" % ball)])
+            ballItem = ufe.Hierarchy.createItem(ballPath)
+            ufe.GlobalSelection.get().append(ballItem)
+
+        # Re-create a ContextOps interface for it.
+        # Since the context item is in the selection, we get a bulk context.
+        self.contextOps = ufe.ContextOps.contextOps(self.ball35Item)
+
+        contextItems = self.contextOps.getItems([])
+        contextItemStrings = [c.item for c in contextItems]
+
+        # Special header at top of menu.
+        self.assertIn('BulkEdit', contextItemStrings)
+
+        # Not supported in bulk (from UsdContextOps).
+        self.assertNotIn('Load', contextItemStrings)
+        self.assertNotIn('Load with Descendants', contextItemStrings)
+        self.assertNotIn('Unload', contextItemStrings)
+        self.assertNotIn('Variant Sets', contextItemStrings)
+        self.assertNotIn('Add New Prim', contextItemStrings)
+
+        # Two actions in bulk, instead of toggle.
+        self.assertIn('Make Visible', contextItemStrings)
+        self.assertIn('Make Invisible', contextItemStrings)
+        self.assertNotIn('Toggle Visibility', contextItemStrings)
+
+        self.assertIn('Activate Prim', contextItemStrings)
+        self.assertIn('Deactivate Prim', contextItemStrings)
+        self.assertNotIn('Toggle Active State', contextItemStrings)
+
+        self.assertIn('Mark as Instanceable', contextItemStrings)
+        self.assertIn('Unmark as Instanceable', contextItemStrings)
+        self.assertNotIn('Toggle Instanceable State', contextItemStrings)
+
+        if ufeUtils.ufeFeatureSetVersion() >= 4:
+            self.assertIn('Assign New Material', contextItemStrings)
+            # Because there are no materials in the scene we don't have this item.
+            self.assertNotIn('Assign Existing Material', contextItemStrings)
+            self.assertIn('Unassign Material', contextItemStrings)
+
+        # Not supported in bulk (from MayaUsdContextOps).
+        self.assertNotIn('Assign Material to Selection', contextItemStrings)
+        self.assertNotIn('USD Layer Editor', contextItemStrings)
+        self.assertNotIn('Edit As Maya Data', contextItemStrings)
+        self.assertNotIn('Duplicate As Maya Data', contextItemStrings)
+        self.assertNotIn('Add Maya Reference', contextItemStrings)
+        self.assertNotIn('AddReferenceOrPayload', contextItemStrings)
+        self.assertNotIn('ClearAllReferencesOrPayloads', contextItemStrings)
+        self.assertNotIn('ClearAllReferencesOrPayloads', contextItemStrings)
+
     def testSwitchVariantInLayer(self):
         """
         Test switching variant in layers: stronger, weaker, session.
@@ -205,7 +278,7 @@ class ContextOpsTestCase(unittest.TestCase):
 
         # Verify we cannot switch variant in a weaker layer.
         self.assertRaises(RuntimeError, lambda: self.contextOps.doOpCmd(
-            ['Variant Sets', 'shadingVariant', 'Ball_8']))
+            ['Variant Sets', 'shadingVariant', 'Ball_8']).execute())
 
         # Verify the variant has not switched.
         self.assertEqual(shadingVariant(), 'Cue')
@@ -308,11 +381,133 @@ class ContextOpsTestCase(unittest.TestCase):
 
         cmds.undo()
 
+    def testDoBulkOp(self):
+        # The default setup selects a single prim (Ball_35) and creates context item
+        # for it. We want multiple selection to make a bulk context.
+        ballItems = {}
+        ballPrims = {}
+        for ball in [32, 33, 34]:
+            ballPath = ufe.Path([
+                mayaUtils.createUfePathSegment("|transform1|proxyShape1"), 
+                usdUtils.createUfePathSegment("/Room_set/Props/Ball_%d" % ball)])
+            ballItem = ufe.Hierarchy.createItem(ballPath)
+            ballPrim = usdUtils.getPrimFromSceneItem(ballItem)
+            ufe.GlobalSelection.get().append(ballItem)
+            ballItems[ball] = ballItem
+            ballPrims[ball] = ballPrim
+        ballItems[35] = self.ball35Item
+        ballPrims[35] = self.ball35Prim
+
+        # Re-create a ContextOps interface for it.
+        # Since the context item is in the selection, we get a bulk context.
+        self.contextOps = ufe.ContextOps.contextOps(self.ball35Item)
+
+        # Change visility, undo/redo.
+        cmd = self.contextOps.doOpCmd(['Make Invisible'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        # Get visibility attr for each selected ball.
+        ballVisibility = {}
+        for ball in ballItems:
+            attrs = ufe.Attributes.attributes(ballItems[ball])
+            self.assertIsNotNone(attrs)
+            visibility = attrs.attribute(UsdGeom.Tokens.visibility)
+            self.assertIsNotNone(visibility)
+            ballVisibility[ball] = visibility
+
+        def verifyBulkVisibility(ballVisibility, visValue):
+            for ballVis in ballVisibility.values():
+                self.assertEqual(ballVis.get(), visValue)
+
+        # Initially all selected balls are inherited visibility.
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.inherited)
+        ufeCmd.execute(cmd)
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.invisible)
+        cmds.undo()
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.inherited)
+        cmds.redo()
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.invisible)
+
+        # Make Visible
+        cmd = self.contextOps.doOpCmd(['Make Visible'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        # We left all the balls invisible from command above.
+        ufeCmd.execute(cmd)
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.inherited)
+        cmds.undo()
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.invisible)
+        cmds.redo()
+        verifyBulkVisibility(ballVisibility, UsdGeom.Tokens.inherited)
+
+        # Deactivate Prim
+        cmd = self.contextOps.doOpCmd(['Deactivate Prim'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        def verifyBulkPrimState(ballPrims, state):
+            for ballPrim in ballPrims.values():
+                self.assertEqual(ballPrim.IsActive(), state)
+
+        # Initially, all selected balls should be Active.
+        verifyBulkPrimState(ballPrims, True)
+        ufeCmd.execute(cmd)
+        verifyBulkPrimState(ballPrims, False)
+        cmds.undo()
+        verifyBulkPrimState(ballPrims, True)
+        cmds.redo()
+        verifyBulkPrimState(ballPrims, False)
+
+        # Activate Prim
+        cmd = self.contextOps.doOpCmd(['Activate Prim'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        # We left all the balls deactivated from command above.
+        ufeCmd.execute(cmd)
+        verifyBulkPrimState(ballPrims, True)
+        cmds.undo()
+        verifyBulkPrimState(ballPrims, False)
+        cmds.redo()
+        verifyBulkPrimState(ballPrims, True)
+
+        # Mark as Instanceable
+        cmd = self.contextOps.doOpCmd(['Mark as Instanceable'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        def verifyBulkPrimInstState(ballPrims, state):
+            for ballPrim in ballPrims.values():
+                self.assertEqual(ballPrim.IsInstanceable(), state)
+
+        # Initially, all selected balls should be non-Instanceable.
+        verifyBulkPrimInstState(ballPrims, False)
+        ufeCmd.execute(cmd)
+        verifyBulkPrimInstState(ballPrims, True)
+        cmds.undo()
+        verifyBulkPrimInstState(ballPrims, False)
+        cmds.redo()
+        verifyBulkPrimInstState(ballPrims, True)
+
+        # Unmark as Instanceable
+        cmd = self.contextOps.doOpCmd(['Unmark as Instanceable'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        # We left all the balls instanceable from command above.
+        ufeCmd.execute(cmd)
+        verifyBulkPrimInstState(ballPrims, False)
+        cmds.undo()
+        verifyBulkPrimInstState(ballPrims, True)
+        cmds.redo()
+        verifyBulkPrimInstState(ballPrims, False)
+
     def testAddNewPrim(self):
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create our UFE notification observer
@@ -416,7 +611,6 @@ class ContextOpsTestCase(unittest.TestCase):
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create our UFE notification observer
@@ -508,13 +702,11 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertEqual(ufeObs.nbAddNotif(), 1)
         self.assertEqual(ufeObs.nbDeleteNotif(), 1)
 
-    @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
     def testMaterialBinding(self):
         """This test builds a material using only Ufe pre-4.10 capabilities."""
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -555,8 +747,8 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
 
         contextOps = ufe.ContextOps.contextOps(capsuleItem)
-        cmd = contextOps.doOpCmd(['Bind Material', '/Material1'])
-        self.assertTrue(cmd)
+        cmd = contextOps.doOpCmd(['Assign Material', '/Material1'])
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
         self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
         capsuleBindAPI = UsdShade.MaterialBindingAPI(capsulePrim)
@@ -568,8 +760,8 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
         self.assertEqual(capsuleBindAPI.GetDirectBinding().GetMaterialPath(), Sdf.Path("/Material1"))
 
-        cmd = contextOps.doOpCmd(['Unbind Material'])
-        self.assertTrue(cmd)
+        cmd = contextOps.doOpCmd(['Unassign Material'])
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
 
         self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
@@ -578,14 +770,12 @@ class ContextOpsTestCase(unittest.TestCase):
         cmds.redo()
         self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Test only available in UFE preview version 0.4.10 and greater')
-    @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testMaterialCreationForSingleObject(self):
         """This test builds a material using contextOps capabilities."""
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -692,14 +882,12 @@ class ContextOpsTestCase(unittest.TestCase):
             ufeCmd.execute(cmdSS)
             checkMaterial(self, rootHier, 3, 1, 0, "standard_surface", "mtlx", "out", "/test_scope")
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Test only available in UFE preview version 0.4.10 and greater')
-    @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testMaterialCreationForMultipleObjects(self):
         """This test creates a single shared material for multiple objects using contextOps capabilities."""
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -731,12 +919,13 @@ class ContextOpsTestCase(unittest.TestCase):
         spherePrim = usdUtils.getPrimFromSceneItem(sphereItem)
         self.assertFalse(spherePrim.HasAPI(UsdShade.MaterialBindingAPI))
 
-        # Select two of our three objects.
+        # Select all three objects.
+        ufe.GlobalSelection.get().append(capsuleItem)
         ufe.GlobalSelection.get().append(cubeItem)
         ufe.GlobalSelection.get().append(sphereItem)
 
-        # Apply the new material on the unselected object. This object should also receive the new material binding,
-        # in addition to the two selected objects.
+        # Apply the new material one of the selected objects, so we are operating in
+        # bulk mode. All the selected objects should receive the new material binding.
         contextOps = ufe.ContextOps.contextOps(capsuleItem)
 
         # Create a new material and apply it to our cube, sphere and capsule objects.
@@ -804,6 +993,7 @@ class ContextOpsTestCase(unittest.TestCase):
         checkMaterial(self, rootHier, 4, 1, 1, 0, "UsdPreviewSurface", "", "surface")
 
         # Re-select our multiple objects so that we can repeat the test with another material.
+        ufe.GlobalSelection.get().append(capsuleItem)
         ufe.GlobalSelection.get().append(cubeItem)
         ufe.GlobalSelection.get().append(sphereItem)
 
@@ -840,8 +1030,285 @@ class ContextOpsTestCase(unittest.TestCase):
             ufeCmd.execute(cmdSS)
             checkMaterial(self, rootHier, 5, 1, 1, 0, "standard_surface", "mtlx", "out", "/test_scope")
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Test only available in UFE preview version 0.4.10 and greater')
-    @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
+        # Unassign Material works on bulk
+        cmd = contextOps.doOpCmd(['Unassign Material'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+
+        self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+        capsuleBindAPI = UsdShade.MaterialBindingAPI(capsulePrim)
+        self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
+        self.assertTrue(cubePrim.HasAPI(UsdShade.MaterialBindingAPI))
+        cubeBindAPI = UsdShade.MaterialBindingAPI(cubePrim)
+        self.assertTrue(cubeBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
+        self.assertTrue(spherePrim.HasAPI(UsdShade.MaterialBindingAPI))
+        sphereBindAPI = UsdShade.MaterialBindingAPI(spherePrim)
+        self.assertTrue(sphereBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testMaterialCreationScopeName(self):
+        """This test verifies that materials get created in the correct scope."""
+        cmds.file(new=True, force=True)
+
+        # Helper function to create a new proxy shape.
+        def createProxyShape():
+            proxyShapePathString = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+            proxyShapePath = ufe.PathString.path(proxyShapePathString)
+            return ufe.Hierarchy.createItem(proxyShapePath)
+
+        # Helper function to add a named new prim to a proxy shape.
+        def addNewPrim(proxyShape, primType, name = None):
+            ufe.ContextOps.contextOps(proxyShape).doOp(["Add New Prim", primType])
+            primItem = ufe.Hierarchy.hierarchy(proxyShape).children()[-1]
+            assert primItem
+
+            if name != None:
+                primItem = ufe.SceneItemOps.sceneItemOps(primItem).renameItem(ufe.PathComponent(name))
+                assert primItem
+                assert ufe.PathString.string(primItem.path()) == ufe.PathString.string(proxyShape.path()) + ",/" + name
+            
+            return primItem
+
+        # Helper function that adds a sphere prim to a proxy shape and assigns it a new material.
+        def createMaterial(proxyShape):
+            ufe.ContextOps.contextOps(proxyShape).doOp(['Add New Prim', 'Sphere'])
+            sphereItem = ufe.Hierarchy.hierarchy(proxyShape).children()[-1]
+            ufe.ContextOps.contextOps(sphereItem).doOp(['Assign New Material', 'USD', 'UsdPreviewSurface'])
+
+        # Default names.
+        materialsScopeName = "mtl"
+        materialName = "UsdPreviewSurface1"
+
+        # Case 1: Empty stage.
+        # The new material should get created in a new scope named "mtl".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 2: A scope named "mtl" exists.
+        # The new material should get created in the already existing scope named "mtl".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Scope", materialsScopeName)
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 3: A scope named "mtl1" exists.
+        # The new material should get created in a new scope named "mtl".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Scope", materialsScopeName + "1")
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 4: A non-scope object named "mtl" exists.
+        # The new material should get created in a new scope named "mtl1".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Def", materialsScopeName)
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "1/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 5: A non-scope object named "mtl" exists and a scope named "mtl1" exists.
+        # The new material should get created in the existing scope named "mtl1".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Def", materialsScopeName)
+        addNewPrim(proxyShape, "Scope", materialsScopeName +"1")
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "1/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 6: A non-scope object named "mtl" exists and a scope named "mtl2" exists.
+        # The new material should get created in a new scope named "mtl3".
+        # This follows normal Maya naming standard where it increments the largest numerical
+        # suffix (even if there are gaps).
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Def", materialsScopeName)
+        addNewPrim(proxyShape, "Scope", materialsScopeName + "2")
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "3/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 7: A non-scope object named "mtl" exists and a scope named "mtlBingBong" exists.
+        # The new material should get created in a new scope named "mtl1".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Def", materialsScopeName)
+        addNewPrim(proxyShape, "Scope", materialsScopeName + "BingBong")
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "1/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 8: A non-scope object named "mtl" exists and multiple scopes starting in "mtl" exist.
+        # The new material should get created in a scope named "mtl1".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        addNewPrim(proxyShape, "Def", materialsScopeName)
+        
+        scopeNamePostfixes = ["BingBong", "XingXong", "Arnold", "1337"]
+        for scopeNamePostfix in scopeNamePostfixes:
+            addNewPrim(proxyShape, "Scope", materialsScopeName + scopeNamePostfix)
+
+        # Again here follow the normal Maya naming standard which increments the largest
+        # numerical suffix (1337).
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "1338/" + materialName
+        print(expectedPath)
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 9: Multiple non-scope object named "mtl", "mtl1", ..., "mtl3" exists and multiple 
+        #         scopes starting in "mtl" exist. An object named "mtl4" does not exist.
+        # The new material should get created in a new scope named "mtl4".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        
+        defNamePostfixes = ["", "1", "2", "3"]
+        for defNamePostfix in defNamePostfixes:
+            addNewPrim(proxyShape, "Def", materialsScopeName + defNamePostfix)
+
+        scopeNamePostfixes = ["BingBong", "XingXong", "Arnold", "1337"]
+        for scopeNamePostfix in scopeNamePostfixes:
+            addNewPrim(proxyShape, "Scope", materialsScopeName + scopeNamePostfix)
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "1338/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 10: Multiple non-scope object named "mtl", "mtl1", ..., "mtl3" exists and multiple 
+        #          scopes starting in "mtl" exist. A scope named "mtl4" exists.
+        # The new material should get created in the existing scope named "mtl4".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+        
+        defNamePostfixes = ["", "1", "2", "3"]
+        for defNamePostfix in defNamePostfixes:
+            addNewPrim(proxyShape, "Def", materialsScopeName + defNamePostfix)
+
+        scopeNamePostfixes = ["BingBong", "XingXong", "Arnold", "1337", "4", "5"]
+        for scopeNamePostfix in scopeNamePostfixes:
+            addNewPrim(proxyShape, "Scope", materialsScopeName + scopeNamePostfix)
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "4/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 11: A material got created in a scope called "mtl". Afterwards  the scope was renamed
+        #          to "mtl4". Now a new material gets created.
+        # The new material should get created in a new scope named "mtl".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        scopeItem = ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath).pop())
+        scopeItem = ufe.SceneItemOps.sceneItemOps(scopeItem).renameItem(ufe.PathComponent(materialsScopeName + "4"))
+        assert scopeItem
+        assert ufe.PathString.string(scopeItem.path()) == proxyShapePath + ",/" + materialsScopeName + "4"
+        assert not ufe.Hierarchy.createItem(ufe.PathString.path(proxyShapePath + ",/" + materialsScopeName))
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        # Case 12: A material got created in a scope called "mtl". Afterwards  the scope was renamed
+        #          to "mtlBingBong". Now a new material gets created.
+        # The new material should get created in a new scope named "mtl".
+        proxyShape = createProxyShape()
+        proxyShapePath = ufe.PathString.string(proxyShape.path())
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+        scopeItem = ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath).pop())
+        scopeItem = ufe.SceneItemOps.sceneItemOps(scopeItem).renameItem(ufe.PathComponent(materialsScopeName + "BingBong"))
+        assert scopeItem
+        assert ufe.PathString.string(scopeItem.path()) == proxyShapePath + ",/" + materialsScopeName + "BingBong"
+        assert not ufe.Hierarchy.createItem(ufe.PathString.path(proxyShapePath + ",/" + materialsScopeName))
+
+        createMaterial(proxyShape)
+        expectedPath = proxyShapePath + ",/" + materialsScopeName + "/" + materialName
+        assert ufe.Hierarchy.createItem(ufe.PathString.path(expectedPath))
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testAddMaterialToScope(self):
+        """This test adds a new material to the material scope."""
+        cmds.file(new=True, force=True)
+
+        # Create a proxy shape with empty stage to start with.
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        # Create a ContextOps interface for the proxy shape.
+        proxyPathSegment = mayaUtils.createUfePathSegment(proxyShape)
+        proxyShapePath = ufe.Path([proxyPathSegment])
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        contextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+
+        # Create multiple objects to test with. 
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Capsule'])
+        ufeCmd.execute(cmd)
+
+        rootHier = ufe.Hierarchy.hierarchy(proxyShapeItem)
+        self.assertTrue(rootHier.hasChildren())
+        self.assertEqual(len(rootHier.children()), 1)
+
+        capsuleItem = rootHier.children()[0]
+
+        capsulePrim = usdUtils.getPrimFromSceneItem(capsuleItem)
+        self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+
+        contextOps = ufe.ContextOps.contextOps(capsuleItem)
+
+        # Create a new material and apply it to our cube, sphere and capsule objects.
+        cmdPS = contextOps.doOpCmd(['Assign New Material', 'USD', 'UsdPreviewSurface'])
+        self.assertIsNotNone(cmdPS)
+        ufeCmd.execute(cmdPS)
+
+        scopeItem = rootHier.children()[-1]
+        scopeHier = ufe.Hierarchy.hierarchy(scopeItem)
+        self.assertTrue(scopeHier.hasChildren())
+        self.assertEqual(len(scopeHier.children()), 1)
+
+        scopeOps = ufe.ContextOps.contextOps(scopeItem)
+        cmdAddSS = scopeOps.doOpCmd(['Add New Material', 'MaterialX', 'ND_standard_surface_surfaceshader'])
+        ufeCmd.execute(cmdAddSS)
+
+        # Should now be two materials in the scope.
+        self.assertEqual(len(scopeHier.children()), 2)
+
+        cmds.undo()
+
+        self.assertEqual(len(scopeHier.children()), 1)
+
+        cmds.redo()
+
+        self.assertEqual(len(scopeHier.children()), 2)
+
+        newMatItem = scopeHier.children()[-1]
+
+        connectionHandler = ufe.RunTimeMgr.instance().connectionHandler(newMatItem.runTimeId())
+        self.assertIsNotNone(connectionHandler)
+        connections = connectionHandler.sourceConnections(newMatItem)
+        self.assertIsNotNone(connectionHandler)
+        conns = connections.allConnections()
+        self.assertEqual(len(conns), 1)
+
+        mxConn = conns[0]
+        self.assertEqual(ufe.PathString.string(mxConn.src.path), "|stage1|stageShape1,/mtl/standard_surface1/standard_surface1")
+        self.assertEqual(mxConn.src.name, "outputs:out")
+        self.assertEqual(ufe.PathString.string(mxConn.dst.path), "|stage1|stageShape1,/mtl/standard_surface1")
+        self.assertEqual(mxConn.dst.name, "outputs:mtlx:surface")
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testMaterialBindingWithNodeDefHandler(self):
         """In this test we will go as far as possible towards creating and binding a working
            material using only Ufe and Maya commands (for full undo capabilities). It is locked
@@ -849,7 +1316,6 @@ class ContextOpsTestCase(unittest.TestCase):
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -879,7 +1345,7 @@ class ContextOpsTestCase(unittest.TestCase):
 
         self.assertTrue(shaderAttrs.hasAttribute("info:id"))
         self.assertEqual(shaderAttrs.attribute("info:id").get(), shaderName)
-        self.assertEqual(ufe.PathString.string(shaderItem.path()), "|stage1|stageShape1,/Material1/Red11")
+        self.assertEqual(ufe.PathString.string(shaderItem.path()), "|stage1|stageShape1,/Material1/Red1")
         materialHier = ufe.Hierarchy.hierarchy(materialItem)
         self.assertTrue(materialHier.hasChildren())
 
@@ -899,8 +1365,8 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
 
         contextOps = ufe.ContextOps.contextOps(capsuleItem)
-        cmd = contextOps.doOpCmd(['Bind Material', '/Material1'])
-        self.assertTrue(cmd)
+        cmd = contextOps.doOpCmd(['Assign Material', '/Material1'])
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
         self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
         capsuleBindAPI = UsdShade.MaterialBindingAPI(capsulePrim)
@@ -912,8 +1378,8 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
         self.assertEqual(capsuleBindAPI.GetDirectBinding().GetMaterialPath(), Sdf.Path("/Material1"))
 
-        cmd = contextOps.doOpCmd(['Unbind Material'])
-        self.assertTrue(cmd)
+        cmd = contextOps.doOpCmd(['Unassign Material'])
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
 
         self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
@@ -922,14 +1388,12 @@ class ContextOpsTestCase(unittest.TestCase):
         cmds.redo()
         self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4010', 'Test only available in UFE preview version 0.4.10 and greater')
-    @unittest.skipUnless(Usd.GetVersion() >= (0, 21, 8), 'Requires CanApplySchema from USD')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testMaterialBindingToSelection(self):
         """Exercising the bind to selection context menu option."""
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -965,7 +1429,7 @@ class ContextOpsTestCase(unittest.TestCase):
 
         contextOps = ufe.ContextOps.contextOps(rootHier.children()[2])
         cmd = contextOps.doOpCmd(['Assign Material to Selection',])
-        self.assertTrue(cmd)
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
         allHaveMaterial(self, [capsuleItem, sphereItem], "/Material1")
         cmds.undo()
@@ -976,7 +1440,7 @@ class ContextOpsTestCase(unittest.TestCase):
         # Test that undo restores previous material:
         contextOps = ufe.ContextOps.contextOps(rootHier.children()[3])
         cmd = contextOps.doOpCmd(['Assign Material to Selection',])
-        self.assertTrue(cmd)
+        self.assertIsNotNone(cmd)
         ufeCmd.execute(cmd)
         allHaveMaterial(self, [capsuleItem, sphereItem], "/Material2")
         cmds.undo()
@@ -988,7 +1452,6 @@ class ContextOpsTestCase(unittest.TestCase):
         cmds.file(new=True, force=True)
 
         # Create a proxy shape with empty stage to start with.
-        import mayaUsd_createStageWithNewLayer
         proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
 
         # Create a ContextOps interface for the proxy shape.
@@ -1022,7 +1485,7 @@ class ContextOpsTestCase(unittest.TestCase):
         # when returning the children list) but hasChildren still reports true in
         # UFE version before 0.4.4 for inactive to allow the caller to do conditional
         # inactive filtering, so we test that hasChildren is true for those versions.
-        if (os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') >= '4004'):
+        if (ufeUtils.ufeFeatureSetVersion() >= 4):
             self.assertFalse(proxyShapehier.hasChildren())
         else:
             self.assertTrue(proxyShapehier.hasChildren())
@@ -1152,6 +1615,204 @@ class ContextOpsTestCase(unittest.TestCase):
         _validateLoadAndUnloadItems(propsItem, ['Load with Descendants'])
         _validateLoadAndUnloadItems(ball1Item, ['Load', 'Load with Descendants'])
         _validateLoadAndUnloadItems(ball15Item, ['Load', 'Load with Descendants'])
+
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testAssignExistingMaterialToSingleObject(self):
+        """This test assigns an existing material from the stage via ContextOps capabilities."""
+        cmds.file(new=True, force=True)
+
+        # Create a proxy shape with empty stage to start with.
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        # Create a ContextOps interface for the proxy shape.
+        proxyPathSegment = mayaUtils.createUfePathSegment(proxyShape)
+        proxyShapePath = ufe.Path([proxyPathSegment])
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        contextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+
+        rootHier = ufe.Hierarchy.hierarchy(proxyShapeItem)
+
+        # Create a single object in our stage to test with.
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Capsule'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+        capsuleItem = rootHier.children()[0]
+        capsulePrim = usdUtils.getPrimFromSceneItem(capsuleItem)
+        contextOps = ufe.ContextOps.contextOps(capsuleItem)
+
+        # We should have no material assigned after creating an object.
+        capsulePrim = usdUtils.getPrimFromSceneItem(capsuleItem)
+        self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+
+        # Add a new material to the stage (but don't assign it just yet).
+        cmd = contextOps.doOpCmd(['Add New Material', 'USD', 'UsdPreviewSurface'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+
+        # We created a new material, but it should not have been assigned to our Capsule.
+        capsulePrim = usdUtils.getPrimFromSceneItem(capsuleItem)
+        self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+        
+        # Now we explictly assign the material to our Capsule.
+        cmd = contextOps.doOpCmd(['Assign Existing Material', '', '/Capsule1/UsdPreviewSurface1' ])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+
+        # Confirm the material is assigned.
+        capsuleBindAPI = UsdShade.MaterialBindingAPI(capsulePrim)
+        self.assertTrue(capsuleBindAPI)
+        self.assertEqual(capsuleBindAPI.GetDirectBinding().GetMaterialPath(), Sdf.Path("/Capsule1/UsdPreviewSurface1"))
+
+        # Make sure the command plays nice with undo/redo.
+        cmds.undo()
+        self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+
+        cmds.redo()
+        self.assertTrue(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+        self.assertEqual(capsuleBindAPI.GetDirectBinding().GetMaterialPath(), Sdf.Path("/Capsule1/UsdPreviewSurface1"))
+
+        cmds.undo()
+        self.assertFalse(capsulePrim.HasAPI(UsdShade.MaterialBindingAPI))
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testGeomCoponentAssignment(self):
+        '''Duplicate a Maya cube to USD and then assign a material on a face.'''
+
+        cubeXForm, _ = cmds.polyCube(name='MyCube')
+        psPathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+
+        sl = om.MSelectionList()
+        sl.add(psPathStr)
+        dagPath = sl.getDagPath(0)
+        dagPath.extendToShape()
+
+        with mayaUsd.lib.OpUndoItemList():
+            mayaUsd.lib.PrimUpdaterManager.duplicate(cmds.ls(cubeXForm, long=True)[0], psPathStr)
+
+        topPath = ufe.PathString.path(psPathStr + ',/' + cubeXForm + "/" + "top")
+        topItem = ufe.Hierarchy.createItem(topPath)
+        topSubset = UsdGeom.Subset(usdUtils.getPrimFromSceneItem(topItem))
+
+        self.assertEqual(topSubset.GetFamilyNameAttr().Get(), "componentTag")
+        self.assertFalse(topSubset.GetPrim().HasAPI(UsdShade.MaterialBindingAPI))
+
+        # We also can check the old sync counters:
+        counters= { "resync": cmds.getAttr(psPathStr + '.resyncId'),
+                    "update" : cmds.getAttr(psPathStr + '.upid')}
+
+        def assertIsOnlyUpdate(self, counters, shapePathStr):
+            resyncCounter = cmds.getAttr(shapePathStr + '.resyncId')
+            updateCounter = cmds.getAttr(shapePathStr + '.updateId')
+            self.assertEqual(resyncCounter, counters["resync"])
+            self.assertGreater(updateCounter, counters["update"])
+            counters["resync"] = resyncCounter
+            counters["update"] = updateCounter
+
+        def assertIsResync(self, counters, shapePathStr):
+            resyncCounter = cmds.getAttr(shapePathStr + '.resyncId')
+            updateCounter = cmds.getAttr(shapePathStr + '.updateId')
+            self.assertGreater(resyncCounter, counters["resync"])
+            self.assertGreater(updateCounter, counters["update"])
+            counters["resync"] = resyncCounter
+            counters["update"] = updateCounter            
+
+        messageHandler = mayaUtils.TestProxyShapeUpdateHandler(psPathStr)
+        messageHandler.snapshot()
+
+        contextOps = ufe.ContextOps.contextOps(topItem)
+        cmd = contextOps.doOpCmd(['Assign New Material', 'USD', 'UsdPreviewSurface'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+
+        snIter = iter(ufe.GlobalSelection.get())
+        shaderItem = next(snIter)
+
+        self.assertEqual(topSubset.GetFamilyNameAttr().Get(), "materialBind")
+        self.assertTrue(topSubset.GetPrim().HasAPI(UsdShade.MaterialBindingAPI))
+
+        # We expect a resync after this assignment:
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # setting a value the first time is a resync due to the creation of the attribute:
+        attrs = ufe.Attributes.attributes(shaderItem)
+        metallicAttr = attrs.attribute("inputs:metallic")
+        ufeCmd.execute(metallicAttr.setCmd(0.5))
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # Subsequent changes are updates:
+        ufeCmd.execute(metallicAttr.setCmd(0.7))
+        self.assertTrue(messageHandler.isUpdate())
+        assertIsOnlyUpdate(self, counters, psPathStr)
+
+        # First undo is an update:
+        cmds.undo()
+        self.assertTrue(messageHandler.isUpdate())
+        assertIsOnlyUpdate(self, counters, psPathStr)
+
+        # Second undo is a resync:
+        cmds.undo()
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # Third undo is also resync:
+        cmds.undo()
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # First redo is resync:
+        cmds.redo()
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # Second redo is resync:
+        cmds.redo()
+        self.assertTrue(messageHandler.isResync())
+        assertIsResync(self, counters, psPathStr)
+
+        # Third redo is update:
+        cmds.redo()
+        self.assertTrue(messageHandler.isUpdate())
+        assertIsOnlyUpdate(self, counters, psPathStr)
+        currentCacheId = messageHandler.getStageCacheId()
+
+        # Adding custom data to a shader prim is not cause for update. This
+        # happens when setting position info on an input node, nodegraph, or
+        # material. Also happens when storing alpha channel of a backdrop
+        # color.
+        shaderHier = ufe.Hierarchy.hierarchy(shaderItem)
+        materialItem = shaderHier.parent()
+        materialPrim = usdUtils.getPrimFromSceneItem(materialItem)
+        materialPrim.SetCustomData({"Autodesk": {"ldx_inputPos" : "-624 -60.5", 
+                                                 "ldx_outputPos" : "399 -60"}})
+        self.assertTrue(messageHandler.isUnchanged())
+
+        # Changing the whole stage is a resync:
+        testFile = testUtils.getTestScene("MaterialX", "MtlxValueTypes.usda")
+        cmds.setAttr('{}.filePath'.format(psPathStr), testFile, type='string')
+
+        self.assertTrue(messageHandler.isResync())
+        # The old smart signaling for Maya 2024 will not catch that.
+
+        # But that will be the last resync:
+        testFile = testUtils.getTestScene("MaterialX", "sin_compound.usda")
+        cmds.setAttr('{}.filePath'.format(psPathStr), testFile, type='string')
+
+        self.assertTrue(messageHandler.isUnchanged())
+
+        # Until we pull on the node to get the current stage cache id, which resets
+        # the stage listener to the new stage:
+        self.assertNotEqual(messageHandler.getStageCacheId(), currentCacheId)
+
+        testFile = testUtils.getTestScene("MaterialX", "MtlxUVStreamTest.usda")
+        cmds.setAttr('{}.filePath'.format(psPathStr), testFile, type='string')
+
+        self.assertTrue(messageHandler.isResync())
+        # The old smart signaling for Maya 2024 will not catch that.
+
+        messageHandler.terminate()
 
 
 if __name__ == '__main__':

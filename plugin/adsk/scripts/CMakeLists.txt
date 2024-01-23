@@ -10,13 +10,16 @@ list(APPEND scripts_src
     mayaUsd_createStageFromFile.mel
     mayaUsd_createStageWithNewLayer.py
     mayaUsd_createStageFromAsset.mel
+    mayaUsd_imageFileDialogs.mel
     mayaUsd_layerEditorFileDialogs.mel
     mayaUsd_fileOptions.mel
     mayaUsd_pluginUICreation.mel
     mayaUsd_pluginUIDeletion.mel
     mayaUsd_pluginBatchLoad.mel
     mayaUsd_pluginBatchUnload.mel
+    mayaUsd_preferenceTab.mel
     mayaUsd_selectionUtils.py
+    mayaUsd_USDRootFileRelative.py
     usdFileSaveOptions.mel
     USDMenuProc.mel
 )

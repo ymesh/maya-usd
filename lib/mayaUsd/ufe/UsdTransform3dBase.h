@@ -16,8 +16,9 @@
 #pragma once
 
 #include <mayaUsd/base/api.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
 #include <mayaUsd/ufe/UsdTransform3dReadImpl.h>
+
+#include <usdUfe/ufe/UsdSceneItem.h>
 
 #include <pxr/usd/usd/prim.h>
 
@@ -75,10 +76,8 @@ public:
                   translateScalePivotCmd(double x, double y, double z) override;
     Ufe::Vector3d scalePivotTranslation() const override;
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
     Ufe::SetMatrix4dUndoableCommand::Ptr setMatrixCmd(const Ufe::Matrix4d& m) override;
     Ufe::Matrix4d                        matrix() const override;
-#endif
 
     Ufe::Matrix4d segmentInclusiveMatrix() const override;
     Ufe::Matrix4d segmentExclusiveMatrix() const override;

@@ -39,11 +39,6 @@
 #include <maya/MProfiler.h>
 #include <maya/MSelectionMask.h>
 
-// Complete tessellation shader support is avaiable for basisCurves complexity levels
-#if MAYA_API_VERSION >= 20210000
-#define HDVP2_ENABLE_BASISCURVES_TESSELLATION
-#endif
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
@@ -186,7 +181,6 @@ VtValue _BuildCubicIndexArray(const HdBasisCurvesTopology& topology)
     }
 
     int vertexIndex = 0;
-    int curveIndex = 0;
     TF_FOR_ALL(itCounts, vertexCounts)
     {
         int count = *itCounts;
@@ -216,7 +210,6 @@ VtValue _BuildCubicIndexArray(const HdBasisCurvesTopology& topology)
             indices.push_back(seg);
         }
         vertexIndex += count;
-        curveIndex++;
     }
 
     VtVec4iArray      finalIndices(indices.size());
@@ -256,14 +249,12 @@ VtValue _BuildLinesIndexArray(const HdBasisCurvesTopology& topology)
     VtArray<int>         vertexCounts = topology.GetCurveVertexCounts();
 
     int vertexIndex = 0;
-    int curveIndex = 0;
     TF_FOR_ALL(itCounts, vertexCounts)
     {
         for (int i = 0; i < *itCounts; i += 2) {
             indices.push_back(GfVec2i(vertexIndex, vertexIndex + 1));
             vertexIndex += 2;
         }
-        curveIndex++;
     }
 
     VtVec2iArray      finalIndices(indices.size());
@@ -302,7 +293,6 @@ VtValue _BuildLineSegmentIndexArray(const HdBasisCurvesTopology& topology)
     const VtArray<int>   vertexCounts = topology.GetCurveVertexCounts();
     bool                 wrap = topology.GetCurveWrap() == HdTokens->periodic;
     int                  vertexIndex = 0; // Index of next vertex to emit
-    int                  curveIndex = 0;  // Index of next curve to emit
     // For each curve
     TF_FOR_ALL(itCounts, vertexCounts)
     {
@@ -322,7 +312,6 @@ VtValue _BuildLineSegmentIndexArray(const HdBasisCurvesTopology& topology)
         if (wrap) {
             indices.push_back(GfVec2i(v0, firstVert));
         }
-        ++curveIndex;
     }
 
     VtVec2iArray      finalIndices(indices.size());
@@ -553,11 +542,7 @@ void HdVP2BasisCurves::_UpdateDrawItem(
     const TfToken                wrap = topology.GetCurveWrap();
     const TfToken                basis = topology.GetCurveBasis();
 
-#if defined(HDVP2_ENABLE_BASISCURVES_TESSELLATION)
     const int refineLevel = _curvesSharedData._displayStyle.refineLevel;
-#else
-    const int refineLevel = 0;
-#endif
 
     const MHWRender::MGeometry::DrawMode drawMode = renderItem->drawMode();
 
@@ -1138,7 +1123,6 @@ void HdVP2BasisCurves::_UpdateDrawItem(
             renderItem->enable(*stateToCommit._enabled);
         }
 
-#if defined(HDVP2_ENABLE_BASISCURVES_TESSELLATION)
         // If the primitive type and stride are changed, then update them.
         if (stateToCommit._primitiveType != nullptr && stateToCommit._primitiveStride != nullptr) {
             auto primitive = *stateToCommit._primitiveType;
@@ -1149,7 +1133,6 @@ void HdVP2BasisCurves::_UpdateDrawItem(
                 && primitive != MHWRender::MGeometry::kPatch;
             _SetWantConsolidation(*renderItem, wantConsolidation);
         }
-#endif
 
         ProxyRenderDelegate& drawScene = param->GetDrawScene();
 
@@ -1205,19 +1188,7 @@ void HdVP2BasisCurves::_UpdateDrawItem(
                 drawScene.setExtraInstanceData(
                     *renderItem, extraColorChannelName, *stateToCommit._instanceColors);
             }
-        }
-#if MAYA_API_VERSION >= 20210000
-        else if (newInstanceCount >= 1) {
-#else
-        // In Maya 2020 and before, GPU instancing and consolidation are two separate systems that
-        // cannot be used by a render item at the same time. In case of single instance, we keep
-        // the original render item to allow consolidation with other prims. In case of multiple
-        // instances, we need to disable consolidation to allow GPU instancing to be used.
-        else if (newInstanceCount == 1) {
-            renderItem->setMatrix(&(*stateToCommit._instanceTransforms)[0]);
-        } else if (newInstanceCount > 1) {
-            _SetWantConsolidation(*renderItem, false);
-#endif
+        } else if (newInstanceCount >= 1) {
             drawScene.setInstanceTransformArray(*renderItem, *stateToCommit._instanceTransforms);
 
             if (stateToCommit._instanceColors->length() == newInstanceCount * kNumColorChannels) {
@@ -1478,9 +1449,7 @@ HdVP2BasisCurves::_CreatePatchRenderItem(const MString& name, const TfToken& rep
     renderItem->setSelectionMask(MSelectionMask::kSelectNurbsCurves);
 #endif
 
-#if MAYA_API_VERSION >= 20220000
     renderItem->setObjectTypeExclusionFlag(MHWRender::MFrameContext::kExcludeNurbsCurves);
-#endif
 
     return renderItem;
 }

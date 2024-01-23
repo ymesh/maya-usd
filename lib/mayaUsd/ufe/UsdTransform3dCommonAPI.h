@@ -15,8 +15,9 @@
 //
 #pragma once
 
-#include <mayaUsd/ufe/UfeVersionCompat.h>
 #include <mayaUsd/ufe/UsdTransform3dBase.h>
+
+#include <usdUfe/ufe/UfeVersionCompat.h>
 
 #include <pxr/usd/usdGeom/xformCommonAPI.h>
 
@@ -62,6 +63,8 @@ public:
     void                               rotatePivot(double x, double y, double z) override;
     Ufe::Vector3d                      rotatePivot() const override;
 
+    Ufe::Vector3d scalePivot() const override;
+
     Ufe::SetMatrix4dUndoableCommand::Ptr setMatrixCmd(const Ufe::Matrix4d& m) override;
 
 private:
@@ -86,9 +89,9 @@ public:
 
     // Ufe::Transform3dHandler overrides
     Ufe::Transform3d::Ptr transform3d(const Ufe::SceneItem::Ptr& item) const override;
-    Ufe::Transform3d::Ptr editTransform3d(const Ufe::SceneItem::Ptr& item UFE_V2(
-        ,
-        const Ufe::EditTransform3dHint& hint)) const override;
+    Ufe::Transform3d::Ptr editTransform3d(
+        const Ufe::SceneItem::Ptr&      item,
+        const Ufe::EditTransform3dHint& hint) const override;
 
 private:
     Ufe::Transform3dHandler::Ptr _nextHandler;

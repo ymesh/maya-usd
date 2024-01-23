@@ -30,6 +30,18 @@ def mayaUsdLibRegisterStrings():
 
     # Any python strings from MayaUsd lib go here.
 
+    # ae_template.py
+    register('kKindMetadataAnn', 'Kind is a type of metadata (a pre-loaded string value) used to classify prims in USD. Set the classification value from the dropdown to assign a kind category to a prim. Set a kind value to activate selection by kind.')
+    register('kActiveMetadataAnn', "If selected, the prim is set to active and contributes to the composition of a stage. If a prim is set to inactive, it doesn't contribute to the composition of a stage (it gets striked out in the Outliner and is deactivated from the Viewport).")
+    register('kInstanceableMetadataAnn', 'If selected, instanceable is set to true for the prim and the prim is considered a candidate for instancing. If deselected, instanceable is set to false.')
+    register('kErrorAttributeMustBeArray', '"^1s" must be an array!')
+    register('kMenuCopyValue', 'Copy Attribute Value')
+    register('kMenuPrintValue', 'Print to Script Editor')
+    register('kLabelUnusedTransformAttrs', 'Unused')
+    register('kLabelMetadata', 'Metadata')
+    register('kLabelAppliedSchemas', 'Applied Schemas')
+    register('kOpenImage', 'Open')
+
     # mayaUsdAddMayaReference.py
     register('kErrorGroupPrimExists', 'Group prim "^1s" already exists under "^2s". Choose prim name other than "^1s" to proceed.')
     register('kErrorCannotAddToProxyShape', 'Cannot add Maya Reference node to ProxyShape with Variant Set unless grouped. Enable Group checkbox to proceed.')
@@ -44,19 +56,43 @@ def mayaUsdLibRegisterStrings():
     register('kCacheFileWillAppear', 'Cache file will\nappear on parent\nprim:')
     register('kCacheMayaRefCache', 'Cache')
     register('kCacheMayaRefOptions', 'Cache File Options')
-    register('kCacheMayaRefUsdHierarchy', 'Author Cache File to USD Hierarchy')
+    register('kCacheMayaRefUsdHierarchy', 'Author Cache File to USD')
     register('kCaptionCacheToUsd', 'Cache to USD')
     register('kErrorCacheToUsdFailed', 'Cache to USD failed for "^1s".')
+    register('kMenuPrepend', 'Prepend')
     register('kMenuAppend', 'Append')
     register('kMenuPayload', 'Payload')
-    register('kMenuPrepend', 'Prepend')
     register('kMenuReference', 'Reference')
-    register('kOptionAsUSDReference', 'As USD Reference:')
+    register('kOptionAsUSDReference', 'Composition Arc:')
     register('kOptionAsUSDReferenceToolTip', '<p>Choose the type of USD Reference composition arc for your Maya Reference:<br><br><b>Payloads</b> are a type of reference. They are recorded, but not traversed in the scene hierarchy. Select this arc if your goal is to manually construct<br>a "working set" that is a subset of an entire scene, in which only parts of the scene are required/loaded. Note: payloads are<br>weaker than direct references in any given LayerStack.<br><br><b>References</b> are general and can be used to compose smaller units of scene description into larger aggregates, building up a namespace that<br>includes the "encapsulated" result of composing the scene description targeted by a reference. Select this arc if your goal is not to unload your<br>references.</p>')
+    register('kOptionAsUSDReferenceStatusMsg', 'Choose the type of USD Reference composition arc for your Maya Reference.')
     register('kOptionListEditedAs', 'List Edited As')
+    register('kOptionLoadPayload', 'Load Payload:')
+    register('kLoadPayloadAnnotation', 'If selected, all existing payloads on the prim will be unchanged and new payloads will be loaded as well. When deselected, all payloads on the prim will be unloaded.')
     register('kTextDefineIn', 'Define in:')
     register('kTextVariant', 'Variant')
     register('kTextVariantToolTip','If selected, your Maya reference will be defined in a variant. This will enable your prim to\nhave 2 variants you can switch between in the Outliner; the Maya reference and its USD cache.')
+
+    register('kAddRefOrPayloadPrimPathToolTip',
+        'Leave this field blank to use the default prim as your prim path (only viable if your file has a default prim).\n' +
+        'Specifying a prim path will make an explicit reference to a prim.\n' +
+        'If there is no default prim and no prim path is specified, no prim will be referenced.')
+    
+    register('kAddRefOrPayloadPrimPathLabel', 'Prim Path')
+    register('kAddRefOrPayloadPrimPathPlaceHolder', ' (Default Prim)')
+    register('kAddRefOrPayloadPrimPathHelpLabel', 'Help on Select a Prim for Reference')
+    register('kAddRefOrPayloadPrimPathTitle', 'Select a Prim to Reference')
+    register('kAddRefOrPayloadSelectLabel', 'Select')
+
+    # mayaUsdClearRefsOrPayloadsOptions.py
+    register('kClearRefsOrPayloadsOptionsTitle', 'Clear All USD References/Payloads')
+    register('kClearRefsOrPayloadsOptionsMessage', 'Clear all references/payloads on %s?')
+    register('kClearButton', 'Clear')
+    register('kCancelButton', 'Cancel')
+    register('kAllRefsLabel', 'All References')
+    register('kAllRefsTooltip', 'Clear all references on the prim.')
+    register('kAllPayloadsLabel', 'All Payloads')
+    register('kAllPayloadsTooltip', 'Clear all payloads on the prim.')
 
     # mayaUsdMergeToUSDOptions.py
     register('kMergeToUSDOptionsTitle', 'Merge Maya Edits to USD Options')
@@ -69,9 +105,9 @@ def mayaUsdLibRegisterStrings():
     register('kHelpMenu', 'Help')
     register('kHelpMergeToUSDOptionsMenuItem', 'Help on Merge Maya Edits to USD Options')
 
-    # mayaUsdDuplicateAsMayaDataOptions.py
-    register('kDuplicateAsMayaDataOptionsTitle', 'Duplicate As Maya Data Options')
-    register('kHelpDuplicateAsMayaDataOptionsMenuItem', 'Help on Duplicate As Maya Data Options')
+    # mayaUsdDuplicateAsUsdDataOptions.py
+    register('kDuplicateAsUsdDataOptionsTitle', 'Duplicate As USD Data Options')
+    register('kHelpDuplicateAsUsdDataOptionsMenuItem', 'Help on Duplicate As USD Data Options')
 
     # mayaUsdMergeToUsd.py
     register('kErrorMergeToUsdMenuItem', 'Could not create menu item for merge to USD')

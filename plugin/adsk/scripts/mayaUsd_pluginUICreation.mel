@@ -24,6 +24,17 @@ global proc mayaUsd_pluginUICreation()
     source "mayaUsdMenu.mel";
     mayaUsdMenu_loadui;
 
+    source "mayaUsd_preferenceTab.mel";
+    addCustomPrefsTab("mayaUsd_PrefCreateTab",
+                      "mayaUsd_PrefCreateFrameLayout",
+                      "mayaUsd_PrefUpdate",
+                      "mayaUsd_PrefHoldState",
+                      "mayaUsd_PrefSetOptVarsToDefault",
+                      `getMayaUsdString("kUSDPreferences")`,
+                      "    USD");
+                      // Note: 4 spaces in USD name is important to make it indented in prefs.
+    mayaUsd_PrefInitOptionVars(false);
+
     source "mayaUsd_fileOptions.mel";
 
     // Set the default USD attributes we want to display
@@ -48,8 +59,10 @@ global proc mayaUsd_pluginUICreation()
         // is no mechanism to source such a file once, if multiple plugins are
         // loaded, so source it here in this plugin.  PPT, 29-Nov-2021.
         source "mayaUsdAddMayaReference.mel";
+        source "mayaUsdAddUSDReference.mel";
         source "mayaUsdCacheMayaReference.mel";
         source "mayaUsdMergeToUSDOptions.mel";
-        source "mayaUsdDuplicateAsMayaDataOptions.mel";
+        source "mayaUsdClearRefsOrPayloadsOptions.mel";
+        source "mayaUsdDuplicateAsUsdDataOptions.mel";
     }
 }

@@ -21,6 +21,8 @@ import ufeUtils
 import usdUtils
 import testUtils
 
+import mayaUsd.lib as mayaUsdLib
+
 from maya import cmds
 from pxr import Sdr
 
@@ -350,7 +352,7 @@ class ConnectionTestCase(unittest.TestCase):
             '|stage|stageShape,/DisplayColorCube/Looks/usdPreviewSurface1SG')
         self.assertEqual(dstAttr.name, 'outputs:surface')
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') >= '4043', 'Test became invalid in UFE preview version 0.4.43 and greater')
+    @unittest.skipIf(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test became invalid in UFE v4 or greater')
     def testConnectionsHandler(self):
         '''Test create & delete a connection.'''
 
@@ -453,7 +455,7 @@ class ConnectionTestCase(unittest.TestCase):
         conns = connections.allConnections()
         self.assertEqual(len(conns), 1)
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4043', 'Test only available in UFE preview version 0.4.43 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testConnectionsHandlerWithCnxCommands(self):
         '''Test create & delete a connection.'''
 
@@ -649,7 +651,8 @@ class ConnectionTestCase(unittest.TestCase):
 
         # Cleanup on disconnection should remove the MaterialX surface output.
         with self.assertRaisesRegex(KeyError, "Attribute 'outputs:mtlx:surface' does not exist") as cm:
-            materialAttrs.attribute("outputs:mtlx:surface")
+            with mayaUsdLib.DiagnosticBatchContext(1000) as bc:
+                materialAttrs.attribute("outputs:mtlx:surface")
 
         connections = connectionHandler.sourceConnections(materialItem)
         self.assertIsNotNone(connections)
@@ -675,7 +678,7 @@ class ConnectionTestCase(unittest.TestCase):
         #       were before connecting, which might require deleting authored attributes.
         #       The undo must also be aware that the connection on the material got redirected.
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4043', 'Test only available in UFE preview version 0.4.43 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testCreateStandardSurfaceWithCnxCommandUndo(self):
         '''Test create a working standard surface shader.'''
         #
@@ -804,7 +807,7 @@ class ConnectionTestCase(unittest.TestCase):
         assertNoConnection(self, materialItem)
 
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4024', 'Test only available in UFE preview version 0.4.24 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testCreateStandardSurfaceWithAddAttribute(self):
         '''Test create a working standard surface shader.'''
         #
@@ -918,7 +921,7 @@ class ConnectionTestCase(unittest.TestCase):
         #       were before connecting, which might require deleting authored attributes.
         #       The undo must also be aware that the connection on the material got redirected.
 
-    @unittest.skipIf(os.getenv('UFE_PREVIEW_VERSION_NUM', '0000') < '4024', 'Test only available in UFE preview version 0.4.24 and greater')
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testCreateNodeGraphAttributes(self):
         '''Test create attributes on compound boundaries.'''
         cmds.file(new=True, force=True)
@@ -952,6 +955,203 @@ class ConnectionTestCase(unittest.TestCase):
             testObserver.assertNotificationCount(self, numAdded = 2, numRemoved = 1)
             testAttrs.removeAttribute("outputs:bar")
             testObserver.assertNotificationCount(self, numAdded = 2, numRemoved = 2)
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testCompoundDisplacementPassthrough(self):
+        # Creating the connection in this test scene was causing an infinite loop that should now be fixed.
+        testFile = testUtils.getTestScene('MaterialX', 'compound_displacement_passthrough.usda')
+        shapeNode,shapeStage = mayaUtils.createProxyFromFile(testFile)
+        mayaPathSegment = mayaUtils.createUfePathSegment(shapeNode)
+
+        materialPathSegment = usdUtils.createUfePathSegment("/Material1")
+        materialPath = ufe.Path([mayaPathSegment, materialPathSegment])
+        materialSceneItem = ufe.Hierarchy.createItem(materialPath)
+        materialAttrs = ufe.Attributes.attributes(materialSceneItem)
+        materialDisplacementAttr = materialAttrs.attribute("outputs:displacement")
+
+        compoundPathSegment = usdUtils.createUfePathSegment("/Material1/compound")
+        compoundPath = ufe.Path([mayaPathSegment, compoundPathSegment])
+        compoundSceneItem = ufe.Hierarchy.createItem(compoundPath)
+        compoundAttrs = ufe.Attributes.attributes(compoundSceneItem)
+        compoundDisplacementAttr = compoundAttrs.attribute("outputs:displacement")
+
+        connectionHandler = ufe.RunTimeMgr.instance().connectionHandler(materialSceneItem.runTimeId())
+        cmd = connectionHandler.createConnectionCmd(compoundDisplacementAttr, materialDisplacementAttr)
+        cmd.execute()
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater since it uses the UsdUndoDeleteConnectionCommand')
+    def testRemovePropertiesWithConnections(self):
+        '''Test delete connections and properties.'''
+
+        # Load a scene.
+
+        testFile = testUtils.getTestScene('properties', 'properties.usda')
+        shapeNode,shapeStage = mayaUtils.createProxyFromFile(testFile)
+
+        ufeParentItem = ufeUtils.createUfeSceneItem(shapeNode,
+            '/mtl/UsdPreviewSurface1')
+        ufePreviewItem = ufeUtils.createUfeSceneItem(shapeNode,
+            '/mtl/UsdPreviewSurface1/UsdPreviewSurface1')
+        ufeSurfaceItem = ufeUtils.createUfeSceneItem(shapeNode,
+            '/mtl/UsdPreviewSurface1/surface1')
+        ufeCompoundItem = ufeUtils.createUfeSceneItem(shapeNode,
+            '/mtl/UsdPreviewSurface1/compound')
+        ufeChildCompoundItem = ufeUtils.createUfeSceneItem(shapeNode,
+            '/mtl/UsdPreviewSurface1/compound/UsdPreviewSurface2')
+
+        self.assertIsNotNone(ufeParentItem)
+        self.assertIsNotNone(ufePreviewItem)
+        self.assertIsNotNone(ufeSurfaceItem)
+        self.assertIsNotNone(ufeCompoundItem)
+        self.assertIsNotNone(ufeChildCompoundItem)
+
+        connectionHandler = ufe.RunTimeMgr.instance().connectionHandler(ufeParentItem.runTimeId())
+        self.assertIsNotNone(connectionHandler)
+
+        # Get the prims.
+        parentPrim = usdUtils.getPrimFromSceneItem(ufeParentItem)
+        previewPrim = usdUtils.getPrimFromSceneItem(ufePreviewItem)
+        surfacePrim = usdUtils.getPrimFromSceneItem(ufeSurfaceItem)
+        compoundPrim = usdUtils.getPrimFromSceneItem(ufeCompoundItem)
+        childCompoundPrim = usdUtils.getPrimFromSceneItem(ufeChildCompoundItem)
+
+        # Get the attributes.
+        parentAttrs = ufe.Attributes.attributes(ufeParentItem)
+        previewAttrs = ufe.Attributes.attributes(ufePreviewItem)
+        surfaceAttrs = ufe.Attributes.attributes(ufeSurfaceItem)
+        compoundAttrs = ufe.Attributes.attributes(ufeCompoundItem)
+        childCompoundAttrs = ufe.Attributes.attributes(ufeChildCompoundItem)
+
+        # 1. Delete node (not compound) connections.
+
+        previewClearcoat = previewAttrs.attribute('inputs:clearcoat')
+        previewSurface = previewAttrs.attribute('outputs:surface')
+        parentClearcoat = parentAttrs.attribute('inputs:clearcoat')
+        parentSurface = parentAttrs.attribute('outputs:surface')
+        surfaceBsdf = surfaceAttrs.attribute('inputs:bsdf')
+
+        self.assertIsNotNone(previewClearcoat)
+        self.assertIsNotNone(previewSurface)
+        self.assertIsNotNone(parentClearcoat)
+        self.assertIsNotNone(parentSurface)
+        self.assertIsNotNone(surfaceBsdf)
+
+        # 1.1 Delete the connection between two nodes (not compounds).
+        cmd = connectionHandler.deleteConnectionCmd(previewSurface, surfaceBsdf)
+        cmd.execute()
+
+        # Property kept since there is a connection to the parent.
+        self.assertTrue(previewPrim.HasProperty('outputs:surface'))
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(surfacePrim.HasProperty('outputs:surface'))
+
+        # 1.2 Delete the connection between the node and its parent (outputs).
+        cmd = connectionHandler.deleteConnectionCmd(previewSurface, parentSurface)
+        cmd.execute()
+
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(previewPrim.HasProperty('outputs:surface'))
+        # Property kept since it is on the boundary.
+        self.assertTrue(parentPrim.HasProperty('outputs:surface'))
+
+        # 1.3 Delete the connection between the node and its parent (inputs).
+        cmd = connectionHandler.deleteConnectionCmd(parentClearcoat, previewClearcoat)
+        cmd.execute()
+
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(previewPrim.HasProperty('inputs:clearcoat'))
+        # Property kept since it is on the boundary.
+        self.assertTrue(parentPrim.HasProperty('inputs:clearcoat'))
+
+        # 2. Delete compound connections.
+
+        compoundDisplacement = compoundAttrs.attribute('outputs:displacement')
+        compoundPort = compoundAttrs.attribute('outputs:port')
+        parentDisplacement = parentAttrs.attribute('outputs:displacement')
+        parentPort = parentAttrs.attribute('outputs:port')
+
+        self.assertIsNotNone(compoundDisplacement)
+        self.assertIsNotNone(compoundPort)
+        self.assertIsNotNone(parentDisplacement)
+        self.assertIsNotNone(parentPort)
+
+        # 2.1 Delete compound connections to the parent.
+        cmd = connectionHandler.deleteConnectionCmd(compoundPort, parentPort)
+        cmd.execute()
+
+        # Properties kept since they are on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('outputs:port'))
+        self.assertTrue(parentPrim.HasProperty('outputs:port'))
+
+        cmd = connectionHandler.deleteConnectionCmd(compoundDisplacement, parentDisplacement)
+        cmd.execute()
+
+        # Properties kept since they are on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('outputs:displacement'))
+        self.assertTrue(parentPrim.HasProperty('outputs:displacement'))
+
+        # 2.2 Delete compound connections from the parent.
+        compoundClearcoatRoughness = compoundAttrs.attribute('inputs:clearcoatRoughness')
+        compoundPort = compoundAttrs.attribute('inputs:port')
+        parentClearcoatRoughness = parentAttrs.attribute('inputs:clearcoatRoughness')
+        parentPort = parentAttrs.attribute('inputs:port')
+
+        self.assertIsNotNone(compoundClearcoatRoughness)
+        self.assertIsNotNone(compoundPort)
+        self.assertIsNotNone(parentClearcoatRoughness)
+        self.assertIsNotNone(parentPort)
+
+        cmd = connectionHandler.deleteConnectionCmd(parentPort, compoundPort)
+        cmd.execute()
+
+        # Properties kept since they are on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('inputs:port'))
+        self.assertTrue(parentPrim.HasProperty('inputs:port'))
+
+        cmd = connectionHandler.deleteConnectionCmd(parentClearcoatRoughness, compoundClearcoatRoughness)
+        cmd.execute()
+
+        # Properties kept since they are on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('inputs:clearcoatRoughness'))
+        self.assertTrue(parentPrim.HasProperty('inputs:clearcoatRoughness'))
+
+        # 3. Delete connections inside the compound.
+
+        childDisplacement = childCompoundAttrs.attribute('outputs:displacement')
+        childClearcoatRoughness = childCompoundAttrs.attribute('inputs:clearcoatRoughness')
+        childClearcoat = childCompoundAttrs.attribute('inputs:clearcoat')
+        compoundClearcoat = compoundAttrs.attribute('inputs:clearcoat')
+       
+        self.assertIsNotNone(childDisplacement)
+        self.assertIsNotNone(childClearcoatRoughness)
+        self.assertIsNotNone(childClearcoat)
+        self.assertIsNotNone(compoundClearcoat)
+
+        # 3.1 Delete child compound connections to the parent.
+        cmd = connectionHandler.deleteConnectionCmd(childDisplacement, compoundDisplacement)
+        cmd.execute()
+
+        # Property kept since it is on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('outputs:displacement'))
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(childCompoundPrim.HasProperty('outputs:displacement'))
+
+        # 3.2 Delete child compound connections from the parent.
+        cmd = connectionHandler.deleteConnectionCmd(compoundClearcoatRoughness, childClearcoatRoughness)
+        cmd.execute()
+
+        # Property kept since it is on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('inputs:clearcoatRoughness'))
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(childCompoundPrim.HasProperty('inputs:clearcoatRoughness'))
+
+        cmd = connectionHandler.deleteConnectionCmd(compoundClearcoat, childClearcoat)
+        cmd.execute()
+
+        # Property kept since it is on the boundary.
+        self.assertTrue(compoundPrim.HasProperty('inputs:clearcoat'))
+        # The property has been deleted since there are no more connections.
+        self.assertFalse(childCompoundPrim.HasProperty('inputs:clearcoat'))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

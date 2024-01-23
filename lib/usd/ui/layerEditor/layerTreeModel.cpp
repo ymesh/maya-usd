@@ -24,7 +24,7 @@
 
 #include <mayaUsd/base/tokens.h>
 #include <mayaUsd/utils/customLayerData.h>
-#include <mayaUsd/utils/util.h>
+#include <mayaUsd/utils/layers.h>
 #include <mayaUsd/utils/utilSerialization.h>
 
 #include <pxr/base/tf/notice.h>
@@ -136,6 +136,46 @@ QMimeData* LayerTreeModel::mimeData(const QModelIndexList& indexes) const
     return mimeData;
 }
 
+bool LayerTreeModel::canDropMimeData(
+    const QMimeData*   in_mimeData,
+    Qt::DropAction     action,
+    int                row,
+    int                column,
+    const QModelIndex& parentIndex) const
+{
+    if (!in_mimeData || (action != Qt::MoveAction)) {
+        return false;
+    }
+    if (!in_mimeData->hasFormat(LAYER_EDITOR_MIME_TYPE)) {
+        return false;
+    }
+
+    auto parentItem = layerItemFromIndex(parentIndex);
+    if (!parentItem || parentItem->isReadOnly()) {
+        return false;
+    }
+
+    // Only anonymous layers have additional restrictions
+    if (!parentItem->layer()->IsAnonymous()) {
+        return true;
+    }
+
+    // Layer with its path relative cannot be dropped to an anonymous layer
+    QStringList identifiers = in_mimeData->text().split(LAYED_EDITOR_MIME_SEP);
+    for (QString const& ident : identifiers) {
+        if (auto layer = SdfLayer::FindOrOpen(ident.toStdString())) {
+            if (auto layerItem = findUSDLayerItem(layer)) {
+                if (!layer->IsAnonymous()
+                    && QDir::isRelativePath(layerItem->subLayerPath().c_str())) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 bool LayerTreeModel::dropMimeData(
     const QMimeData*   in_mimeData,
     Qt::DropAction     action,
@@ -238,6 +278,8 @@ void LayerTreeModel::setSessionState(SessionState* in_sessionState)
         &SessionState::autoHideSessionLayerSignal,
         this,
         &LayerTreeModel::autoHideSessionLayerChanged);
+
+    rebuildModelOnIdle();
 }
 
 void LayerTreeModel::rebuildModelOnIdle()
@@ -273,7 +315,7 @@ void LayerTreeModel::rebuildModel()
                 rootLayer, MayaUsdMetadata->ReferencedLayers);
             std::vector<std::string> layerIds;
             std::move(layers.begin(), layers.end(), inserter(layerIds, layerIds.begin()));
-            sharedLayers = UsdMayaUtil::getAllSublayers(layerIds, true);
+            sharedLayers = MayaUsd::getAllSublayers(layerIds, true);
         }
 
         std::set<std::string> incomingLayers;
@@ -284,7 +326,7 @@ void LayerTreeModel::rebuildModel()
             } else {
                 std::vector<std::string> layerIds;
                 layerIds.push_back(rootLayer->GetIdentifier());
-                incomingLayers = UsdMayaUtil::getAllSublayers(layerIds, true);
+                incomingLayers = MayaUsd::getAllSublayers(layerIds, true);
             }
         }
 
@@ -453,10 +495,10 @@ void LayerTreeModel::saveStage(QWidget* in_parent)
     // so the user can choose where to save the anonymous layers.
     if (!showConfirmDgl) {
         // Get the layers to save for this stage.
-        MayaUsd::utils::stageLayersToSave stageLayersToSave;
+        MayaUsd::utils::StageLayersToSave StageLayersToSave;
         auto&                             stageEntry = _sessionState->stageEntry();
-        MayaUsd::utils::getLayersToSaveFromProxy(stageEntry._proxyShapePath, stageLayersToSave);
-        showConfirmDgl = !stageLayersToSave._anonLayers.empty();
+        MayaUsd::utils::getLayersToSaveFromProxy(stageEntry._proxyShapePath, StageLayersToSave);
+        showConfirmDgl = !StageLayersToSave._anonLayers.empty();
     }
 
     if (showConfirmDgl) {

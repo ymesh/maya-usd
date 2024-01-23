@@ -12,6 +12,8 @@
 #include <mayaUsd/base/tokens.h>
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/listeners/notice.h>
+#include <mayaUsd/ufe/Utils.h>
+#include <mayaUsd/utils/utilFileSystem.h>
 #include <mayaUsd/utils/utilSerialization.h>
 
 #include <pxr/usd/sdf/layer.h>
@@ -27,12 +29,10 @@
 #include <QtGui/QFontMetrics>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QBoxLayout>
+#include <QtWidgets/QGridLayout>
+#include <ghc/filesystem.hpp>
 
 #include <string>
-
-#if defined(WANT_UFE_BUILD)
-#include <mayaUsd/ufe/Utils.h>
-#endif
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -97,94 +97,264 @@ class SaveLayersDialog;
 class SaveLayerPathRow : public QWidget
 {
 public:
+    using LayerInfo = MayaUsd::utils::LayerInfo;
+    using LayerInfos = MayaUsd::utils::LayerInfos;
+
     SaveLayerPathRow(
-        SaveLayersDialog*                                             in_parent,
-        const std::pair<SdfLayerRefPtr, MayaUsd::utils::LayerParent>& in_layerPair);
+        SaveLayersDialog* in_parent,
+        QGridLayout*      gridLayout,
+        int               gridRow,
+        const LayerInfo&  in_layerInfo);
 
     QString layerDisplayName() const;
 
-    QString absolutePath() const;
-    QString pathToSaveAs() const;
+    QString getAbsolutePath() const;
 
-    void setAbsolutePath(const std::string& path);
+    void setSaveAsRelative(bool relative);
+    bool needToSaveAsRelative() const;
+
+    void setPathToSaveAs(const std::string& absolutePath, bool saveAsRelative);
+
+    std::string calculateParentLayerDir() const;
 
 protected:
     void onOpenBrowser();
     void onTextChanged(const QString& text);
+    void onRelativeChanged();
+    void postUpdate();
 
 public:
-    QString                                                _absolutePath;
-    SaveLayersDialog*                                      _parent { nullptr };
-    std::pair<SdfLayerRefPtr, MayaUsd::utils::LayerParent> _layerPair;
-    QLabel*                                                _label { nullptr };
-    QLineEdit*                                             _pathEdit { nullptr };
-    QAbstractButton*                                       _openBrowser { nullptr };
+    ghc::filesystem::path _absolutePath;
+    ghc::filesystem::path _relativeAnchor;
+
+    SaveLayersDialog* _parent { nullptr };
+    LayerInfo         _layerInfo;
+    QLabel*           _label { nullptr };
+    QLineEdit*        _pathEdit { nullptr };
+    QAbstractButton*  _openBrowser { nullptr };
+    QCheckBox*        _relative { nullptr };
+    bool              _suppressUserInputCallbacks { false };
 };
 
 SaveLayerPathRow::SaveLayerPathRow(
-    SaveLayersDialog*                                             in_parent,
-    const std::pair<SdfLayerRefPtr, MayaUsd::utils::LayerParent>& in_layerPair)
+    SaveLayersDialog* in_parent,
+    QGridLayout*      gridLayout,
+    int               gridRow,
+    const LayerInfo&  in_layerInfo)
     : QWidget(in_parent)
     , _parent(in_parent)
-    , _layerPair(in_layerPair)
+    , _layerInfo(in_layerInfo)
 {
-    auto gridLayout = new QGridLayout();
-    QtUtils::initLayoutMargins(gridLayout);
 
     // Since this is an anonymous layer, it should only be associated with a single stage.
     std::string stageName;
     const auto& stageLayers = in_parent->stageLayers();
-    if (TF_VERIFY(1 == stageLayers.count(_layerPair.first))) {
-        auto search = stageLayers.find(_layerPair.first);
+    if (TF_VERIFY(1 == stageLayers.count(_layerInfo.layer))) {
+        auto search = stageLayers.find(_layerInfo.layer);
         stageName = search->second;
     }
 
-    QString displayName = _layerPair.first->GetDisplayName().c_str();
+    QString displayName = _layerInfo.layer->GetDisplayName().c_str();
     _label = new QLabel(displayName);
-    _label->setToolTip(in_parent->buildTooltipForLayer(_layerPair.first));
-    gridLayout->addWidget(_label, 0, 0);
+    _label->setToolTip(in_parent->buildTooltipForLayer(_layerInfo.layer));
+    gridLayout->addWidget(_label, gridRow, 0);
 
-    _absolutePath = MayaUsd::utils::generateUniqueFileName(stageName).c_str();
-
-    QFileInfo fileInfo(_absolutePath);
-    QString   suggestedFullPath = fileInfo.absoluteFilePath();
     _pathEdit = new AnonLayerPathEdit(this);
-    _pathEdit->setText(suggestedFullPath);
     connect(_pathEdit, &QLineEdit::textChanged, this, &SaveLayerPathRow::onTextChanged);
-    gridLayout->addWidget(_pathEdit, 0, 1);
+    gridLayout->addWidget(_pathEdit, gridRow, 1);
 
     QIcon icon = utils->createIcon(":/fileOpen.png");
     _openBrowser = new GeneratedIconButton(this, icon);
-    gridLayout->addWidget(_openBrowser, 0, 2);
+    gridLayout->addWidget(_openBrowser, gridRow, 2);
     connect(_openBrowser, &QAbstractButton::clicked, this, &SaveLayerPathRow::onOpenBrowser);
 
-    setLayout(gridLayout);
+    QString checkBoxTitle = _layerInfo.parent._layerParent
+        ? StringResources::getAsQString(StringResources::kBatchSaveRelativeToParent)
+        : StringResources::getAsQString(StringResources::kBatchSaveRelativeToScene);
+    MString checkBoxTooltip;
+    if (_layerInfo.parent._layerParent) {
+        checkBoxTooltip.format(
+            StringResources::getAsMString(StringResources::kBatchSaveRelativeToLayerTooltip),
+            _layerInfo.parent._layerParent->GetDisplayName().c_str());
+    } else {
+        checkBoxTooltip
+            = StringResources::getAsMString(StringResources::kBatchSaveRelativeToSceneTooltip);
+    }
 
-    setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Maximum);
+    _relative = new QCheckBox(checkBoxTitle, this);
+    _relative->setToolTip(MQtUtil::toQString(checkBoxTooltip));
+    connect(_relative, &QCheckBox::stateChanged, this, &SaveLayerPathRow::onRelativeChanged);
+    gridLayout->addWidget(_relative, gridRow, 3);
+
+    QString pathToSaveAs
+        = MayaUsd::utils::generateUniqueLayerFileName(stageName, _layerInfo.layer).c_str();
+    _pathEdit->setText(QFileInfo(pathToSaveAs).absoluteFilePath());
+
+    // Set default state of checkbox and proper setting of path (must come after the initial
+    // setting above).
+    bool shouldCheck = _layerInfo.parent._layerParent
+        ? UsdMayaUtilFileSystem::requireUsdPathsRelativeToParentLayer()
+        : UsdMayaUtilFileSystem::requireUsdPathsRelativeToMayaSceneFile();
+    _relative->setChecked(shouldCheck);
+    onRelativeChanged();
 }
 
 QString SaveLayerPathRow::layerDisplayName() const { return _label->text(); }
 
-QString SaveLayerPathRow::absolutePath() const { return _absolutePath; }
-
-QString SaveLayerPathRow::pathToSaveAs() const { return _absolutePath; }
-
-void SaveLayerPathRow::setAbsolutePath(const std::string& path)
+QString SaveLayerPathRow::getAbsolutePath() const
 {
-    _absolutePath = path.c_str();
-    _pathEdit->setText(_absolutePath);
+    return QString(_absolutePath.generic_string().c_str());
+}
+
+bool SaveLayerPathRow::needToSaveAsRelative() const
+{
+    return _relative->checkState() == Qt::Checked;
+}
+
+void SaveLayerPathRow::setSaveAsRelative(bool relative)
+{
+    _relative->setCheckState(relative ? Qt::Checked : Qt::Unchecked);
+}
+
+void SaveLayerPathRow::setPathToSaveAs(const std::string& absolutePath, bool saveAsRelative)
+{
+    // Calculate relative anchor
+    std::string relativeAnchor;
+    if (_layerInfo.parent._layerParent) {
+        if (saveAsRelative) {
+            relativeAnchor = calculateParentLayerDir();
+        }
+    } else {
+        if (saveAsRelative) {
+            relativeAnchor = UsdMayaUtilFileSystem::getMayaSceneFileDir();
+            if (relativeAnchor.empty()) {
+                relativeAnchor
+                    = ghc::filesystem::path(absolutePath).remove_filename().generic_string();
+            }
+        }
+    }
+
+    _absolutePath = absolutePath;
+    _relativeAnchor = relativeAnchor;
+
+    std::string displayPath = absolutePath;
+    if (!relativeAnchor.empty()) {
+        displayPath = UsdMayaUtilFileSystem::makePathRelativeTo(
+                          _absolutePath.generic_string(), _relativeAnchor.generic_string())
+                          .first;
+    }
+
+    _suppressUserInputCallbacks = true;
+    _pathEdit->setText(displayPath.c_str());
     _pathEdit->setEnabled(true);
+    setSaveAsRelative(saveAsRelative);
+    _suppressUserInputCallbacks = false;
+
+    if (!saveAsRelative) {
+        // Quietly uncheck AllAsRelative checkbox
+        _parent->quietlyUncheckAllAsRelative();
+    }
+
+    postUpdate();
+}
+
+std::string SaveLayerPathRow::calculateParentLayerDir() const
+{
+    auto& parentLayer = _layerInfo.parent._layerParent;
+    if (parentLayer) {
+        if (parentLayer->IsAnonymous()) {
+            auto parentLayerWidget = _parent->findEntry(parentLayer);
+            if (auto parentLayerEntry = dynamic_cast<SaveLayerPathRow*>(parentLayerWidget)) {
+                return UsdMayaUtilFileSystem::getDir(
+                    parentLayerEntry->getAbsolutePath().toStdString());
+            }
+        } else {
+            return UsdMayaUtilFileSystem::getLayerFileDir(parentLayer);
+        }
+    }
+
+    return std::string();
 }
 
 void SaveLayerPathRow::onOpenBrowser()
 {
-    std::string fileName;
-    if (SaveLayersDialog::saveLayerFilePathUI(fileName)) {
-        setAbsolutePath(fileName);
+    // Calculate parent layer path
+    auto&       parentLayer = _layerInfo.parent._layerParent;
+    std::string parentLayerPath = calculateParentLayerDir();
+
+    // Update appropriate option var
+    const char* optionVarName = parentLayer ? "mayaUsd_MakePathRelativeToParentLayer"
+                                            : "mayaUsd_MakePathRelativeToSceneFile";
+    const bool optionvarExists = MGlobal::optionVarExists(optionVarName);
+    int        optionVarValue = 0;
+    if (optionvarExists) {
+        optionVarValue = MGlobal::optionVarIntValue(optionVarName);
+        MGlobal::setOptionVarValue(optionVarName, needToSaveAsRelative() ? 1 : 0);
+    }
+
+    // Run the UI and set the resulting path
+    std::string absolutePath;
+    if (SaveLayersDialog::saveLayerFilePathUI(absolutePath, !parentLayer, parentLayerPath)) {
+        bool saveAsRelative = (optionvarExists && MGlobal::optionVarIntValue(optionVarName) != 0);
+        setPathToSaveAs(absolutePath, saveAsRelative);
+    }
+
+    // Restore original option var value
+    if (optionvarExists) {
+        MGlobal::setOptionVarValue(optionVarName, optionVarValue);
     }
 }
 
-void SaveLayerPathRow::onTextChanged(const QString& text) { _absolutePath = text; }
+void SaveLayerPathRow::onTextChanged(const QString& text)
+{
+    if (_suppressUserInputCallbacks) {
+        return;
+    }
+
+    ghc::filesystem::path inputPath(text.toStdString());
+    if (inputPath.is_absolute()) {
+        _relativeAnchor.clear();
+        _absolutePath = inputPath;
+    } else if (!_relativeAnchor.empty()) {
+        _absolutePath = (_relativeAnchor / inputPath).lexically_normal();
+    } else {
+        _relativeAnchor = MayaUsd::utils::getSceneFolder();
+        _absolutePath = (_relativeAnchor / inputPath).lexically_normal();
+    }
+
+    postUpdate();
+}
+
+void SaveLayerPathRow::onRelativeChanged()
+{
+    if (!_suppressUserInputCallbacks) {
+        setPathToSaveAs(_absolutePath.generic_string(), needToSaveAsRelative());
+    }
+}
+
+void SaveLayerPathRow::postUpdate()
+{
+    // Update _pathEdit tooltip
+    QString tooltip;
+    if (!_relativeAnchor.empty()) {
+        tooltip = "Directory: ";
+        tooltip += _relativeAnchor.generic_string().c_str();
+    }
+    _pathEdit->setToolTip(tooltip);
+
+    // Update relative anchors of child layers
+    _parent->forEachEntry([this](QWidget* w) {
+        auto entry = dynamic_cast<SaveLayerPathRow*>(w);
+        if (entry && (entry->_layerInfo.parent._layerParent == _layerInfo.layer)
+            && entry->needToSaveAsRelative()) {
+            ghc::filesystem::path relativeAnchor
+                = UsdMayaUtilFileSystem::getDir(getAbsolutePath().toStdString());
+            ghc::filesystem::path relatievPath = entry->_pathEdit->text().toStdString();
+            ghc::filesystem::path absolutePath = (relativeAnchor / relatievPath).lexically_normal();
+            entry->setPathToSaveAs(absolutePath.generic_string(), true);
+        }
+    });
+}
 
 class SaveLayerPathRowArea : public QScrollArea
 {
@@ -197,27 +367,55 @@ public:
 
     QSize sizeHint() const override
     {
-        QSize hint;
-
         if (widget() && widget()->layout()) {
-            auto l = widget()->layout();
-            for (int i = 0; i < l->count(); ++i) {
-                QWidget* w = l->itemAt(i)->widget();
-
-                QSize rowHint = w->sizeHint();
-                if (hint.width() < rowHint.width()) {
-                    hint.setWidth(rowHint.width());
+            QGridLayout* gridLayout = qobject_cast<QGridLayout*>(widget()->layout());
+            if (nullptr != gridLayout) {
+                QSize     hint { 0, 0 };
+                const int nbCols = gridLayout->columnCount();
+                const int nbRows = gridLayout->rowCount();
+                for (int r = 0; r < nbRows; ++r) {
+                    int rowWidth { 0 };
+                    int rowHeight { 0 };
+                    for (int c = 0; c < nbCols; ++c) {
+                        QWidget* w = gridLayout->itemAtPosition(r, c)->widget();
+                        QSize    rowHint = w->sizeHint();
+                        rowWidth += rowHint.width();
+                        rowHeight = std::max(rowHeight, rowHint.height());
+                    }
+                    if (hint.width() < rowWidth) {
+                        hint.setWidth(rowWidth);
+                    }
+                    hint.rheight() += rowHeight;
                 }
-                if (0 < rowHint.height())
-                    hint.rheight() += rowHint.height();
+
+                // Extra padding (enough for 3.5 lines).
+                if (hint.height() < DPIScale(120))
+                    hint.setHeight(DPIScale(120));
+                return hint;
             }
 
-            // Extra padding (enough for 3.5 lines).
-            hint.rwidth() += 100;
-            if (hint.height() < DPIScale(120))
-                hint.setHeight(DPIScale(120));
+            QVBoxLayout* vLayout = qobject_cast<QVBoxLayout*>(widget()->layout());
+            if (nullptr != vLayout) {
+                QSize hint { 0, 0 };
+                for (int i = 0; i < vLayout->count(); ++i) {
+                    QWidget* w = vLayout->itemAt(i)->widget();
+
+                    QSize rowHint = w->sizeHint();
+                    if (hint.width() < rowHint.width()) {
+                        hint.setWidth(rowHint.width());
+                    }
+                    if (0 < rowHint.height())
+                        hint.rheight() += rowHint.height();
+                }
+
+                // Extra padding (enough for 3.5 lines).
+                hint.rwidth() += 100;
+                if (hint.height() < DPIScale(120))
+                    hint.setHeight(DPIScale(120));
+                return hint;
+            }
         }
-        return hint;
+        return {};
     }
 };
 
@@ -226,7 +424,6 @@ public:
 //
 namespace UsdLayerEditor {
 
-#if defined(WANT_UFE_BUILD)
 SaveLayersDialog::SaveLayersDialog(
     QWidget*                                     in_parent,
     const std::vector<MayaUsd::StageSavingInfo>& infos)
@@ -243,15 +440,16 @@ SaveLayersDialog::SaveLayersDialog(
     for (const auto& info : infos) {
 
         getLayersToSave(
-            info.dagPath.fullPathName().asChar(), info.dagPath.partialPathName().asChar());
+            info.stage,
+            info.dagPath.fullPathName().asChar(),
+            info.dagPath.partialPathName().asChar());
     }
 
     QString msg1, msg2;
     getDialogMessages(
-        static_cast<int>(infos.size()), static_cast<int>(_anonLayerPairs.size()), msg1, msg2);
+        static_cast<int>(infos.size()), static_cast<int>(_anonLayerInfos.size()), msg1, msg2);
     buildDialog(msg1, msg2);
 }
-#endif
 
 SaveLayersDialog::SaveLayersDialog(SessionState* in_sessionState, QWidget* in_parent)
     : QDialog(in_parent, Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint)
@@ -264,28 +462,31 @@ SaveLayersDialog::SaveLayersDialog(SessionState* in_sessionState, QWidget* in_pa
         std::string stageName = stageEntry._displayName;
         msg.format(StringResources::getAsMString(StringResources::kSaveName), stageName.c_str());
         dialogTitle = MQtUtil::toQString(msg);
-        getLayersToSave(stageEntry._proxyShapePath, stageName);
+        getLayersToSave(stageEntry._stage, stageEntry._proxyShapePath, stageName);
     }
     setWindowTitle(dialogTitle);
 
     QString msg1, msg2;
-    getDialogMessages(1, static_cast<int>(_anonLayerPairs.size()), msg1, msg2);
+    getDialogMessages(1, static_cast<int>(_anonLayerInfos.size()), msg1, msg2);
     buildDialog(msg1, msg2);
 }
 
 SaveLayersDialog ::~SaveLayersDialog() { QApplication::restoreOverrideCursor(); }
 
-void SaveLayersDialog::getLayersToSave(const std::string& proxyPath, const std::string& stageName)
+void SaveLayersDialog::getLayersToSave(
+    const PXR_NS::UsdStageRefPtr& stage,
+    const std::string&            proxyPath,
+    const std::string&            stageName)
 {
     // Get the layers to save for this stage.
-    MayaUsd::utils::stageLayersToSave stageLayersToSave;
-    MayaUsd::utils::getLayersToSaveFromProxy(proxyPath, stageLayersToSave);
+    MayaUsd::utils::StageLayersToSave StageLayersToSave;
+    MayaUsd::utils::getLayersToSaveFromProxy(proxyPath, StageLayersToSave);
 
     // Keep track of all the layers for this particular stage.
-    for (const auto& layerPairs : stageLayersToSave._anonLayers) {
-        _stageLayerMap.emplace(std::make_pair(layerPairs.first, stageName));
+    for (const auto& layerInfo : StageLayersToSave._anonLayers) {
+        _stageLayerMap.emplace(std::make_pair(layerInfo.layer, stageName));
     }
-    for (const auto& dirtyLayer : stageLayersToSave._dirtyFileBackedLayers) {
+    for (const auto& dirtyLayer : StageLayersToSave._dirtyFileBackedLayers) {
         _stageLayerMap.emplace(std::make_pair(dirtyLayer, stageName));
     }
 
@@ -293,10 +494,10 @@ void SaveLayersDialog::getLayersToSave(const std::string& proxyPath, const std::
     // Note: we use a set for the dirty file back layers because they
     //       can come from multiple stages, but we only want them to
     //       appear once in the dialog.
-    moveAppendVector(stageLayersToSave._anonLayers, _anonLayerPairs);
+    moveAppendVector(StageLayersToSave._anonLayers, _anonLayerInfos);
     _dirtyFileBackedLayers.insert(
-        std::begin(stageLayersToSave._dirtyFileBackedLayers),
-        std::end(stageLayersToSave._dirtyFileBackedLayers));
+        std::begin(StageLayersToSave._dirtyFileBackedLayers),
+        std::end(StageLayersToSave._dirtyFileBackedLayers));
 }
 
 void SaveLayersDialog::buildDialog(const QString& msg1, const QString& msg2)
@@ -317,7 +518,7 @@ void SaveLayersDialog::buildDialog(const QString& msg1, const QString& msg2)
     buttonsLayout->addWidget(okButton);
     buttonsLayout->addWidget(cancelButton);
 
-    const bool            haveAnonLayers { !_anonLayerPairs.empty() };
+    const bool            haveAnonLayers { !_anonLayerInfos.empty() };
     const bool            haveFileBackedLayers { !_dirtyFileBackedLayers.empty() };
     SaveLayerPathRowArea* anonScrollArea { nullptr };
     SaveLayerPathRowArea* fileScrollArea { nullptr };
@@ -325,13 +526,19 @@ void SaveLayersDialog::buildDialog(const QString& msg1, const QString& msg2)
 
     // Anonymous layers.
     if (haveAnonLayers) {
-        auto anonLayout = new QVBoxLayout();
-        anonLayout->setContentsMargins(margin, margin, margin, 0);
-        anonLayout->setSpacing(DPIScale(8));
+        auto anonLayout = new QGridLayout();
+        QtUtils::initLayoutMargins(anonLayout, DPIScale(8));
         anonLayout->setAlignment(Qt::AlignTop);
-        for (auto iter = _anonLayerPairs.cbegin(); iter != _anonLayerPairs.cend(); ++iter) {
-            auto row = new SaveLayerPathRow(this, (*iter));
-            anonLayout->addWidget(row);
+        // Note: must start from the end so that layers appear in the right order from parent to
+        // children.
+        int gridRow = 0;
+        for (auto iter = _anonLayerInfos.crbegin(); iter != _anonLayerInfos.crend(); ++iter) {
+            // Note: the row adds itself as a children of the dialog, so it will be deleted
+            //       when the dialog closes.
+            auto saveLayerPathRow = new SaveLayerPathRow(this, anonLayout, gridRow++, (*iter));
+            // Note: We keep track of the row data so that it can be used when saving layers without
+            // having to iterate over SaveLayersDialog's entire layout.
+            _saveLayerPathRows.push_back(saveLayerPathRow);
         }
 
         _anonLayersWidget = new QWidget();
@@ -387,6 +594,23 @@ void SaveLayersDialog::buildDialog(const QString& msg1, const QString& msg2)
             auto dialogMessage = new QLabel(msg1);
             topLayout->addWidget(dialogMessage);
         }
+
+        // All relative checkbox
+        _allAsRelative = new QCheckBox(
+            StringResources::getAsQString(StringResources::kBatchSaveAllRelative), this);
+        connect(
+            _allAsRelative,
+            &QCheckBox::stateChanged,
+            this,
+            &SaveLayersDialog::onAllAsRelativeChanged);
+
+        // Default state for all relative checkbox. If both relative to SceneFile and
+        // ParentLayer optionvars are on, then this should be on.
+        bool shouldCheck = UsdMayaUtilFileSystem::requireUsdPathsRelativeToParentLayer()
+            && UsdMayaUtilFileSystem::requireUsdPathsRelativeToMayaSceneFile();
+        _allAsRelative->setChecked(shouldCheck);
+
+        topLayout->addWidget(_allAsRelative);
 
         // Then add the first scroll area (containing the anonymous layers)
         topLayout->addWidget(anonScrollArea);
@@ -447,53 +671,65 @@ QString SaveLayersDialog::buildTooltipForLayer(SdfLayerRefPtr layer)
     return tooltip;
 }
 
+QWidget* SaveLayersDialog::findEntry(SdfLayerRefPtr key)
+{
+    for (int i = 0, count = _saveLayerPathRows.size(); i < count; ++i) {
+        auto row = dynamic_cast<SaveLayerPathRow*>(_saveLayerPathRows[i]);
+        if (row && row->_layerInfo.layer == key) {
+            return row;
+        }
+    }
+
+    return nullptr;
+}
+
+void SaveLayersDialog::forEachEntry(const std::function<void(QWidget*)>& func)
+{
+    for (int i = 0, count = _saveLayerPathRows.size(); i < count; ++i) {
+        func(_saveLayerPathRows[i]);
+    }
+}
+
 void SaveLayersDialog::onSaveAll()
 {
     if (!okToSave()) {
         return;
     }
 
-    int         i, count;
-    std::string newRoot;
-
     _newPaths.clear();
     _problemLayers.clear();
     _emptyLayers.clear();
 
-    // The anonymous layer section in the dialog can be empty.
-    if (nullptr != _anonLayersWidget) {
-        QLayout* anonLayout = _anonLayersWidget->layout();
-        for (i = 0, count = anonLayout->count(); i < count; ++i) {
-            auto row = dynamic_cast<SaveLayerPathRow*>(anonLayout->itemAt(i)->widget());
-            if (!row || !row->_layerPair.first)
-                continue;
+    // Note: must start from the end so that sub-layers are saved before their parent.
+    for (int count = _saveLayerPathRows.size(), i = count - 1; i >= 0; --i) {
+        auto row = dynamic_cast<SaveLayerPathRow*>(_saveLayerPathRows[i]);
+        if (!row || !row->_layerInfo.layer)
+            continue;
 
-            QString path = row->pathToSaveAs();
-            if (!path.isEmpty()) {
-                auto sdfLayer = row->_layerPair.first;
-                auto parent = row->_layerPair.second;
-                auto qFileName = row->absolutePath();
+        QString absolutePath = row->getAbsolutePath();
+        if (!absolutePath.isEmpty()) {
+            auto sdfLayer = row->_layerInfo.layer;
+            auto parent = row->_layerInfo.parent;
+            auto stage = row->_layerInfo.stage;
 
-                // If the qFileName is a relative path, compute the absolute path from the scene
-                // folder otherwise, USD will use a path relative the current working directory.
-                if (QDir::isRelativePath(qFileName)) {
-                    QDir dir(MayaUsd::utils::getSceneFolder().c_str());
-                    qFileName = dir.absoluteFilePath(qFileName);
-                }
-
-                auto sFileName = qFileName.toStdString();
-
-                auto newLayer = MayaUsd::utils::saveAnonymousLayer(sdfLayer, sFileName, parent);
-                if (newLayer) {
-                    _newPaths.append(QString::fromStdString(sdfLayer->GetDisplayName()));
-                    _newPaths.append(qFileName);
-                } else {
-                    _problemLayers.append(QString::fromStdString(sdfLayer->GetDisplayName()));
-                    _problemLayers.append(qFileName);
-                }
-            } else {
-                _emptyLayers.append(row->layerDisplayName());
+            MayaUsd::utils::PathInfo pathInfo;
+            pathInfo.absolutePath = absolutePath.toStdString();
+            pathInfo.savePathAsRelative = row->needToSaveAsRelative();
+            if (pathInfo.savePathAsRelative && parent._layerParent
+                && parent._layerParent->IsAnonymous()) {
+                pathInfo.customRelativeAnchor = row->calculateParentLayerDir();
             }
+
+            auto newLayer = MayaUsd::utils::saveAnonymousLayer(stage, sdfLayer, pathInfo, parent);
+            if (newLayer) {
+                _newPaths.append(QString::fromStdString(sdfLayer->GetDisplayName()));
+                _newPaths.append(absolutePath);
+            } else {
+                _problemLayers.append(QString::fromStdString(sdfLayer->GetDisplayName()));
+                _problemLayers.append(absolutePath);
+            }
+        } else {
+            _emptyLayers.append(row->layerDisplayName());
         }
     }
 
@@ -509,25 +745,22 @@ bool SaveLayersDialog::okToSave()
     QMap<QString, int> alreadySeenPaths;
     QStringList        existingFiles;
 
-    // The anonymous layer section in the dialog can be empty.
-    if (nullptr != _anonLayersWidget) {
-        QLayout* anonLayout = _anonLayersWidget->layout();
-        for (int i = 0, count = anonLayout->count(); i < count; ++i) {
-            auto row = dynamic_cast<SaveLayerPathRow*>(anonLayout->itemAt(i)->widget());
-            if (nullptr == row)
-                continue;
+    for (int count = _saveLayerPathRows.size(), i = count - 1; i >= 0; --i) {
+        auto row = dynamic_cast<SaveLayerPathRow*>(_saveLayerPathRows[i]);
+        if (!row || !row->_layerInfo.layer)
+            continue;
 
-            QString path = row->pathToSaveAs();
-            if (!path.isEmpty()) {
-                if (alreadySeenPaths.count(path) > 0) {
-                    alreadySeenPaths[path] += 1;
-                } else {
-                    alreadySeenPaths[path] = 1;
-                }
-                QFileInfo fInfo(path);
-                if (fInfo.exists()) {
-                    existingFiles.append(path);
-                }
+        QString path = row->getAbsolutePath();
+
+        if (!path.isEmpty()) {
+            if (alreadySeenPaths.count(path) > 0) {
+                alreadySeenPaths[path] += 1;
+            } else {
+                alreadySeenPaths[path] = 1;
+            }
+            QFileInfo fInfo(path);
+            if (fInfo.exists()) {
+                existingFiles.append(path);
             }
         }
     }
@@ -576,12 +809,84 @@ bool SaveLayersDialog::okToSave()
     return true;
 }
 
-/*static*/
-bool SaveLayersDialog::saveLayerFilePathUI(std::string& out_filePath)
+void SaveLayersDialog::onAllAsRelativeChanged()
 {
+    if (!_allAsRelative) {
+        return;
+    }
+
+    bool saveAsRelative = _allAsRelative->checkState() == Qt::Checked;
+    forEachEntry([saveAsRelative](QWidget* w) {
+        auto entry = dynamic_cast<SaveLayerPathRow*>(w);
+        if (entry) {
+            entry->setSaveAsRelative(saveAsRelative);
+        }
+    });
+}
+
+void SaveLayersDialog::quietlyUncheckAllAsRelative()
+{
+    if (!_allAsRelative) {
+        return;
+    }
+
+    auto allRelative = _allAsRelative;
+    _allAsRelative = nullptr; // nullify _allAsRelative to suppress setSaveAllAsRelative callback
+    allRelative->setCheckState(Qt::Unchecked);
+    _allAsRelative = allRelative; // restore _allAsRelative
+}
+
+/*static*/
+bool SaveLayersDialog::saveLayerFilePathUI(
+    std::string&                  out_filePath,
+    const PXR_NS::SdfLayerRefPtr& parentLayer)
+{
+    const bool useSceneFileForRoot = true;
+    UsdMayaUtilFileSystem::prepareLayerSaveUILayer(parentLayer, useSceneFileForRoot);
+
+    std::string parentLayerPath = "\"\"";
+    if (parentLayer) {
+        ghc::filesystem::path parentPath(parentLayer->GetRealPath());
+        parentLayerPath = "\"" + parentPath.parent_path().generic_string() + "\"";
+    }
+
+    MString cmd;
+    cmd.format(
+        "UsdLayerEditor_SaveLayerFileDialog(^1s,^2s,0)",
+        parentLayer ? "0" : "1",
+        parentLayerPath.c_str());
+
     MString fileSelected;
     MGlobal::executeCommand(
-        MString("UsdLayerEditor_SaveLayerFileDialog"),
+        cmd,
+        fileSelected,
+        /*display*/ true,
+        /*undo*/ false);
+    if (fileSelected.length() == 0)
+        return false;
+
+    out_filePath = fileSelected.asChar();
+
+    return true;
+}
+
+/*static*/
+bool SaveLayersDialog::saveLayerFilePathUI(
+    std::string&       out_filePath,
+    bool               isRootLayer,
+    const std::string& parentLayerPath)
+{
+    UsdMayaUtilFileSystem::prepareLayerSaveUILayer(parentLayerPath);
+
+    MString cmd;
+    cmd.format(
+        "UsdLayerEditor_SaveLayerFileDialog(^1s,\"^2s\",1)",
+        isRootLayer ? "1" : "0",
+        ghc::filesystem::path(parentLayerPath).generic_string().c_str());
+
+    MString fileSelected;
+    MGlobal::executeCommand(
+        cmd,
         fileSelected,
         /*display*/ true,
         /*undo*/ false);

@@ -16,6 +16,7 @@
 
 #include "XformOpUtils.h"
 
+#include <pxr/base/tf/stringUtils.h>
 #include <pxr/usd/usdGeom/xformable.h>
 
 #include <maya/MMatrix.h>
@@ -37,8 +38,7 @@ GfMatrix4d computeLocalTransformWithIterator(
     const UsdTimeCode&                          time)
 {
     // If we want the op to be included, increment the end op iterator.
-    if (INCLUSIVE) {
-        TF_AXIOM(endOp != ops.end());
+    if (INCLUSIVE && endOp != ops.end()) {
         ++endOp;
     }
 
@@ -49,7 +49,7 @@ GfMatrix4d computeLocalTransformWithIterator(
 
     GfMatrix4d m(1);
     if (!UsdGeomXformable::GetLocalTransformation(&m, argOps, time)) {
-        TF_FATAL_ERROR("Local transformation computation failed.");
+        throw std::runtime_error("Local transformation computation failed.");
     }
 
     return m;
@@ -63,18 +63,11 @@ computeLocalTransformWithOp(const UsdPrim& prim, const UsdGeomXformOp& op, const
     bool             unused;
     auto             ops = xformable.GetOrderedXformOps(&unused);
 
-    // The UsdGeomXformOp::operator==() was only added in v20.05, so
-    // prior to that we need to find using a predicate. In USD
-    // they define equality to be the same underlying UsdAttribute.
-#if PXR_VERSION < 2005
-    auto find_XFormOp = [op](const UsdGeomXformOp& x) { return x.GetAttr() == op.GetAttr(); };
-    auto i = std::find_if(ops.begin(), ops.end(), find_XFormOp);
-#else
     auto i = std::find(ops.begin(), ops.end(), op);
-#endif
-
     if (i == ops.end()) {
-        TF_FATAL_ERROR("Matrix op %s not found in transform ops.", op.GetOpName().GetText());
+        std::string msg
+            = TfStringPrintf("Matrix op %s not found in transform ops.", op.GetOpName().GetText());
+        throw std::runtime_error(msg.c_str());
     }
 
     return computeLocalTransformWithIterator<INCLUSIVE>(ops, i, time);

@@ -27,7 +27,7 @@ import mayaUsd.lib
 import mayaUtils
 import mayaUsd.ufe
 
-from pxr import UsdGeom, Gf, Sdf
+from pxr import UsdGeom, Gf, Sdf, Usd
 
 from maya import cmds
 from maya import standalone
@@ -213,7 +213,7 @@ class MergeToUsdTestCase(unittest.TestCase):
             for mayaPathStr in [aMayaPathStr, bMayaPathStr]:
                 try:
                     om.MSelectionList().add(mayaPathStr)
-                except:
+                except Exception:
                     self.assertTrue(False, "Selecting node should not have raise an exception")
             # Selection is restored.
             self.assertEqual(cmds.ls(sl=True, ufe=True, long=True), previousSn)
@@ -297,6 +297,12 @@ class MergeToUsdTestCase(unittest.TestCase):
         usdValues = [v for row in bUsdMatrix for v in row]
     
         assertVectorAlmostEqual(self, mayaValues, usdValues)
+
+        # Check that edits have been set as "overs"
+        primSpecA = layers[1].GetPrimAtPath("/A")
+        self.assertEqual(primSpecA.specifier, Sdf.SpecifierOver)
+        primSpecB = layers[1].GetPrimAtPath("/A/B")
+        self.assertEqual(primSpecB.specifier, Sdf.SpecifierOver)
 
     def testEquivalentTransformMergeToUsd(self):
         '''Merge edits on a USD transform back to USD when the new transform is equivalent.'''
@@ -473,6 +479,334 @@ class MergeToUsdTestCase(unittest.TestCase):
         # Verify that the merged scene still does not have a look (material) prim.
         cylLooksPrim = stage.GetPrimAtPath("/pCylinder1/Looks")
         self.assertFalse(cylLooksPrim.IsValid())
+
+    def testMergeInSubVariant(self):
+        '''Merge edits on data that is inside a variant of a parent prim and contains variants.'''
+
+        # Create a stage from a file.
+        testFile = getTestScene("multiVariants", "multi_variants.usda")
+        testDagPath, stage = mayaUtils.createProxyFromFile(testFile)
+
+        # UFE path to interesting prims in the USD file.
+        #
+        #    /RootPrim
+        #      /PrimWithVariant {modelingVariant = A or B or C}
+        #        /ModelA
+        #          /ConeA { extraStuff = Cube or Cylinder}
+        #            /ExtraCube
+
+        # Root prim
+        rootSdfPath = "/RootPrim"
+
+        # This prim has "modelingVariant" variant set with variants "A", "B" and "C"
+        parentWithVariantSdfPath = rootSdfPath + "/PrimWithVariant"
+        parentWithVariantSetName = "modelingVariant"
+        parentWithVariantName = "A"
+
+        # This prim is in variant A. This is the prim that will be edited
+        editedSdfPath = parentWithVariantSdfPath + "/ModelA"
+
+        # This is a sub-prim of the edited prim and has "extraStuff" variant set
+        # with variants "Cube" and "Cylinder"
+        subWithVariantSdfPath = editedSdfPath + "/ConeA"
+        subWithVariantSetName = "extraStuff"
+        subWithVariantName = "Cube"
+
+        # This is a sub-sub-prim in the sub-prim with variant,
+        # inside its "Cube" variant.
+        subsubSdfPath = subWithVariantSdfPath + "/ExtraCube"
+
+        # Verify that the original scene has the correct variants selected.
+        rootPrim = stage.GetPrimAtPath(rootSdfPath)
+        self.assertIsNotNone(rootPrim)
+        self.assertTrue(rootPrim.IsValid())
+        
+        def verifyParentVariant():
+            parentWithVariantPrim = stage.GetPrimAtPath(parentWithVariantSdfPath)
+            self.assertIsNotNone(parentWithVariantPrim)
+            self.assertTrue(parentWithVariantPrim.IsValid())
+            self.assertTrue(parentWithVariantPrim.HasVariantSets())
+            parentWithVariantVariantSet = parentWithVariantPrim.GetVariantSets().GetVariantSet(parentWithVariantSetName)
+            self.assertIsNotNone(parentWithVariantVariantSet)
+            self.assertEqual(parentWithVariantName, parentWithVariantVariantSet.GetVariantSelection())
+
+        def verifySubVariant():
+            subWithVariantPrim = stage.GetPrimAtPath(subWithVariantSdfPath)
+            self.assertIsNotNone(subWithVariantPrim)
+            self.assertTrue(subWithVariantPrim.IsValid())
+            self.assertTrue(subWithVariantPrim.HasVariantSets())
+            subWithVariantVariantSet = subWithVariantPrim.GetVariantSets().GetVariantSet(subWithVariantSetName)
+            self.assertIsNotNone(subWithVariantVariantSet)
+            self.assertEqual(subWithVariantName, subWithVariantVariantSet.GetVariantSelection())
+
+        verifyParentVariant()
+        verifySubVariant()
+
+        # Edit as maya and move the ConeA and ExtraCube.
+        cmds.mayaUsdEditAsMaya(testDagPath + "," + editedSdfPath)
+
+        editedMayaItem = ufe.GlobalSelection.get().front()
+        editedMayaPath = editedMayaItem.path()
+        editedMayaPathStr = ufe.PathString.string(editedMayaPath)
+
+        subWithVariantMayaPathStr = editedMayaPathStr + "|ConeA"
+        subWithVariantMayaPath = ufe.PathString.path(subWithVariantMayaPathStr)
+        subWithVariantMayaItem = ufe.Hierarchy.createItem(subWithVariantMayaPath)
+        (subWithVariantMayaPath, subWithVariantMayaPathStr, _, subWithVariantMayaMatrix) = \
+            setMayaTranslation(subWithVariantMayaItem, om.MVector(2, 3, 4))
+
+        subsubMayaPathStr = subWithVariantMayaPathStr + "|ExtraCube"
+        subsubMayaPath = ufe.PathString.path(subsubMayaPathStr)
+        subsubMayaItem = ufe.Hierarchy.createItem(subsubMayaPath)
+        (subsubMayaPath, subsubMayaPathStr, _, subsubMayaMatrix) = \
+            setMayaTranslation(subsubMayaItem, om.MVector(-4, -5, -6))
+
+        # Merge back to USD.
+        cmds.mayaUsdMergeToUsd(editedMayaPathStr)
+
+        verifyParentVariant()
+        verifySubVariant()
+
+        # Switch parent with variant to variant "B" and verify
+        # that the subWithVariant and subsub are gone.
+
+        def switchParentWithVariant(newVariantName):
+            parentWithVariantPrim = stage.GetPrimAtPath(parentWithVariantSdfPath)
+            parentWithVariantVariantSets = parentWithVariantPrim.GetVariantSets()
+            parentWithVariantVariantSets.SetSelection(parentWithVariantSetName, newVariantName)
+
+        def verifySwitch():
+            editedPrim = stage.GetPrimAtPath(editedSdfPath)
+            self.assertFalse(editedPrim.IsValid())
+            subWithVariantPrim = stage.GetPrimAtPath(subWithVariantSdfPath)
+            self.assertFalse(subWithVariantPrim.IsValid())
+            subsubPrim = stage.GetPrimAtPath(subsubSdfPath)
+            self.assertFalse(subsubPrim.IsValid())
+
+        switchParentWithVariant("B")
+        verifySwitch()
+
+    def testMergeComponentInVariants(self):
+        '''
+        Merge edits on a component that is kept in a separate file.
+        That component is inside the variants declared in its parent
+        prim.
+
+        Verify that editing it and merging it inside variants, that is
+        with the merge option ignoreVariants set to false, the edits will
+        be authored inside the variants.
+        '''
+
+        # Create a stage from a file.
+        testFile = getTestScene("multiVariants", "with-variants-root.usda")
+        testDagPath, stage = mayaUtils.createProxyFromFile(testFile)
+
+        # Create a new anonymous layer under the root that will receive the edits.
+        newLayer = Sdf.Layer.CreateAnonymous()
+        stage.GetRootLayer().subLayerPaths.append(newLayer.identifier)
+        stage.SetEditTarget(newLayer)
+
+        # UFE path to interesting prims in the USD file.
+        #
+        #    /group (Xform, variant sets: geo, geo_vis, selection: render_high, render, xformOp inside both variants)
+        #      /GEO (Xform, inside both variants)
+        #        /pCube1 (Mesh, inside both variants)
+
+        # Root prim
+        # This prim has variant set "geo" set to "render_high" and "geo_vis" set to "render"
+        rootSdfPath = "/group"
+
+        geoVariantSetName = "geo"
+        geoVariantSelection = "render_high"
+
+        visVariantSetName = "geo_vis"
+        visRenderVariant = "render"
+        visPreviewVariant = "preview"
+
+        # This prim is in variants will be edited
+        editedSdfPath = rootSdfPath + "/GEO"
+
+        # Verify that the original scene has the correct variants selected.
+        def verifyVariantSelections():
+            rootPrim = stage.GetPrimAtPath(rootSdfPath)
+            self.assertIsNotNone(rootPrim)
+            self.assertTrue(rootPrim.IsValid())
+            self.assertTrue(rootPrim.HasVariantSets())
+            geoVariantSetVariantSet = rootPrim.GetVariantSets().GetVariantSet(geoVariantSetName)
+            self.assertIsNotNone(geoVariantSetVariantSet)
+            self.assertEqual(geoVariantSelection, geoVariantSetVariantSet.GetVariantSelection())
+            visVariantSetVariantSet = rootPrim.GetVariantSets().GetVariantSet(visVariantSetName)
+            self.assertIsNotNone(visVariantSetVariantSet)
+            self.assertEqual(visRenderVariant, visVariantSetVariantSet.GetVariantSelection())
+
+        verifyVariantSelections()
+
+        # Edit as maya and move the GEO.
+        cmds.mayaUsdEditAsMaya(testDagPath + "," + editedSdfPath)
+
+        editedMayaItem = ufe.GlobalSelection.get().front()
+        editedMayaPath = editedMayaItem.path()
+        editedMayaPathStr = ufe.PathString.string(editedMayaPath)
+
+        (editedMayaPath, editedMayaPathStr, _, editedMayaMatrix) = \
+            setMayaTranslation(editedMayaItem, om.MVector(-12, -13, 14))
+
+        # Merge back to USD.
+        cmds.mayaUsdMergeToUsd(editedMayaPathStr)
+
+        verifyVariantSelections()
+
+        def verifyTranslation():
+            editedPrim = stage.GetPrimAtPath(editedSdfPath)
+            self.assertTrue(editedPrim.IsValid())
+
+            xformOps = UsdGeom.Xformable(editedPrim).GetOrderedXformOps()
+            self.assertIsNotNone(xformOps)
+            self.assertEqual(len(xformOps), 1)
+            usdMatrix = xformOps[0].GetOpTransform(Usd.TimeCode())
+
+            usdValues = [v for row in usdMatrix for v in row]
+            mayaValues = [v for v in editedMayaMatrix]
+            assertVectorAlmostEqual(self, mayaValues, usdValues)
+
+        verifyTranslation()
+
+        # Switch root to variant "preview" and verify that the translation
+        # on the GEO prim is gone.
+        #
+        # For the variant switch to work, we must put the edit target on
+        # the root layer again.
+
+        stage.SetEditTarget(stage.GetRootLayer())
+
+        def switchRootVisVariant():
+            rootPrim = stage.GetPrimAtPath(rootSdfPath)
+            rootVariantSets = rootPrim.GetVariantSets()
+            rootVariantSets.SetSelection(visVariantSetName, visPreviewVariant)
+
+        def verifySwitch():
+            editedPrim = stage.GetPrimAtPath(editedSdfPath)
+            self.assertTrue(editedPrim.IsValid())
+
+            xformOps = UsdGeom.Xformable(editedPrim).GetOrderedXformOps()
+            self.assertListEqual(xformOps, [])
+
+        switchRootVisVariant()
+        verifySwitch()
+
+    def testMergeComponentOutsideVariants(self):
+        '''
+        Merge edits on a component that is kept in a separate file.
+        That component is *outside* the variants declared in its parent
+        prim.
+
+        Verify that editing it and merging it *outside* variants, that is
+        with the merge option ignoreVariants set to true, the edits will
+        be authored *outside* the variants.
+        '''
+
+        # Create a stage from a file.
+        testFile = getTestScene("multiVariants", "no-variant-root.usda")
+        testDagPath, stage = mayaUtils.createProxyFromFile(testFile)
+
+        # Create a new anonymous layer under the root that will receive the edits.
+        newLayer = Sdf.Layer.CreateAnonymous()
+        stage.GetRootLayer().subLayerPaths.append(newLayer.identifier)
+        stage.SetEditTarget(newLayer)
+
+        # UFE path to interesting prims in the USD file.
+        #
+        #    /group (Xform, variant sets: geo, geo_vis, selection: render_high, render, xformOp inside both variants)
+        #      /GEO (Xform, outside both variants)
+        #        /pCube1 (Mesh, outside both variants)
+
+        # Root prim
+        # This prim has variant set "geo" set to "render_high" and "geo_vis" set to "render"
+        rootSdfPath = "/group"
+
+        geoVariantSetName = "geo"
+        geoVariantSelection = "render_high"
+
+        visVariantSetName = "geo_vis"
+        visRenderVariant = "render"
+        visPreviewVariant = "preview"
+
+        # This prim is in variants will be edited
+        editedSdfPath = rootSdfPath + "/GEO"
+
+        # Verify that the original scene has the correct variants selected.
+        def verifyVariantSelections():
+            rootPrim = stage.GetPrimAtPath(rootSdfPath)
+            self.assertIsNotNone(rootPrim)
+            self.assertTrue(rootPrim.IsValid())
+            self.assertTrue(rootPrim.HasVariantSets())
+            geoVariantSetVariantSet = rootPrim.GetVariantSets().GetVariantSet(geoVariantSetName)
+            self.assertIsNotNone(geoVariantSetVariantSet)
+            self.assertEqual(geoVariantSelection, geoVariantSetVariantSet.GetVariantSelection())
+            visVariantSetVariantSet = rootPrim.GetVariantSets().GetVariantSet(visVariantSetName)
+            self.assertIsNotNone(visVariantSetVariantSet)
+            self.assertEqual(visRenderVariant, visVariantSetVariantSet.GetVariantSelection())
+
+        verifyVariantSelections()
+
+        # Edit as maya and move the GEO.
+        cmds.mayaUsdEditAsMaya(testDagPath + "," + editedSdfPath)
+
+        editedMayaItem = ufe.GlobalSelection.get().front()
+        editedMayaPath = editedMayaItem.path()
+        editedMayaPathStr = ufe.PathString.string(editedMayaPath)
+
+        (editedMayaPath, editedMayaPathStr, _, editedMayaMatrix) = \
+            setMayaTranslation(editedMayaItem, om.MVector(-12, -13, 14))
+
+        # Merge back to USD.
+        cmds.mayaUsdMergeToUsd(editedMayaPathStr, ignoreVariants=1)
+
+        verifyVariantSelections()
+
+        def verifyTranslation():
+            editedPrim = stage.GetPrimAtPath(editedSdfPath)
+            self.assertTrue(editedPrim.IsValid())
+
+            xformOps = UsdGeom.Xformable(editedPrim).GetOrderedXformOps()
+            self.assertIsNotNone(xformOps)
+            self.assertEqual(len(xformOps), 1)
+            usdMatrix = xformOps[0].GetOpTransform(Usd.TimeCode())
+
+            usdValues = [v for row in usdMatrix for v in row]
+            mayaValues = [v for v in editedMayaMatrix]
+            assertVectorAlmostEqual(self, mayaValues, usdValues)
+
+        verifyTranslation()
+
+        # Switch root to variant "preview" and verify that the translation
+        # on the GEO is still there.
+        #
+        # For the variant switch to work, we must put the edit target on
+        # the root layer again.
+
+        stage.SetEditTarget(stage.GetRootLayer())
+
+        def switchRootVisVariant():
+            rootPrim = stage.GetPrimAtPath(rootSdfPath)
+            rootVariantSets = rootPrim.GetVariantSets()
+            rootVariantSets.SetSelection(visVariantSetName, visPreviewVariant)
+
+        def verifySwitch():
+            editedPrim = stage.GetPrimAtPath(editedSdfPath)
+            self.assertTrue(editedPrim.IsValid())
+
+            xformOps = UsdGeom.Xformable(editedPrim).GetOrderedXformOps()
+            self.assertIsNotNone(xformOps)
+            self.assertEqual(len(xformOps), 1)
+            usdMatrix = xformOps[0].GetOpTransform(Usd.TimeCode())
+
+            usdValues = [v for row in usdMatrix for v in row]
+            mayaValues = [v for v in editedMayaMatrix]
+            assertVectorAlmostEqual(self, mayaValues, usdValues)
+
+        switchRootVisVariant()
+        verifySwitch()
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

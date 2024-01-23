@@ -3,10 +3,13 @@ list(APPEND scripts_src
     mayaUsdLibRegisterStrings.py
     mayaUsdAddMayaReference.mel
     mayaUsdAddMayaReference.py
+    mayaUsdAddUSDReference.mel
     mayaUsdCacheMayaReference.mel
     mayaUsdCacheMayaReference.py
-    mayaUsdDuplicateAsMayaDataOptions.mel
-    mayaUsdDuplicateAsMayaDataOptions.py
+    mayaUsdClearRefsOrPayloadsOptions.mel
+    mayaUsdClearRefsOrPayloadsOptions.py
+    mayaUsdDuplicateAsUsdDataOptions.mel
+    mayaUsdDuplicateAsUsdDataOptions.py
     mayaUsdMergeToUSDOptions.mel
     mayaUsdMergeToUSDOptions.py
     mayaUsdMergeToUsd.py

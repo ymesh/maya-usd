@@ -15,18 +15,16 @@
 //
 #include "UsdUndoConnectionCommands.h"
 
-#include "private/Utils.h"
-
 #include <mayaUsd/ufe/Global.h>
 #include <mayaUsd/ufe/UsdAttribute.h>
 #include <mayaUsd/ufe/UsdAttributes.h>
 #include <mayaUsd/ufe/UsdConnectionHandler.h>
 #include <mayaUsd/ufe/UsdConnections.h>
-#include <mayaUsd/ufe/UsdHierarchyHandler.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
 #include <mayaUsd/ufe/Utils.h>
-#include <mayaUsd/undo/UsdUndoBlock.h>
-#include <mayaUsdUtils/util.h>
+
+#include <usdUfe/ufe/UsdSceneItem.h>
+#include <usdUfe/undo/UsdUndoBlock.h>
+#include <usdUfe/utils/usdUtils.h>
 
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/usd/sdr/registry.h>
@@ -68,41 +66,26 @@ UsdAttribute* usdAttrFromUfeAttr(const Ufe::Attribute::Ptr& attr)
     return dynamic_cast<UsdAttribute*>(attr.get());
 }
 
-bool isConnected(const PXR_NS::UsdAttribute& srcUsdAttr, const PXR_NS::UsdAttribute& dstUsdAttr)
-{
-    PXR_NS::SdfPathVector connectedAttrs;
-    dstUsdAttr.GetConnections(&connectedAttrs);
-
-    for (PXR_NS::SdfPath path : connectedAttrs) {
-        if (path == srcUsdAttr.GetPath()) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 PXR_NS::SdrShaderNodeConstPtr
 _GetShaderNodeDef(const PXR_NS::UsdPrim& prim, const PXR_NS::TfToken& attrName)
 {
-    UsdPrim           targetPrim = prim;
-    TfToken           targetName = attrName;
-    UsdShadeNodeGraph ngTarget(targetPrim);
+    UsdPrim               targetPrim = prim;
+    TfToken               targetName = attrName;
+    UsdShadeAttributeType targetType = UsdShadeAttributeType::Output;
+    UsdShadeNodeGraph     ngTarget(targetPrim);
     while (ngTarget) {
         // Dig inside, following the connection on targetName until we find a shader.
-        UsdShadeOutput graphOutput = ngTarget.GetOutput(targetName);
-        if (!graphOutput) {
+        PXR_NS::UsdAttribute targetAttr
+            = targetPrim.GetAttribute(UsdShadeUtils::GetFullName(targetName, targetType));
+        if (!targetAttr) {
             // Not a NodeGraph we recognize.
             return {};
         }
         UsdShadeConnectableAPI source;
-        TfToken                sourceOutputName;
-        UsdShadeAttributeType  sourceType;
         if (UsdShadeConnectableAPI::GetConnectedSource(
-                graphOutput, &source, &sourceOutputName, &sourceType)) {
+                targetAttr, &source, &targetName, &targetType)) {
             targetPrim = source.GetPrim();
             ngTarget = UsdShadeNodeGraph(targetPrim);
-            targetName = sourceOutputName;
         } else {
             // Could not find a shader source connected to this nodegraph.
             return {};
@@ -119,6 +102,7 @@ _GetShaderNodeDef(const PXR_NS::UsdPrim& prim, const PXR_NS::TfToken& attrName)
     return registry.GetShaderNodeByIdentifier(srcInfoId);
 }
 
+#if PXR_VERSION < 2302
 void _SendStrongConnectionChangeNotification(const UsdPrim& usdPrim)
 {
     // See https://github.com/PixarAnimationStudios/USD/issues/2013 for details.
@@ -132,6 +116,7 @@ void _SendStrongConnectionChangeNotification(const UsdPrim& usdPrim)
     usdPrim.GetStage()->DefinePrim(waPath);
     usdPrim.GetStage()->RemovePrim(waPath);
 }
+#endif
 
 } // namespace
 
@@ -170,7 +155,7 @@ void UsdUndoCreateConnectionCommand::execute()
         return;
     }
 
-    if (isConnected(srcUsdAttr->usdAttribute(), dstUsdAttr->usdAttribute())) {
+    if (MayaUsd::ufe::isConnected(srcUsdAttr->usdAttribute(), dstUsdAttr->usdAttribute())) {
         return;
     }
 
@@ -244,12 +229,19 @@ void UsdUndoCreateConnectionCommand::execute()
         }
     }
 
+#if PXR_VERSION < 2302
     if (isConnected) {
         _SendStrongConnectionChangeNotification(dstApi.GetPrim());
     } else {
         _srcInfo = nullptr;
         _dstInfo = nullptr;
     }
+#else
+    if (!isConnected) {
+        _srcInfo = nullptr;
+        _dstInfo = nullptr;
+    }
+#endif
 }
 
 Ufe::Connection::Ptr UsdUndoCreateConnectionCommand::connection() const
@@ -295,12 +287,14 @@ void UsdUndoDeleteConnectionCommand::execute()
     UsdAttribute* dstUsdAttr = usdAttrFromUfeAttr(dstAttr);
 
     if (!srcUsdAttr || !dstUsdAttr
-        || !isConnected(srcUsdAttr->usdAttribute(), dstUsdAttr->usdAttribute())) {
+        || !MayaUsd::ufe::isConnected(srcUsdAttr->usdAttribute(), dstUsdAttr->usdAttribute())) {
         return;
     }
-
-    bool isDisconnected = UsdShadeConnectableAPI::DisconnectSource(
-        dstUsdAttr->usdAttribute(), srcUsdAttr->usdAttribute());
+#if PXR_VERSION < 2302
+    bool isDisconnected =
+#endif
+        UsdShadeConnectableAPI::DisconnectSource(
+            dstUsdAttr->usdAttribute(), srcUsdAttr->usdAttribute());
 
     // We need to make sure we cleanup on disconnection. Since having an empty connection array
     // counts as having connections, we need to get the array and see if it is empty.
@@ -313,25 +307,20 @@ void UsdUndoDeleteConnectionCommand::execute()
         // Remove attribute if it does not have a value, default value, or time samples. We do this
         // on Shader nodes and on the Material outputs since they are re-created automatically.
         // Other NodeGraph inputs and outputs require explicit removal.
-        if (!dstUsdAttr->usdAttribute().HasValue()) {
-            UsdShadeShader asShader(dstUsdAttr->usdPrim());
-            if (asShader) {
-                dstUsdAttr->usdPrim().RemoveProperty(dstUsdAttr->usdAttribute().GetName());
-            }
-            UsdShadeMaterial asMaterial(dstUsdAttr->usdPrim());
-            if (asMaterial) {
-                const TfToken baseName = dstUsdAttr->usdAttribute().GetBaseName();
-                if (baseName == UsdShadeTokens->surface || baseName == UsdShadeTokens->volume
-                    || baseName == UsdShadeTokens->displacement) {
-                    dstUsdAttr->usdPrim().RemoveProperty(dstUsdAttr->usdAttribute().GetName());
-                }
-            }
+        if (MayaUsd::ufe::canRemoveDstProperty(dstUsdAttr->usdAttribute())) {
+            dstUsdAttr->usdPrim().RemoveProperty(dstUsdAttr->usdAttribute().GetName());
+        }
+
+        if (MayaUsd::ufe::canRemoveSrcProperty(srcUsdAttr->usdAttribute())) {
+            srcUsdAttr->usdPrim().RemoveProperty(srcUsdAttr->usdAttribute().GetName());
         }
     }
 
+#if PXR_VERSION < 2302
     if (isDisconnected) {
         _SendStrongConnectionChangeNotification(dstUsdAttr->usdPrim());
     }
+#endif
 }
 
 void UsdUndoDeleteConnectionCommand::undo() { _undoableItem.undo(); }

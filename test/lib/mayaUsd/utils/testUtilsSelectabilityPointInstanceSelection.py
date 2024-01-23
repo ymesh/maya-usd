@@ -32,11 +32,16 @@ import ufe
 import os
 import unittest
 
-from PySide2 import QtCore
-from PySide2.QtTest import QTest
-from PySide2.QtWidgets import QWidget
-
-from shiboken2 import wrapInstance
+try:
+    from PySide2 import QtCore
+    from PySide2.QtTest import QTest
+    from PySide2.QtWidgets import QWidget
+    from shiboken2 import wrapInstance
+except Exception:
+    from PySide6 import QtCore
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QWidget
+    from shiboken6 import wrapInstance
 
 class testUtilsSelectabilityPointInstanceSelection(unittest.TestCase):
     """
@@ -182,10 +187,7 @@ class testUtilsSelectabilityPointInstanceSelection(unittest.TestCase):
         cmds.optionVar(stringValue=(
             testUtilsSelectabilityPointInstanceSelection._pointInstancesPickModeOptionVarName, 'PointInstancer'))
 
-        # In USD versions before 21.05, the point instancer pick mode did not exists.
-        # For those version we end-up selecting the prototypes, of which there are 7.
-        expectedCount = 1 if Usd.GetVersion() >= (0, 21, 2) else 7
-
+        expectedCount = 1
         self._RunTest(expectedCount)
 
     def testPointInstancerGrid7k(self):
@@ -196,10 +198,7 @@ class testUtilsSelectabilityPointInstanceSelection(unittest.TestCase):
         cmds.optionVar(stringValue=(
             testUtilsSelectabilityPointInstanceSelection._pointInstancesPickModeOptionVarName, 'PointInstancer'))
 
-        # In USD versions before 21.05, the point instancer pick mode did not exists.
-        # For those version we end-up selecting the prototypes, of which there are 7.
-        expectedCount = 1 if Usd.GetVersion() >= (0, 21, 2) else 7
-        
+        expectedCount = 1
         self._RunTest(expectedCount)
 
 

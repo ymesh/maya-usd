@@ -15,37 +15,13 @@
 //
 #include "UsdMaterial.h"
 
-#include <mayaUsd/ufe/Utils.h>
+#include <usdUfe/ufe/Utils.h>
 
-#include <ufe/log.h>
 #include <ufe/types.h>
 
 #include <stdexcept>
 
 PXR_NAMESPACE_USING_DIRECTIVE
-
-namespace {
-
-std::vector<PXR_NS::UsdPrim> getConnectedShaders(const PXR_NS::UsdShadeOutput& port)
-{
-    // Dig down across NodeGraph boundaries until a surface shader is found.
-    std::vector<PXR_NS::UsdPrim> shaders;
-    for (const auto& sourceInfo : port.GetConnectedSources()) {
-        if (sourceInfo.source.GetPrim().GetTypeName() != "Shader") {
-            if (sourceInfo.sourceType == UsdShadeAttributeType::Output) {
-                const std::vector<PXR_NS::UsdPrim> connectedShaders
-                    = getConnectedShaders(sourceInfo.source.GetOutput(sourceInfo.sourceName));
-                shaders.insert(
-                    std::end(shaders), std::begin(connectedShaders), std::end(connectedShaders));
-            }
-        } else {
-            shaders.push_back(sourceInfo.source.GetPrim());
-        }
-    }
-    return shaders;
-}
-
-} // namespace
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
@@ -76,42 +52,30 @@ std::vector<Ufe::SceneItem::Ptr> UsdMaterial::getMaterials() const
 
     std::vector<PXR_NS::UsdPrim> materialPrims;
 
-    const PXR_NS::UsdPrim&                            prim = _item->prim();
-    PXR_NS::UsdShadeMaterialBindingAPI                bindingApi(prim);
-    PXR_NS::UsdShadeMaterialBindingAPI::DirectBinding directBinding = bindingApi.GetDirectBinding();
+    const PXR_NS::UsdPrim&             prim = _item->prim();
+    PXR_NS::UsdShadeMaterialBindingAPI bindingApi(prim);
 
     // 1. Simple case: A material is directly attached to our object.
-    const PXR_NS::UsdShadeMaterial material = directBinding.GetMaterial();
+    PXR_NS::UsdShadeMaterialBindingAPI::DirectBinding directBinding = bindingApi.GetDirectBinding();
+    const PXR_NS::UsdShadeMaterial                    material = directBinding.GetMaterial();
     if (material) {
-        for (const auto& output : material.GetSurfaceOutputs()) {
-            for (const auto& shader : getConnectedShaders(output)) {
-                materialPrims.push_back(shader);
-            }
-        }
+        materialPrims.push_back(material.GetPrim());
     }
 
     // 2. Check whether multiple materials are attached to this object via geometry subsets.
     for (const auto& geometrySubset : bindingApi.GetMaterialBindSubsets()) {
-        const UsdShadeMaterialBindingAPI subsetBindingAPI(geometrySubset.GetPrim());
-        const UsdShadeMaterial           material
+        const PXR_NS::UsdShadeMaterialBindingAPI subsetBindingAPI(geometrySubset.GetPrim());
+        const PXR_NS::UsdShadeMaterial           material
             = subsetBindingAPI.ComputeBoundMaterial(UsdShadeTokens->surface);
         if (material) {
-            for (const auto& output : material.GetSurfaceOutputs()) {
-                for (const auto& shader : getConnectedShaders(output)) {
-                    materialPrims.push_back(shader);
-                }
-            }
+            materialPrims.push_back(material.GetPrim());
         }
     }
 
     // 3. Find the associated Ufe::SceneItem for each material attached to our object.
-    for (const auto& materialPrim : materialPrims) {
-        if (!materialPrim) {
-            continue;
-        }
-
+    for (auto& materialPrim : materialPrims) {
         const PXR_NS::SdfPath& materialSdfPath = materialPrim.GetPath();
-        const Ufe::Path        materialUfePath = usdPathToUfePathSegment(materialSdfPath);
+        const Ufe::Path        materialUfePath = UsdUfe::usdPathToUfePathSegment(materialSdfPath);
 
         // Construct a UFE path consisting of two segments:
         // 1. The path to the USD stage
@@ -122,12 +86,45 @@ std::vector<Ufe::SceneItem::Ptr> UsdMaterial::getMaterials() const
             continue;
         const auto ufePath = Ufe::Path({ stagePathSegments[0], materialPathSegments[0] });
 
-        // Now we have the full path to the material's SceneItem
+        // Now we have the full path to the material's SceneItem.
         materials.push_back(UsdSceneItem::create(ufePath, materialPrim));
     }
 
     return materials;
 }
+
+#if (UFE_PREVIEW_VERSION_NUM >= 5003)
+
+bool UsdMaterial::hasMaterial() const
+{
+    if (!TF_VERIFY(_item)) {
+        return false;
+    }
+
+    const PXR_NS::UsdPrim&             prim = _item->prim();
+    PXR_NS::UsdShadeMaterialBindingAPI bindingApi(prim);
+
+    // 1. Simple case: A material is directly attached to our object.
+    PXR_NS::UsdShadeMaterialBindingAPI::DirectBinding directBinding = bindingApi.GetDirectBinding();
+    const PXR_NS::UsdShadeMaterial                    material = directBinding.GetMaterial();
+    if (material) {
+        return true;
+    }
+
+    // 2. Check whether any material is attached to this object via geometry subsets.
+    for (const auto& geometrySubset : bindingApi.GetMaterialBindSubsets()) {
+        const PXR_NS::UsdShadeMaterialBindingAPI subsetBindingAPI(geometrySubset.GetPrim());
+        const PXR_NS::UsdShadeMaterial           material
+            = subsetBindingAPI.ComputeBoundMaterial(UsdShadeTokens->surface);
+        if (material) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#endif
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

@@ -43,12 +43,9 @@ def createUfePathSegment(usdPath):
     return ufe.PathSegment(usdPath, mayaUsd.ufe.getUsdRunTimeId(), usdSeparator)
 
 def getPrimFromSceneItem(item):
-    if ufeUtils.ufeFeatureSetVersion() >= 2:
-        rawItem = item.getRawAddress()
-        prim = mayaUsd.ufe.getPrimFromRawItem(rawItem)
-        return prim
-    else:
-        return Usd.Prim()
+    rawItem = item.getRawAddress()
+    prim = mayaUsd.ufe.getPrimFromRawItem(rawItem)
+    return prim
 
 def createAnimatedHierarchy(stage):
     """
@@ -153,7 +150,103 @@ def createSimpleXformScene():
             aXlateOp, aXlation, aUsdUfePathStr, aUsdUfePath, aUsdItem,
             bXlateOp, bXlation, bUsdUfePathStr, bUsdUfePath, bUsdItem)
 
-def createLayeredStage(layersCount = 3):
+def createDuoXformSceneInCurrentLayer(psPathStr, ps):
+    '''Create a simple scene in the current stage and layer with a trivial hierarchy:
+
+    A    translation (1, 2, 3)
+    B    translation (7, 8, 9)
+
+    Returns a tuple of:
+        - A translation op, A translation vector
+        - A UFE path string, A UFE path, A UFE item
+        - B translation op, B translation vector
+        - B UFE path string, B UFE path, B UFE item
+    '''
+
+    stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
+    aPrim = stage.DefinePrim('/A', 'Xform')
+    aXformable = UsdGeom.Xformable(aPrim)
+    aXlateOp = aXformable.AddTranslateOp()
+    aXlation = Gf.Vec3d(1, 2, 3)
+    aXlateOp.Set(aXlation)
+    aUsdUfePathStr = psPathStr + ',/A'
+    aUsdUfePath = ufe.PathString.path(aUsdUfePathStr)
+    aUsdItem = ufe.Hierarchy.createItem(aUsdUfePath)
+
+    bPrim = stage.DefinePrim('/B', 'Xform')
+    bXformable = UsdGeom.Xformable(bPrim)
+    bXlateOp = bXformable.AddTranslateOp()
+    bXlation = Gf.Vec3d(7, 8, 9)
+    bXlateOp.Set(bXlation)
+    bUsdUfePathStr = psPathStr + ',/B'
+    bUsdUfePath = ufe.PathString.path(bUsdUfePathStr)
+    bUsdItem = ufe.Hierarchy.createItem(bUsdUfePath)
+
+    return (aXlateOp, aXlation, aUsdUfePathStr, aUsdUfePath, aUsdItem,
+            bXlateOp, bXlation, bUsdUfePathStr, bUsdUfePath, bUsdItem)
+
+def createDuoXformScene():
+    '''Create a simple scene with a trivial hierarchy:
+
+    A    translation (1, 2, 3)
+    B    translation (7, 8, 9)
+
+    Returns a tuple of:
+        - proxy shape UFE item
+        - A translation op, A translation vector
+        - A UFE path string, A UFE path, A UFE item
+        - B translation op, B translation vector
+        - B UFE path string, B UFE path, B UFE item
+
+    Note: the proxy shape path and path string are not returned for compatibility with existing tests.
+    '''
+    (psPathStr, psPath, ps) = createSimpleStage()
+    (aXlateOp, aXlation, aUsdUfePathStr, aUsdUfePath, aUsdItem,
+     bXlateOp, bXlation, bUsdUfePathStr, bUsdUfePath, bUsdItem) = createDuoXformSceneInCurrentLayer(psPathStr, ps)
+    return (ps,
+            aXlateOp, aXlation, aUsdUfePathStr, aUsdUfePath, aUsdItem,
+            bXlateOp, bXlation, bUsdUfePathStr, bUsdUfePath, bUsdItem)
+
+def addNewLayersToLayer(parentLayer, layersCount=1, anonymous=False):
+    '''
+    Create multiple new layers under the given layer.
+    Return the list of new layers.
+    '''
+    createdLayers = []
+    for i in range(layersCount):
+        if anonymous:
+            newLayer = Sdf.Layer.CreateAnonymous()
+        else:
+            newLayerName = 'Layer_%d' % (i+1)
+            usdFormat = Sdf.FileFormat.FindByExtension('usd')
+            newLayer = Sdf.Layer.New(usdFormat, newLayerName)
+        parentLayer.subLayerPaths.append(newLayer.identifier)
+        createdLayers.append(newLayer)
+        parentLayer = newLayer
+    return createdLayers
+
+def addNewLayerToLayer(parentLayer, anonymous=False):
+    '''
+    Create a new layer under the given layer.
+    Return the new layer.
+    '''
+    return addNewLayersToLayer(parentLayer, 1, anonymous)[0]
+
+def addNewLayersToStage(stage, layersCount=1, anonymous=False):
+    '''
+    Create multiple new layers under the root layer of a stage.
+    Return the list of new layers.
+    '''
+    return addNewLayersToLayer(stage.GetRootLayer(), layersCount, anonymous)
+
+def addNewLayerToStage(stage, anonymous=False):
+    '''
+    Create a new layer under the root layer of a stage.
+    Return the new layer.
+    '''
+    return addNewLayersToStage(stage, 1, anonymous)[0]
+
+def createLayeredStage(layersCount = 3, anonymous=False):
     '''Create a stage with multiple layers, by default 3 extra layers:
 
     Returns a tuple of:
@@ -165,15 +258,15 @@ def createLayeredStage(layersCount = 3):
     (psPathStr, psPath, ps) = createSimpleStage()
 
     stage = mayaUsd.lib.GetPrim(psPathStr).GetStage()
-    layer = stage.GetRootLayer()
-    layers = [layer]
-    for i in range(layersCount):
-        newLayerName = 'Layer_%d' % (i+1)
-        usdFormat = Sdf.FileFormat.FindByExtension('usd')
-        newLayer = Sdf.Layer.New(usdFormat, newLayerName)
-        layer.subLayerPaths.append(newLayer.identifier)
-        layer = newLayer
-        layers.append(layer)
+    rootLayer = stage.GetRootLayer()
+    layers = [rootLayer] + addNewLayersToLayer(rootLayer, layersCount, anonymous)
 
     return (psPathStr, psPath, ps, layers)
+
+def filterUsdStr(usdSceneStr):
+    '''Remove empty lines and lines starting with pound character.'''
+    nonBlankLines = filter(None, [l.strip() for l in usdSceneStr.splitlines()])
+    finalLines = [l for l in nonBlankLines if not l.startswith('#')]
+    return '\n'.join(finalLines)
+
 

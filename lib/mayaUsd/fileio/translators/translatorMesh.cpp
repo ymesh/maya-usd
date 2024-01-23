@@ -199,7 +199,8 @@ TranslatorMeshRead::TranslatorMeshRead(
 
     // set mesh name
     const auto& primName = prim.GetName().GetString();
-    const auto  shapeName = TfStringPrintf("%sShape", primName.c_str());
+    const bool  inPrototype = UsdPrim::IsPathInPrototype(prim.GetPath());
+    const auto  shapeName = inPrototype ? primName : TfStringPrintf("%sShape", primName.c_str());
 
     const bool creatingOnlyMeshData
         = !transformObj.isNull() && MFn::kMeshData == transformObj.apiType();
@@ -264,7 +265,8 @@ TranslatorMeshRead::TranslatorMeshRead(
     // ==================================================
     // Code below this point is for handling deforming meshes, so if we don't
     // have time samples to deal with, we're done.
-    if (m_pointsNumTimeSamples == 0u) {
+    // A single sample can be treated as static
+    if (m_pointsNumTimeSamples < 2u) {
         return;
     }
 
@@ -394,6 +396,12 @@ MStatus TranslatorMeshRead::setPointBasedDeformerForMayaNode(
     status = MGlobal::clearSelectionList();
     CHECK_MSTATUS(status);
 
+    const MFnDagNode dagNodeFn(mayaObj, &status);
+    CHECK_MSTATUS(status);
+
+    status = MGlobal::selectByName(dagNodeFn.fullPathName().asChar());
+    CHECK_MSTATUS(status);
+
     // Create the point based deformer node for this prim.
     const std::string pointBasedDeformerNodeName = TfStringPrintf(
         "usdPointBasedDeformerNode%s",
@@ -441,50 +449,6 @@ MStatus TranslatorMeshRead::setPointBasedDeformerForMayaNode(
     CHECK_MSTATUS(status);
 
     status = dgMod.doIt();
-    CHECK_MSTATUS(status);
-
-    // Add the Maya object to the point based deformer node's set.
-    const MFnGeometryFilter geomFilterFn(m_pointBasedDeformerNode, &status);
-    CHECK_MSTATUS(status);
-
-    MObject deformerSet = geomFilterFn.deformerSet(&status);
-    CHECK_MSTATUS(status);
-
-    MFnSet setFn(deformerSet, &status);
-    CHECK_MSTATUS(status);
-
-    status = setFn.addMember(mayaObj);
-    CHECK_MSTATUS(status);
-
-    // When we created the point based deformer, Maya will have automatically
-    // created a tweak deformer and put it *before* the point based deformer in
-    // the deformer chain. We don't want that, since any component edits made
-    // interactively in Maya will appear to have no effect since they'll be
-    // overridden by the point based deformer. Instead, we want the tweak to go
-    // *after* the point based deformer. To do this, we need to dig for the
-    // name of the tweak deformer node that Maya created to be able to pass it
-    // to the reorderDeformers command.
-    const MFnDagNode dagNodeFn(mayaObj, &status);
-    CHECK_MSTATUS(status);
-
-    // XXX: This seems to be the "most sane" way of finding the tweak deformer
-    // node's name...
-    const std::string findTweakCmd = TfStringPrintf(
-        "from maya import cmds; [x for x in cmds.listHistory(\'%s\') if cmds.nodeType(x) == "
-        "\'tweak\'][0]",
-        dagNodeFn.fullPathName().asChar());
-
-    MString tweakDeformerNodeName;
-    status = MGlobal::executePythonCommand(findTweakCmd.c_str(), tweakDeformerNodeName);
-    CHECK_MSTATUS(status);
-
-    // Do the reordering.
-    const std::string reorderDeformersCmd = TfStringPrintf(
-        "from maya import cmds; cmds.reorderDeformers(\'%s\', \'%s\', \'%s\')",
-        tweakDeformerNodeName.asChar(),
-        m_newPointBasedDeformerName.asChar(),
-        dagNodeFn.fullPathName().asChar());
-    status = MGlobal::executePythonCommand(reorderDeformersCmd.c_str());
     CHECK_MSTATUS(status);
 
     return status;

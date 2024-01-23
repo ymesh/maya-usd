@@ -32,8 +32,6 @@
 #include <maya/MTime.h>
 #include <maya/MTimeArray.h>
 
-using namespace MAYAUSD_NS_DEF;
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 /* static */
@@ -54,7 +52,7 @@ bool convertToBezier(MFnNurbsCurve& nurbsCurveFn, MObject& mayaNodeTransformObj,
     MPlug        convOut = convFn.findPlug("outputCurve", false);
     MPlug        nurbsOut = nurbsCurveFn.findPlug("local", false);
     MPlug        bezIn = dagFn.findPlug("create", false);
-    MDGModifier& dgm = MDGModifierUndoItem::create("Nurbs curve connections");
+    MDGModifier& dgm = MayaUsd::MDGModifierUndoItem::create("Nurbs curve connections");
     dgm.connect(nurbsOut, convIn);
     dgm.connect(convOut, bezIn);
     dgm.doIt();
@@ -62,14 +60,9 @@ bool convertToBezier(MFnNurbsCurve& nurbsCurveFn, MObject& mayaNodeTransformObj,
     MPlug   bezOut = dagFn.findPlug("local", false);
     MObject val = bezOut.asMObject();
     // Remove the nurbs and converter:
-    MDGModifier& dagm = MDGModifierUndoItem::create("Nurbs curve deletion");
+    MDGModifier& dagm = MayaUsd::MDGModifierUndoItem::create("Nurbs curve deletion");
     dagm.deleteNode(convFn.object());
-#if MAYA_API_VERSION >= 20200300
     dagm.deleteNode(nurbsCurveFn.object(), false);
-#else
-    dagm.deleteNode(nurbsCurveFn.object());
-#endif
-
     dagm.doIt();
     // replace deleted nurbs node with bezier node
     nurbsCurveFn.setObject(curveObj);
@@ -99,7 +92,7 @@ bool UsdMayaTranslatorCurves::Create(
     }
 
     VtArray<GfVec3f> points;
-    VtArray<int>     curveOrder;
+    VtArray<int>     curveOrders;
     VtArray<int>     curveVertexCounts;
     VtArray<float>   curveWidths;
     VtArray<GfVec2d> curveRanges;
@@ -156,39 +149,49 @@ bool UsdMayaTranslatorCurves::Create(
 
         if (UsdGeomNurbsCurves nurbsSchema = UsdGeomNurbsCurves(prim)) {
             if (curveKnots.empty()) {
-                nurbsSchema.GetOrderAttr().Get(&curveOrder); // not animatable
-                nurbsSchema.GetKnotsAttr().Get(&curveKnots); // not animatable
+                nurbsSchema.GetOrderAttr().Get(&curveOrders); // not animatable
+                nurbsSchema.GetKnotsAttr().Get(&curveKnots);  // not animatable
                 nurbsSchema.GetRangesAttr().Get(
                     &curveRanges); // not animatable or actually used....
             }
 
+            const int curveDegree = curveOrders[curveIndex] - 1;
+            const int pointCount = curveVertexCounts[curveIndex];
+
+            // The USD NURBS curve schema (UsdGeomNurbsCurves) defines the number
+            // of knots as: # points + degree + 1.
+            auto usdKnotStart = curveKnots.begin() + coffset;
+            auto usdKnotEnd = usdKnotStart + pointCount + curveDegree + 1;
+
             // Remove front and back knots to match Maya representation. See
             // "Managing different knot representations in external applications"
-            // section in MFnNurbsCurve documentation.
+            // section in MFnNurbsCurve documentation. There (and in USD docs)
+            // we learns that there are two fewer knots in Maya.
+
             // make knot subset consisting of the current curve, trim ends
-            _curveKnots = { curveKnots.begin() + coffset + 1,
-                            curveKnots.begin() + coffset + curveVertexCounts[curveIndex] + 3 };
+            _curveKnots = { usdKnotStart + 1, usdKnotEnd - 1 };
+
             // set offset to the beginning of next curve
-            coffset += curveVertexCounts[curveIndex] + 4;
-            mayaDegree = curveOrder[curveIndex] - 1;
+            coffset += pointCount + curveDegree + 1;
+            mayaDegree = curveDegree;
 
         } else {
             // Handle basis curves originally modeled in Maya as nurbs.
             curveType = MFn::kBezierCurve;
 
-            curveOrder.resize(1);
+            curveOrders.resize(1);
             basisSchema = UsdGeomBasisCurves(prim);
             basisSchema.GetTypeAttr().Get(&typeToken);
 
             if (typeToken == UsdGeomTokens->linear) {
-                curveOrder[0] = 2;
+                curveOrders[0] = 2;
                 _curveKnots.resize(curveVertexCounts[curveIndex]);
                 for (size_t i = 0; i < _curveKnots.size(); ++i) {
                     _curveKnots[i] = i;
                 }
 
             } else {
-                curveOrder[0] = 4;
+                curveOrders[0] = 4;
 
                 _curveKnots.resize(curveVertexCounts[curveIndex] - 3 + 5);
                 int knotIdx = 0;
@@ -205,7 +208,7 @@ bool UsdMayaTranslatorCurves::Create(
                     }
                 }
             }
-            mayaDegree = curveOrder[0] - 1;
+            mayaDegree = curveOrders[0] - 1;
         }
 
         // == Convert data

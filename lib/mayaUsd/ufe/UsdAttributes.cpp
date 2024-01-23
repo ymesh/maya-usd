@@ -30,14 +30,10 @@
 #include <ufe/ufeAssert.h>
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
 #include <mayaUsd/ufe/UsdShaderAttributeDef.h>
 #include <mayaUsd/ufe/UsdShaderAttributeHolder.h>
 #include <mayaUsd/ufe/UsdShaderNodeDefHandler.h>
-#endif
-#if (UFE_PREVIEW_VERSION_NUM >= 4024)
 #include <mayaUsd/ufe/UsdUndoAttributesCommands.h>
-#endif
 #endif
 
 // Note: normally we would use this using directive, but here we cannot because
@@ -55,7 +51,6 @@ namespace ufe {
 namespace {
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
 std::pair<PXR_NS::SdrShaderPropertyConstPtr, PXR_NS::UsdShadeAttributeType>
 _GetSdrPropertyAndType(const Ufe::SceneItem::Ptr& item, const std::string& tokName)
 {
@@ -73,11 +68,10 @@ _GetSdrPropertyAndType(const Ufe::SceneItem::Ptr& item, const std::string& tokNa
     return { nullptr, PXR_NS::UsdShadeAttributeType::Invalid };
 }
 #endif
-#endif
 } // namespace
 
 UsdAttributes::UsdAttributes(const UsdSceneItem::Ptr& item)
-    : Ufe::Attributes()
+    : UFE_ATTRIBUTES_BASE()
     , fItem(item)
 {
     PXR_NAMESPACE_USING_DIRECTIVE
@@ -103,8 +97,9 @@ UsdAttributes::Ptr UsdAttributes::create(const UsdSceneItem::Ptr& item)
 Ufe::SceneItem::Ptr UsdAttributes::sceneItem() const { return fItem; }
 
 // Returns whether the given op is an inverse operation. i.e, it starts with "!invert!".
+// Note: sizeof(invertPrefix) includes the final nul terminator, so we must subtract one.
 static constexpr char   invertPrefix[] = "!invert!";
-static constexpr size_t invertPrefixLen(sizeof(invertPrefix) / sizeof(invertPrefix[0]));
+static constexpr size_t invertPrefixLen(sizeof(invertPrefix) / sizeof(invertPrefix[0]) - 1);
 static bool             _IsInverseOp(const std::string& name)
 {
     return PXR_NS::TfStringStartsWith(name, invertPrefix);
@@ -128,12 +123,10 @@ Ufe::Attribute::Type UsdAttributes::attributeType(const std::string& name)
 
         // Shader definitions always win over created UsdAttributes:
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
     PXR_NS::SdrShaderPropertyConstPtr shaderProp = _GetSdrPropertyAndType(fItem, name).first;
     if (shaderProp) {
         return UsdShaderAttributeDef(shaderProp).type();
     }
-#endif
 #endif
 
     // See if a UsdAttribute can be wrapped:
@@ -171,8 +164,8 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
     static const std::unordered_map<
         std::string,
         std::function<Ufe::Attribute::Ptr(const UsdSceneItem::Ptr&, UsdAttributeHolder::UPtr&&)>>
-        ctorMap
-        = { ADD_UFE_USD_CTOR(Bool),
+        ctorMap = {
+            ADD_UFE_USD_CTOR(Bool),
             ADD_UFE_USD_CTOR(Int),
             ADD_UFE_USD_CTOR(Float),
             ADD_UFE_USD_CTOR(Double),
@@ -181,7 +174,7 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
             ADD_UFE_USD_CTOR(Float3),
             ADD_UFE_USD_CTOR(Double3),
             ADD_UFE_USD_CTOR(Generic),
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
             ADD_UFE_USD_CTOR(ColorFloat4),
             ADD_UFE_USD_CTOR(Filename),
             ADD_UFE_USD_CTOR(Float2),
@@ -207,13 +200,12 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
                       return UsdAttributeEnumToken::create(si, std::move(attrHolder));
                   }
               } },
-          };
+        };
 #undef ADD_UFE_USD_CTOR
 
     Ufe::Attribute::Ptr newAttr;
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
     // The shader definition always wins over a created attribute:
     auto shaderPropAndType = _GetSdrPropertyAndType(fItem, name);
     if (shaderPropAndType.first) {
@@ -226,7 +218,6 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
                     fPrim, shaderPropAndType.first, shaderPropAndType.second));
         }
     }
-#endif
 #endif
 
     if (!newAttr) {
@@ -244,7 +235,7 @@ Ufe::Attribute::Ptr UsdAttributes::attribute(const std::string& name)
             newAttr = ctorIt->second(fItem, UsdAttributeHolder::create(usdAttr));
     }
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4024)
+#ifdef UFE_V4_FEATURES_AVAILABLE
     // If this is a Usd attribute (cannot change) then we cache it for future access.
     if (!canRemoveAttribute(fItem, name)) {
         fUsdAttributes[name] = newAttr;
@@ -262,7 +253,6 @@ std::vector<std::string> UsdAttributes::attributeNames() const
     std::set<std::string>    nameSet;
     std::string              name;
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
     PXR_NS::SdrShaderNodeConstPtr shaderNode = UsdShaderNodeDefHandler::usdDefinition(fItem);
     if (shaderNode) {
         auto addAttributeNames
@@ -277,7 +267,6 @@ std::vector<std::string> UsdAttributes::attributeNames() const
         addAttributeNames(shaderNode->GetInputNames(), PXR_NS::UsdShadeAttributeType::Input);
         addAttributeNames(shaderNode->GetOutputNames(), PXR_NS::UsdShadeAttributeType::Output);
     }
-#endif
 #endif
     if (fPrim) {
         auto primAttrs = fPrim.GetAttributes();
@@ -298,47 +287,31 @@ bool UsdAttributes::hasAttribute(const std::string& name) const
         return true;
     }
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4010)
     if (_GetSdrPropertyAndType(fItem, name).first) {
         return true;
     }
-#endif
 #endif
     return false;
 }
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4024)
-#if (UFE_PREVIEW_VERSION_NUM >= 4034)
 Ufe::AddAttributeUndoableCommand::Ptr
 UsdAttributes::addAttributeCmd(const std::string& name, const Ufe::Attribute::Type& type)
 {
     return UsdAddAttributeCommand::create(fItem, name, type);
 }
-#else
-
-Ufe::AddAttributeCommand::Ptr
-UsdAttributes::addAttributeCmd(const std::string& name, const Ufe::Attribute::Type& type)
-{
-    return UsdAddAttributeCommand::create(fItem, name, type);
-}
-#endif
 Ufe::UndoableCommand::Ptr UsdAttributes::removeAttributeCmd(const std::string& name)
 {
     return UsdRemoveAttributeCommand::create(fItem, name);
 }
-#endif
-#if (UFE_PREVIEW_VERSION_NUM >= 4034)
 Ufe::RenameAttributeUndoableCommand::Ptr
 UsdAttributes::renameAttributeCmd(const std::string& originalName, const std::string& newName)
 {
     return UsdRenameAttributeCommand::create(fItem, originalName, newName);
 }
 #endif
-#endif
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
-#if (UFE_PREVIEW_VERSION_NUM >= 4024)
 // Helpers for validation and execution:
 bool UsdAttributes::canAddAttribute(const UsdSceneItem::Ptr& item, const Ufe::Attribute::Type& type)
 {
@@ -366,7 +339,7 @@ UsdAttributes::getUniqueAttrName(const UsdSceneItem::Ptr& item, const std::strin
             attributeNames.insert(PXR_NS::TfToken(attributeName));
         }
 
-        return uniqueName(attributeNames, attrName);
+        return UsdUfe::uniqueName(attributeNames, attrName);
     }
     return attrName;
 }
@@ -455,6 +428,152 @@ bool UsdAttributes::canRemoveAttribute(const UsdSceneItem::Ptr& item, const std:
     }
     return false;
 }
+static void removeSrcAttrConnections(PXR_NS::UsdPrim& prim, const PXR_NS::UsdAttribute& srcUsdAttr)
+{
+    // Remove the connections with source srcUsdAttr.
+    for (const auto& attribute : prim.GetAttributes()) {
+        PXR_NS::UsdAttribute dstUsdAttr = attribute.As<PXR_NS::UsdAttribute>();
+
+        if (MayaUsd::ufe::isConnected(srcUsdAttr, dstUsdAttr)) {
+            UsdShadeConnectableAPI::DisconnectSource(dstUsdAttr, srcUsdAttr);
+            // Check if we can remove the property.
+            if (MayaUsd::ufe::canRemoveDstProperty(dstUsdAttr)) {
+                // Remove the property.
+                prim.RemoveProperty(dstUsdAttr.GetName());
+            }
+        }
+    }
+}
+
+static void removeDstAttrConnections(const PXR_NS::UsdAttribute& dstUsdAttr)
+{
+    const auto                     kPrim = dstUsdAttr.GetPrim();
+    PXR_NS::UsdShadeConnectableAPI connectApi(kPrim);
+
+    if (!kPrim || !connectApi) {
+        return;
+    }
+
+    const auto kPrimParent = kPrim.GetParent();
+
+    if (!kPrimParent) {
+        return;
+    }
+
+    UsdShadeSourceInfoVector sourcesInfo = connectApi.GetConnectedSources(dstUsdAttr);
+
+    if (sourcesInfo.empty()) {
+        return;
+    }
+
+    // The attribute is the connection destination.
+    PXR_NS::UsdPrim connectedPrim = sourcesInfo[0].source.GetPrim();
+
+    if (connectedPrim) {
+        const std::string prefix = connectedPrim == kPrimParent
+            ? PXR_NS::UsdShadeUtils::GetPrefixForAttributeType(PXR_NS::UsdShadeAttributeType::Input)
+            : PXR_NS::UsdShadeUtils::GetPrefixForAttributeType(
+                PXR_NS::UsdShadeAttributeType::Output);
+
+        const std::string sourceName = prefix + sourcesInfo[0].sourceName.GetString();
+
+        auto srcAttr = connectedPrim.GetAttribute(PXR_NS::TfToken(sourceName));
+
+        if (srcAttr) {
+            UsdShadeConnectableAPI::DisconnectSource(dstUsdAttr, srcAttr);
+            // Check if we can remove the property.
+            if (MayaUsd::ufe::canRemoveSrcProperty(srcAttr)) {
+                // Remove the property.
+                connectedPrim.RemoveProperty(srcAttr.GetName());
+            }
+        }
+    }
+}
+
+static void
+removeAllChildrenConnections(const PXR_NS::UsdPrim& prim, const PXR_NS::UsdAttribute& srcUsdAttr)
+{
+    // Remove the connections with source srcUsdAttr for all the children.
+    for (auto&& usdChild : prim.GetChildren()) {
+        removeSrcAttrConnections(usdChild, srcUsdAttr);
+    }
+}
+
+static void removeNodeGraphConnections(const PXR_NS::UsdAttribute& attr)
+{
+    const auto prim = attr.GetPrim();
+
+    if (!prim) {
+        return;
+    }
+
+    PXR_NS::UsdShadeNodeGraph ngPrim(prim);
+
+    if (!ngPrim) {
+        return;
+    }
+
+    auto primParent = prim.GetParent();
+
+    if (!primParent) {
+        return;
+    }
+
+    const auto baseNameAndType
+        = PXR_NS::UsdShadeUtils::GetBaseNameAndType(PXR_NS::TfToken(attr.GetName()));
+
+    if (baseNameAndType.second != PXR_NS::UsdShadeAttributeType::Output
+        && baseNameAndType.second != PXR_NS::UsdShadeAttributeType::Input) {
+        return;
+    }
+
+    // Remove the connections to the destination attribute.
+    removeDstAttrConnections(attr);
+
+    if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
+        // Remove the connections from the source attribute.
+        removeAllChildrenConnections(primParent, attr);
+        removeSrcAttrConnections(primParent, attr);
+    }
+
+    if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
+        removeAllChildrenConnections(prim, attr);
+    }
+}
+
+void UsdAttributes::removeAttributesConnections(const PXR_NS::UsdPrim& prim)
+{
+
+    auto primParent = prim.GetParent();
+
+    if (!primParent) {
+        return;
+    }
+
+    const auto kPrimAttrs = prim.GetAttributes();
+
+    // Remove all the connections to/from the attribute.
+    for (const auto& attr : kPrimAttrs) {
+        const auto kBaseNameAndType
+            = PXR_NS::UsdShadeUtils::GetBaseNameAndType(PXR_NS::TfToken(attr.GetName()));
+
+        if (kBaseNameAndType.second != PXR_NS::UsdShadeAttributeType::Output
+            && kBaseNameAndType.second != PXR_NS::UsdShadeAttributeType::Input) {
+            continue;
+        }
+
+        if (kBaseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
+            // Remove the connections to the destination attribute.
+            removeDstAttrConnections(attr);
+        }
+
+        if (kBaseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
+            removeAllChildrenConnections(primParent, attr);
+            // Remove the connections from the source attribute.
+            removeSrcAttrConnections(primParent, attr);
+        }
+    }
+}
 
 bool UsdAttributes::doRemoveAttribute(const UsdSceneItem::Ptr& item, const std::string& name)
 {
@@ -474,12 +593,14 @@ bool UsdAttributes::doRemoveAttribute(const UsdSceneItem::Ptr& item, const std::
         if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Output) {
             auto output = connectApi.GetOutput(baseNameAndType.first);
             if (output) {
+                removeNodeGraphConnections(attribute);
                 connectApi.ClearSources(output);
                 return prim.RemoveProperty(nameAsToken);
             }
         } else if (baseNameAndType.second == PXR_NS::UsdShadeAttributeType::Input) {
             auto input = connectApi.GetInput(baseNameAndType.first);
             if (input) {
+                removeNodeGraphConnections(attribute);
                 connectApi.ClearSources(input);
                 return prim.RemoveProperty(nameAsToken);
             }
@@ -487,8 +608,6 @@ bool UsdAttributes::doRemoveAttribute(const UsdSceneItem::Ptr& item, const std::
     }
     return false;
 }
-#endif
-#if (UFE_PREVIEW_VERSION_NUM >= 4034)
 bool UsdAttributes::canRenameAttribute(
     const UsdSceneItem::Ptr& sceneItem,
     const std::string&       originalName,
@@ -560,7 +679,6 @@ Ufe::Attribute::Ptr UsdAttributes::doRenameAttribute(
     auto                  propertyHandle = editTarget.GetPropertySpecForScenePath(kPropertyPath);
     auto                  baseNameAndType = PXR_NS::UsdShadeUtils::GetBaseNameAndType(nameAsToken);
 
-    prim.GetAttributes();
     PXR_NS::UsdShadeNodeGraph ngPrim(prim);
 
     if (!propertyHandle) {
@@ -610,6 +728,21 @@ Ufe::Attribute::Ptr UsdAttributes::doRenameAttribute(
     }
 
     return renamedAttr;
+}
+#endif
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#ifdef UFE_ATTRIBUTES_GET_ENUMS
+UFE_ATTRIBUTES_BASE::Enums UsdAttributes::getEnums(const std::string& attrName) const
+{
+    UFE_ATTRIBUTES_BASE::Enums        result;
+    PXR_NS::SdrShaderPropertyConstPtr shaderProp = _GetSdrPropertyAndType(fItem, attrName).first;
+    if (shaderProp) {
+        for (const auto& option : shaderProp->GetOptions()) {
+            result.emplace_back(option.first.GetString(), option.second.GetString());
+        }
+    }
+    return result;
 }
 #endif
 #endif

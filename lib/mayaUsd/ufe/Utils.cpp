@@ -15,26 +15,28 @@
 //
 #include "Utils.h"
 
-#include "private/Utils.h"
-
+#include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/nodes/proxyShapeBase.h>
 #include <mayaUsd/ufe/Global.h>
 #include <mayaUsd/ufe/ProxyShapeHandler.h>
 #include <mayaUsd/ufe/UsdStageMap.h>
-#include <mayaUsd/utils/editability.h>
 #include <mayaUsd/utils/util.h>
-#include <mayaUsdUtils/util.h>
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <mayaUsd/fileio/primUpdaterManager.h>
+#endif
+
+#include <usdUfe/ufe/Utils.h>
+#include <usdUfe/utils/layers.h>
+#include <usdUfe/utils/usdUtils.h>
 
 #include <pxr/base/tf/hashset.h>
 #include <pxr/base/tf/stringUtils.h>
-#include <pxr/usd/pcp/layerStack.h>
-#include <pxr/usd/pcp/site.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/tokens.h>
 #include <pxr/usd/sdr/shaderProperty.h>
 #include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/primCompositionQuery.h>
-#include <pxr/usd/usd/resolver.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/pointInstancer.h>
 #include <pxr/usd/usdGeom/tokens.h>
@@ -49,9 +51,14 @@
 #include <maya/MGlobal.h>
 #include <maya/MObjectHandle.h>
 #include <ufe/hierarchy.h>
+#include <ufe/object3d.h>
+#include <ufe/object3dHandler.h>
 #include <ufe/pathSegment.h>
+#include <ufe/pathString.h>
 #include <ufe/rtid.h>
+#include <ufe/runTimeMgr.h>
 #include <ufe/selection.h>
+#include <ufe/types.h>
 
 #include <cassert>
 #include <cctype>
@@ -61,10 +68,6 @@
 #include <string>
 #include <unordered_map>
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <ufe/pathString.h>
-#endif
-
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
@@ -72,49 +75,6 @@ namespace {
 constexpr auto kIllegalUFEPath = "Illegal UFE run-time path %s.";
 
 typedef std::unordered_map<TfToken, SdfValueTypeName, TfToken::HashFunctor> TokenToSdfTypeMap;
-
-bool stringBeginsWithDigit(const std::string& inputString)
-{
-    if (inputString.empty()) {
-        return false;
-    }
-
-    const char& firstChar = inputString.front();
-    if (std::isdigit(static_cast<unsigned char>(firstChar))) {
-        return true;
-    }
-
-    return false;
-}
-
-// This function calculates the position index for a given layer across all
-// the site's local LayerStacks
-uint32_t findLayerIndex(const UsdPrim& prim, const SdfLayerHandle& layer)
-{
-    uint32_t position { 0 };
-
-    const PcpPrimIndex& primIndex = prim.ComputeExpandedPrimIndex();
-
-    // iterate through the expanded primIndex
-    for (PcpNodeRef node : primIndex.GetNodeRange()) {
-
-        TF_AXIOM(node);
-
-        const PcpLayerStackSite&   site = node.GetSite();
-        const PcpLayerStackRefPtr& layerStack = site.layerStack;
-
-        // iterate through the "local" Layer stack for each site
-        // to find the layer
-        for (SdfLayerRefPtr const& l : layerStack->GetLayers()) {
-            if (l == layer) {
-                return position;
-            }
-            ++position;
-        }
-    }
-
-    return position;
-}
 
 } // anonymous namespace
 
@@ -142,56 +102,12 @@ Ufe::Path stagePath(UsdStageWeakPtr stage) { return g_StageMap.path(stage); }
 
 TfHashSet<UsdStageWeakPtr, TfHash> getAllStages() { return g_StageMap.allStages(); }
 
-Ufe::PathSegment usdPathToUfePathSegment(const SdfPath& usdPath, int instanceIndex)
-{
-    const Ufe::Rtid   usdRuntimeId = getUsdRunTimeId();
-    static const char separator = SdfPathTokens->childDelimiter.GetText()[0u];
-
-    if (usdPath.IsEmpty()) {
-        // Return an empty segment.
-        return Ufe::PathSegment(Ufe::PathSegment::Components(), usdRuntimeId, separator);
-    }
-
-    std::string pathString = usdPath.GetString();
-
-    if (instanceIndex >= 0) {
-        // Note here that we're taking advantage of the fact that identifiers
-        // in SdfPaths must be C/Python identifiers; that is, they must *not*
-        // begin with a digit. This means that when we see a path component at
-        // the end of a USD path segment that does begin with a digit, we can
-        // be sure that it represents an instance index and not a prim or other
-        // USD entity.
-        pathString += TfStringPrintf("%c%d", separator, instanceIndex);
-    }
-
-    return Ufe::PathSegment(pathString, usdRuntimeId, separator);
-}
-
-Ufe::Path stripInstanceIndexFromUfePath(const Ufe::Path& path)
-{
-    if (path.empty()) {
-        return path;
-    }
-
-    // As with usdPathToUfePathSegment() above, we're taking advantage of the
-    // fact that identifiers in SdfPaths must be C/Python identifiers; that is,
-    // they must *not* begin with a digit. This means that when we see a path
-    // component at the end of a USD path segment that does begin with a digit,
-    // we can be sure that it represents an instance index and not a prim or
-    // other USD entity.
-    if (stringBeginsWithDigit(path.back().string())) {
-        return path.pop();
-    }
-
-    return path;
-}
-
 UsdPrim ufePathToPrim(const Ufe::Path& path)
 {
     // When called we do not make any assumption on whether or not the
     // input path is valid.
 
-    const Ufe::Path ufePrimPath = stripInstanceIndexFromUfePath(path);
+    const Ufe::Path ufePrimPath = UsdUfe::stripInstanceIndexFromUfePath(path);
 
     const Ufe::Path::Segments& segments = ufePrimPath.getSegments();
     if (!TF_VERIFY(!segments.empty(), kIllegalUFEPath, path.string().c_str())) {
@@ -199,7 +115,10 @@ UsdPrim ufePathToPrim(const Ufe::Path& path)
     }
     auto stage = getStage(Ufe::Path(segments[0]));
     if (!stage) {
-        TF_WARN(kIllegalUFEPath, path.string().c_str());
+        // Do not output any TF message here (such as TF_WARN). A low-level function
+        // like this should not be outputting any warnings messages. It is allowed to
+        // call this method with a properly composed Ufe path, but one that doesn't
+        // actually point to any valid prim.
         return UsdPrim();
     }
 
@@ -211,40 +130,6 @@ UsdPrim ufePathToPrim(const Ufe::Path& path)
         : stage->GetPrimAtPath(SdfPath(segments[1].string()).GetPrimPath());
 }
 
-int ufePathToInstanceIndex(const Ufe::Path& path, UsdPrim* prim)
-{
-    int instanceIndex = UsdImagingDelegate::ALL_INSTANCES;
-
-    const UsdPrim usdPrim = ufePathToPrim(path);
-    if (prim) {
-        *prim = usdPrim;
-    }
-    if (!usdPrim || !usdPrim.IsA<UsdGeomPointInstancer>()) {
-        return instanceIndex;
-    }
-
-    // Once more as above in usdPathToUfePathSegment() and
-    // stripInstanceIndexFromUfePath(), a path component at the tail of the
-    // path that begins with a digit is assumed to represent an instance index.
-    const std::string& tailComponentString = path.back().string();
-    if (stringBeginsWithDigit(path.back().string())) {
-        instanceIndex = std::stoi(tailComponentString);
-    }
-
-    return instanceIndex;
-}
-
-bool isRootChild(const Ufe::Path& path)
-{
-    // When called we make the assumption that we are given a valid
-    // path and we are only testing whether or not we are a root child.
-    auto segments = path.getSegments();
-    if (segments.size() != 2) {
-        TF_RUNTIME_ERROR(kIllegalUFEPath, path.string().c_str());
-    }
-    return (segments[1].size() == 1);
-}
-
 UsdSceneItem::Ptr
 createSiblingSceneItem(const Ufe::Path& ufeSrcPath, const std::string& siblingName)
 {
@@ -252,51 +137,49 @@ createSiblingSceneItem(const Ufe::Path& ufeSrcPath, const std::string& siblingNa
     return UsdSceneItem::create(ufeSiblingPath, ufePathToPrim(ufeSiblingPath));
 }
 
-std::string uniqueName(const TfToken::HashSet& existingNames, std::string srcName)
-{
-    // Compiled regular expression to find a numerical suffix to a path component.
-    // It searches for any number of characters followed by a single non-numeric,
-    // then one or more digits at end of string.
-    std::regex  re("(.*)([^0-9])([0-9]+)$");
-    std::string base { srcName };
-    int         suffix { 1 };
-    std::smatch match;
-    if (std::regex_match(srcName, match, re)) {
-        base = match[1].str() + match[2].str();
-        suffix = std::stoi(match[3].str()) + 1;
-    }
-    std::string dstName = base + std::to_string(suffix);
-    while (existingNames.count(TfToken(dstName)) > 0) {
-        dstName = base + std::to_string(++suffix);
-    }
-    return dstName;
-}
-
-std::string uniqueChildName(const UsdPrim& usdParent, const std::string& name)
+std::string uniqueChildNameMayaStandard(const PXR_NS::UsdPrim& usdParent, const std::string& name)
 {
     if (!usdParent.IsValid())
         return std::string();
 
-    TfToken::HashSet childrenNames;
-
-    // The prim GetChildren method used the UsdPrimDefaultPredicate which includes
-    // active prims. We also need the inactive ones.
-    //
-    // const Usd_PrimFlagsConjunction UsdPrimDefaultPredicate =
-    //			UsdPrimIsActive && UsdPrimIsDefined &&
-    //			UsdPrimIsLoaded && !UsdPrimIsAbstract;
-    // Note: removed 'UsdPrimIsLoaded' from the predicate. When it is present the
-    //		 filter doesn't properly return the inactive prims. UsdView doesn't
-    //		 use loaded either in _computeDisplayPredicate().
-    //
-    // Note: our UsdHierarchy uses instance proxies, so we also use them here.
+    // See uniqueChildNameDefault() in lib\usdUfe\ufe\Utils.cpp for details.
+    TfToken::HashSet allChildrenNames;
     for (auto child : usdParent.GetFilteredChildren(
              UsdTraverseInstanceProxies(UsdPrimIsDefined && !UsdPrimIsAbstract))) {
-        childrenNames.insert(child.GetName());
+        allChildrenNames.insert(child.GetName());
     }
+
+    // When setting unique name Maya will look at the numerical suffix of all
+    // matching names and set the unique name to +1 on the greatest suffix.
+    // Example: with siblings Capsule001 & Capsule006, duplicating Capsule001
+    //          will set new unique name to Capsule007.
     std::string childName { name };
-    if (childrenNames.find(TfToken(childName)) != childrenNames.end()) {
-        childName = uniqueName(childrenNames, childName);
+    if (allChildrenNames.find(TfToken(childName)) != allChildrenNames.end()) {
+        // Get the base name (removing the numerical suffix) so that we can compare
+        // that to all the sibling names.
+        std::string baseName, suffix;
+        splitNumericalSuffix(childName, baseName, suffix);
+        int suffixValue = !suffix.empty() ? std::stoi(suffix) : 0;
+
+        std::string                 childBaseName;
+        std::pair<std::string, int> largestMatching(childName, suffixValue);
+        for (const auto& child : allChildrenNames) {
+            // While iterating thru all the children look for ones that match
+            // the base name of the input. When we find one check its numerical
+            // suffix and store the greatest one.
+            splitNumericalSuffix(child.GetString(), childBaseName, suffix);
+            if (baseName == childBaseName) {
+                int suffixValue = !suffix.empty() ? std::stoi(suffix) : 0;
+                if (suffixValue > largestMatching.second) {
+                    largestMatching = std::make_pair(child.GetString(), suffixValue);
+                }
+            }
+        }
+
+        // By sending in the largest matching name (instead of the input name)
+        // the unique name function will increment its numerical suffix by 1
+        // and thus it will be unique and follow Maya naming standard.
+        childName = uniqueName(allChildrenNames, largestMatching.first);
     }
     return childName;
 }
@@ -325,6 +208,36 @@ bool isAGatewayType(const std::string& mayaNodeType)
         g_GatewayType[mayaNodeType] = isInherited;
     }
     return isInherited;
+}
+
+bool isMaterialsScope(const Ufe::SceneItem::Ptr& item)
+{
+    if (!item) {
+        return false;
+    }
+
+    // Must be a scope.
+    if (item->nodeType() != "Scope") {
+        return false;
+    }
+
+    // With the magic name.
+    if (item->nodeName() == UsdMayaJobExportArgs::GetDefaultMaterialsScopeName()) {
+        return true;
+    }
+
+    // Or with only materials inside
+    auto scopeHierarchy = Ufe::Hierarchy::hierarchy(item);
+    if (scopeHierarchy) {
+        for (auto&& child : scopeHierarchy->children()) {
+            if (child->nodeType() != "Material") {
+                // At least one non material
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 Ufe::Path dagPathToUfe(const MDagPath& dagPath)
@@ -368,23 +281,10 @@ Ufe::PathSegment dagPathToPathSegment(const MDagPath& dagPath)
 
 MDagPath ufeToDagPath(const Ufe::Path& ufePath)
 {
-    if (ufePath.runTimeId() != g_MayaRtid ||
-#ifdef UFE_V2_FEATURES_AVAILABLE
-        ufePath.nbSegments()
-#else
-        ufePath.getSegments().size()
-#endif
-            > 1) {
+    if (ufePath.runTimeId() != g_MayaRtid || ufePath.nbSegments() > 1) {
         return MDagPath();
     }
-    return UsdMayaUtil::nameToDagPath(
-#ifdef UFE_V2_FEATURES_AVAILABLE
-        Ufe::PathString::string(ufePath)
-#else
-        // We have a single segment, so no path segment separator to consider.
-        ufePath.popHead().string()
-#endif
-    );
+    return UsdMayaUtil::nameToDagPath(Ufe::PathString::string(ufePath));
 }
 
 bool isMayaWorldPath(const Ufe::Path& ufePath)
@@ -447,382 +347,119 @@ TfTokenVector getProxyShapePurposes(const Ufe::Path& path)
     return purposes;
 }
 
-namespace {
-
-SdfLayerHandle getStrongerLayer(
-    const SdfLayerHandle& root,
-    const SdfLayerHandle& layer1,
-    const SdfLayerHandle& layer2)
+bool isConnected(const PXR_NS::UsdAttribute& srcUsdAttr, const PXR_NS::UsdAttribute& dstUsdAttr)
 {
-    if (layer1 == layer2)
-        return layer1;
+    PXR_NS::SdfPathVector connectedAttrs;
+    dstUsdAttr.GetConnections(&connectedAttrs);
 
-    if (root == layer1)
-        return layer1;
-
-    if (root == layer2)
-        return layer2;
-
-    for (auto path : root->GetSubLayerPaths()) {
-        SdfLayerRefPtr subLayer = SdfLayer::FindOrOpen(path);
-        if (subLayer) {
-            SdfLayerHandle stronger = getStrongerLayer(subLayer, layer1, layer2);
-            if (!stronger.IsInvalid()) {
-                return stronger;
-            }
+    for (PXR_NS::SdfPath path : connectedAttrs) {
+        if (path == srcUsdAttr.GetPath()) {
+            return true;
         }
     }
 
-    return SdfLayerHandle();
+    return false;
 }
 
-SdfLayerHandle getStrongerLayer(
-    const UsdStagePtr&    stage,
-    const SdfLayerHandle& targetLayer,
-    const SdfLayerHandle& topAuthoredLayer)
+bool canRemoveSrcProperty(const PXR_NS::UsdAttribute& srcAttr)
 {
-    // Session Layer is the strongest in the stage, so check its hierarchy first
-    auto strongerLayer = getStrongerLayer(stage->GetSessionLayer(), targetLayer, topAuthoredLayer);
-    if (strongerLayer == targetLayer) {
-        return targetLayer;
-    } else if (strongerLayer == topAuthoredLayer) {
-        return topAuthoredLayer;
-    }
 
-    // If none of the two layers was found in the Session Layer hierarchy,
-    // then proceed to the stage's general layer hierarchy
-    return getStrongerLayer(stage->GetRootLayer(), targetLayer, topAuthoredLayer);
-}
-
-bool allowedInStrongerLayer(
-    const UsdPrim&                 prim,
-    const SdfPrimSpecHandleVector& primStack,
-    bool                           allowStronger)
-{
-    // If the flag to allow edits in a stronger layer if off, then it is not allowed.
-    if (!allowStronger)
-        return false;
-
-    // If allowed, verify if the target layer is stronger than any existing layer with an opinion.
-    auto stage = prim.GetStage();
-    auto targetLayer = stage->GetEditTarget().GetLayer();
-    auto topLayer = primStack.front()->GetLayer();
-
-    return getStrongerLayer(stage, targetLayer, topLayer) == targetLayer;
-}
-
-} // namespace
-void applyCommandRestriction(
-    const UsdPrim&     prim,
-    const std::string& commandName,
-    bool               allowStronger)
-{
-    // return early if prim is the pseudo-root.
-    // this is a special case and could happen when one tries to drag a prim under the
-    // proxy shape in outliner. Also note if prim is the pseudo-root, no def primSpec will be found.
-    if (prim.IsPseudoRoot()) {
-        return;
-    }
-
-    auto        primSpec = MayaUsdUtils::getPrimSpecAtEditTarget(prim);
-    auto        primStack = prim.GetPrimStack();
-    std::string layerDisplayName;
-    std::string message { "It is defined on another layer" };
-
-    // iterate over the prim stack, starting at the highest-priority layer.
-    for (const auto& spec : primStack) {
-        const auto& layerName = spec->GetLayer()->GetDisplayName();
-
-        // skip if there is no primSpec for the selected prim in the current stage's local layer.
-        if (!primSpec) {
-            // add "," separator for multiple layers
-            if (!layerDisplayName.empty()) {
-                layerDisplayName.append(",");
-            }
-            layerDisplayName.append("[" + layerName + "]");
-            continue;
-        }
-
-        // one reason for skipping the reference is to not clash
-        // with the over that may be created in the stage's sessionLayer.
-        // another reason is that one should be able to edit a referenced prim that
-        // either as over/def as long as it has a primSpec in the selected edit target layer.
-        if (spec->HasReferences()) {
-            break;
-        }
-
-        // if exists a def/over specs
-        if (spec->GetSpecifier() == SdfSpecifierDef || spec->GetSpecifier() == SdfSpecifierOver) {
-            // if spec exists in another layer ( e.g sessionLayer or layer other than stage's local
-            // layers ).
-            if (primSpec->GetLayer() != spec->GetLayer()) {
-                layerDisplayName.append("[" + layerName + "]");
-                message = "It has a stronger opinion on another layer";
-                break;
-            }
-            continue;
-        }
-    }
-
-    // Per design request, we need a more clear message to indicate that renaming a prim inside a
-    // variantset is not allowed. This restriction was already caught in the above loop but the
-    // message was a bit generic.
-    UsdPrimCompositionQuery query(prim);
-    for (const auto& compQueryArc : query.GetCompositionArcs()) {
-        if (!primSpec && PcpArcTypeVariant == compQueryArc.GetArcType()) {
-            if (allowedInStrongerLayer(prim, primStack, allowStronger))
-                return;
-            std::string err = TfStringPrintf(
-                "Cannot %s [%s] because it is defined inside the variant composition arc %s.",
-                commandName.c_str(),
-                prim.GetName().GetString().c_str(),
-                layerDisplayName.c_str());
-            throw std::runtime_error(err.c_str());
-        }
-    }
-
-    if (!layerDisplayName.empty()) {
-        if (allowedInStrongerLayer(prim, primStack, allowStronger))
-            return;
-        std::string err = TfStringPrintf(
-            "Cannot %s [%s]. %s. Please set %s as the target layer to proceed.",
-            commandName.c_str(),
-            prim.GetName().GetString().c_str(),
-            message.c_str(),
-            layerDisplayName.c_str());
-        throw std::runtime_error(err.c_str());
-    }
-}
-
-bool applyCommandRestrictionNoThrow(
-    const UsdPrim&     prim,
-    const std::string& commandName,
-    bool               allowStronger)
-{
-    try {
-        applyCommandRestriction(prim, commandName, allowStronger);
-    } catch (const std::exception& e) {
-        std::string errMsg(e.what());
-        TF_WARN(errMsg);
-        return false;
-    }
-    return true;
-}
-
-bool isPrimMetadataEditAllowed(
-    const UsdPrim&         prim,
-    const TfToken&         metadataName,
-    const PXR_NS::TfToken& keyPath,
-    std::string*           errMsg)
-{
-    return isPropertyMetadataEditAllowed(prim, TfToken(), metadataName, keyPath, errMsg);
-}
-
-bool isPropertyMetadataEditAllowed(
-    const UsdPrim&         prim,
-    const PXR_NS::TfToken& propName,
-    const TfToken&         metadataName,
-    const PXR_NS::TfToken& keyPath,
-    std::string*           errMsg)
-{
-    // If the intended target layer is not modifiable as a whole,
-    // then no metadata edits are allowed at all.
-    const UsdStagePtr& stage = prim.GetStage();
-    if (!isEditTargetLayerModifiable(stage, errMsg))
-        return false;
-
-    // Find the highest layer that has the metadata authored. The prim
-    // expanded PCP index, which contains all locations that contribute
-    // to the prim, is scanned for the first metadata authoring.
-    //
-    // Note: as far as we know, there are no USD API to retrieve the list
-    //       of authored locations for a metadata, unlike properties.
-    //
-    //       The code here is inspired by code from USD, according to
-    //       the following call sequence:
-    //          - UsdObject::GetAllAuthoredMetadata()
-    //          - UsdStage::_GetAllMetadata()
-    //          - UsdStage::_GetMetadataImpl()
-    //          - UsdStage::_GetGeneralMetadataImpl()
-    //          - Usd_Resolver class
-    //          - _ComposeGeneralMetadataImpl()
-    //          - ExistenceComposer::ConsumeAuthored()
-    //          - SdfLayer::HasFieldDictKey()
-    //
-    //          - UsdPrim::GetVariantSets
-    //          - UsdVariantSet::GetVariantSelection()
-    SdfLayerHandle topAuthoredLayer;
-    {
-        const SdfPath       primPath = prim.GetPath();
-        const PcpPrimIndex& primIndex = prim.ComputeExpandedPrimIndex();
-
-        // We need special processing for variant selection.
-        //
-        // Note: we would also need spacial processing for reference and payload,
-        //       but let's postpone them until we actually need it since it would
-        //       add yet more complexities.
-        const bool isVariantSelection = (metadataName == SdfFieldKeys->VariantSelection);
-
-        // Note: specPath is important even if prop name is empty, it then means
-        //       a metadata on the prim itself.
-        Usd_Resolver resolver(&primIndex);
-        SdfPath      specPath = resolver.GetLocalPath(propName);
-
-        for (bool isNewNode = false; resolver.IsValid(); isNewNode = resolver.NextLayer()) {
-            if (isNewNode)
-                specPath = resolver.GetLocalPath(propName);
-
-            // Consume an authored opinion here, if one exists.
-            SdfLayerRefPtr const& layer = resolver.GetLayer();
-            const bool            gotOpinion = keyPath.IsEmpty() || isVariantSelection
-                ? layer->HasField(specPath, metadataName)
-                : layer->HasFieldDictKey(specPath, metadataName, keyPath);
-
-            if (gotOpinion) {
-                if (isVariantSelection) {
-                    using SelMap = SdfVariantSelectionMap;
-                    const SelMap variantSel = layer->GetFieldAs<SelMap>(specPath, metadataName);
-                    if (variantSel.count(keyPath) == 0) {
-                        continue;
-                    }
-                }
-                topAuthoredLayer = layer;
-                break;
-            }
-        }
-    }
-
-    // Get the layer where we intend to author a new opinion.
-    const UsdEditTarget& editTarget = stage->GetEditTarget();
-    const SdfLayerHandle targetLayer = editTarget.GetLayer();
-
-    // Verify that the intended target layer is stronger than existing authored opinions.
-    const auto strongestLayer = getStrongerLayer(stage, targetLayer, topAuthoredLayer);
-    bool       allowed = (strongestLayer == targetLayer);
-    if (!allowed && errMsg) {
-        *errMsg = TfStringPrintf(
-            "Cannot edit [%s] attribute because there is a stronger opinion in [%s].",
-            metadataName.GetText(),
-            strongestLayer ? strongestLayer->GetDisplayName().c_str() : "some layer");
-    }
-    return allowed;
-}
-
-bool isAttributeEditAllowed(const PXR_NS::UsdAttribute& attr, std::string* errMsg)
-{
-    if (Editability::isLocked(attr)) {
-        if (errMsg) {
-            *errMsg = TfStringPrintf(
-                "Cannot edit [%s] attribute because its lock metadata is [on].",
-                attr.GetBaseName().GetText());
-        }
+    // Do not remove if it has a value.
+    if (srcAttr.HasValue()) {
         return false;
     }
 
-    // get the property spec in the edit target's layer
-    const auto& prim = attr.GetPrim();
-    const auto& stage = prim.GetStage();
-    const auto& editTarget = stage->GetEditTarget();
+    PXR_NS::SdfPathVector connectedAttrs;
+    srcAttr.GetConnections(&connectedAttrs);
 
-    if (!isEditTargetLayerModifiable(stage, errMsg)) {
+    // Do not remove if it has connections.
+    if (!connectedAttrs.empty()) {
         return false;
     }
 
-    // get the index to edit target layer
-    const auto targetLayerIndex = findLayerIndex(prim, editTarget.GetLayer());
+    const auto prim = srcAttr.GetPrim();
 
-    // HS March 22th,2021
-    // TODO: "Value Clips" are UsdStage-level feature, unknown to Pcp.So if the attribute in
-    // question is affected by Value Clips, we would will likely get the wrong answer. See Spiff
-    // comment for more information :
-    // https://groups.google.com/g/usd-interest/c/xTxFYQA_bRs/m/lX_WqNLoBAAJ
+    if (!prim) {
+        return false;
+    }
 
-    // Read on Value Clips here:
-    // https://graphics.pixar.com/usd/docs/api/_usd__page__value_clips.html
+    PXR_NS::UsdShadeNodeGraph ngPrim(prim);
 
-    // get the strength-ordered ( strong-to-weak order ) list of property specs that provide
-    // opinions for this property.
-    const auto& propertyStack = attr.GetPropertyStack();
+    if (!ngPrim) {
+        const auto primParent = prim.GetParent();
 
-    if (!propertyStack.empty()) {
-        // get the strongest layer that has the attr.
-        auto strongestLayer = attr.GetPropertyStack().front()->GetLayer();
-
-        // compare the calculated index between the "attr" and "edit target" layers.
-        if (findLayerIndex(prim, strongestLayer) < targetLayerIndex) {
-            if (errMsg) {
-                *errMsg = TfStringPrintf(
-                    "Cannot edit [%s] attribute because there is a stronger opinion in [%s].",
-                    attr.GetBaseName().GetText(),
-                    strongestLayer->GetDisplayName().c_str());
-            }
-
+        if (!primParent) {
             return false;
         }
-    }
 
-    return true;
-}
+        // Do not remove if there is a connection with a prim.
+        for (const auto& childPrim : primParent.GetChildren()) {
+            if (childPrim != prim) {
+                for (const auto& attribute : childPrim.GetAttributes()) {
+                    const PXR_NS::UsdAttribute dstUsdAttr = attribute.As<PXR_NS::UsdAttribute>();
+                    if (isConnected(srcAttr, dstUsdAttr)) {
+                        return false;
+                    }
+                }
+            }
+        }
 
-bool isAttributeEditAllowed(const UsdPrim& prim, const TfToken& attrName)
-{
-    std::string errMsg;
-
-    TF_AXIOM(prim);
-    TF_AXIOM(!attrName.IsEmpty());
-
-    UsdGeomXformable xformable(prim);
-    if (xformable) {
-        if (UsdGeomXformOp::IsXformOp(attrName)) {
-            // check for the attribute in XformOpOrderAttr first
-            if (!isAttributeEditAllowed(xformable.GetXformOpOrderAttr(), &errMsg)) {
-                MGlobal::displayError(errMsg.c_str());
+        // Do not remove if there is a connection with the parent prim.
+        for (const auto& attribute : primParent.GetAttributes()) {
+            const PXR_NS::UsdAttribute dstUsdAttr = attribute.As<PXR_NS::UsdAttribute>();
+            if (isConnected(srcAttr, dstUsdAttr)) {
                 return false;
             }
         }
-    }
-    // check the attribute itself
-    if (!isAttributeEditAllowed(prim.GetAttribute(attrName), &errMsg)) {
-        MGlobal::displayError(errMsg.c_str());
-        return false;
+
+        return true;
     }
 
-    return true;
+    // Do not remove boundary properties even if there are connections.
+    return false;
 }
 
-bool isEditTargetLayerModifiable(const UsdStageWeakPtr stage, std::string* errMsg)
+bool canRemoveDstProperty(const PXR_NS::UsdAttribute& dstAttr)
 {
-    const auto editTarget = stage->GetEditTarget();
-    const auto editLayer = editTarget.GetLayer();
 
-    if (editLayer && !editLayer->PermissionToEdit()) {
-        if (errMsg) {
-            std::string err = TfStringPrintf(
-                "Cannot edit [%s] because it is read-only. Set PermissionToEdit = true to proceed.",
-                editLayer->GetDisplayName().c_str());
-
-            *errMsg = err;
-        }
-
+    // Do not remove if it has a value.
+    if (dstAttr.HasValue()) {
         return false;
     }
 
-    if (stage->IsLayerMuted(editLayer->GetIdentifier())) {
-        if (errMsg) {
-            std::string err = TfStringPrintf(
-                "Cannot edit [%s] because it is muted. Unmute [%s] to proceed.",
-                editLayer->GetDisplayName().c_str(),
-                editLayer->GetDisplayName().c_str());
-            *errMsg = err;
-        }
+    PXR_NS::SdfPathVector connectedAttrs;
+    dstAttr.GetConnections(&connectedAttrs);
 
+    // Do not remove if it has connections.
+    if (!connectedAttrs.empty()) {
         return false;
     }
 
-    return true;
+    const auto prim = dstAttr.GetPrim();
+
+    if (!prim) {
+        return false;
+    }
+
+    PXR_NS::UsdShadeNodeGraph ngPrim(prim);
+
+    if (!ngPrim) {
+        return true;
+    }
+
+    UsdShadeMaterial asMaterial(prim);
+    if (asMaterial) {
+        const TfToken baseName = dstAttr.GetBaseName();
+        // Remove Material intrinsic outputs since they are re-created automatically.
+        if (baseName == UsdShadeTokens->surface || baseName == UsdShadeTokens->volume
+            || baseName == UsdShadeTokens->displacement) {
+            return true;
+        }
+    }
+
+    // Do not remove boundary properties even if there are connections.
+    return false;
 }
-
-#ifdef UFE_V2_FEATURES_AVAILABLE
 
 namespace {
 // Do not expose that function. The input parameter does not provide enough information to
@@ -830,41 +467,39 @@ namespace {
 Ufe::Attribute::Type _UsdTypeToUfe(const SdfValueTypeName& usdType)
 {
     // Map the USD type into UFE type.
-    static const std::unordered_map<size_t, Ufe::Attribute::Type> sUsdTypeToUfe
-    {
-        { SdfValueTypeNames->Bool.GetHash(), Ufe::Attribute::kBool },               // bool
-            { SdfValueTypeNames->Int.GetHash(), Ufe::Attribute::kInt },             // int32_t
-            { SdfValueTypeNames->Float.GetHash(), Ufe::Attribute::kFloat },         // float
-            { SdfValueTypeNames->Double.GetHash(), Ufe::Attribute::kDouble },       // double
-            { SdfValueTypeNames->String.GetHash(), Ufe::Attribute::kString },       // std::string
-            { SdfValueTypeNames->Token.GetHash(), Ufe::Attribute::kString },        // TfToken
-            { SdfValueTypeNames->Int3.GetHash(), Ufe::Attribute::kInt3 },           // GfVec3i
-            { SdfValueTypeNames->Float3.GetHash(), Ufe::Attribute::kFloat3 },       // GfVec3f
-            { SdfValueTypeNames->Double3.GetHash(), Ufe::Attribute::kDouble3 },     // GfVec3d
-            { SdfValueTypeNames->Color3f.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3f
-            { SdfValueTypeNames->Color3d.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3d
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
-            { SdfValueTypeNames->Asset.GetHash(), Ufe::Attribute::kFilename },      // SdfAssetPath
-            { SdfValueTypeNames->Float2.GetHash(), Ufe::Attribute::kFloat2 },       // GfVec2f
-            { SdfValueTypeNames->Float4.GetHash(), Ufe::Attribute::kFloat4 },       // GfVec4f
-            { SdfValueTypeNames->Color4f.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4f
-            { SdfValueTypeNames->Color4d.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4d
-            { SdfValueTypeNames->Matrix3d.GetHash(), Ufe::Attribute::kMatrix3d },   // GfMatrix3d
-            { SdfValueTypeNames->Matrix4d.GetHash(), Ufe::Attribute::kMatrix4d },   // GfMatrix4d
+    static const std::unordered_map<size_t, Ufe::Attribute::Type> sUsdTypeToUfe {
+        { SdfValueTypeNames->Bool.GetHash(), Ufe::Attribute::kBool },           // bool
+        { SdfValueTypeNames->Int.GetHash(), Ufe::Attribute::kInt },             // int32_t
+        { SdfValueTypeNames->Float.GetHash(), Ufe::Attribute::kFloat },         // float
+        { SdfValueTypeNames->Double.GetHash(), Ufe::Attribute::kDouble },       // double
+        { SdfValueTypeNames->String.GetHash(), Ufe::Attribute::kString },       // std::string
+        { SdfValueTypeNames->Token.GetHash(), Ufe::Attribute::kString },        // TfToken
+        { SdfValueTypeNames->Int3.GetHash(), Ufe::Attribute::kInt3 },           // GfVec3i
+        { SdfValueTypeNames->Float3.GetHash(), Ufe::Attribute::kFloat3 },       // GfVec3f
+        { SdfValueTypeNames->Double3.GetHash(), Ufe::Attribute::kDouble3 },     // GfVec3d
+        { SdfValueTypeNames->Color3f.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3f
+        { SdfValueTypeNames->Color3d.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3d
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        { SdfValueTypeNames->Asset.GetHash(), Ufe::Attribute::kFilename },      // SdfAssetPath
+        { SdfValueTypeNames->Float2.GetHash(), Ufe::Attribute::kFloat2 },       // GfVec2f
+        { SdfValueTypeNames->Float4.GetHash(), Ufe::Attribute::kFloat4 },       // GfVec4f
+        { SdfValueTypeNames->Color4f.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4f
+        { SdfValueTypeNames->Color4d.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4d
+        { SdfValueTypeNames->Matrix3d.GetHash(), Ufe::Attribute::kMatrix3d },   // GfMatrix3d
+        { SdfValueTypeNames->Matrix4d.GetHash(), Ufe::Attribute::kMatrix4d },   // GfMatrix4d
 #endif
     };
     const auto iter = sUsdTypeToUfe.find(usdType.GetHash());
     if (iter != sUsdTypeToUfe.end()) {
         return iter->second;
     } else {
-        static const std::unordered_map<std::string, Ufe::Attribute::Type> sCPPTypeToUfe
-        {
+        static const std::unordered_map<std::string, Ufe::Attribute::Type> sCPPTypeToUfe {
             // There are custom Normal3f, Point3f types in USD. They can all be recognized by the
             // underlying CPP type and if there is a Ufe type that matches, use it.
-            { "GfVec3i", Ufe::Attribute::kInt3 }, { "GfVec3d", Ufe::Attribute::kDouble3 },
-                { "GfVec3f", Ufe::Attribute::kFloat3 },
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
-                { "GfVec2f", Ufe::Attribute::kFloat2 }, { "GfVec4f", Ufe::Attribute::kFloat4 },
+            { "GfVec3i", Ufe::Attribute::kInt3 },   { "GfVec3d", Ufe::Attribute::kDouble3 },
+            { "GfVec3f", Ufe::Attribute::kFloat3 },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+            { "GfVec2f", Ufe::Attribute::kFloat2 }, { "GfVec4f", Ufe::Attribute::kFloat4 },
 #endif
         };
 
@@ -920,8 +555,15 @@ Ufe::Attribute::Type usdTypeToUfe(const SdrShaderPropertyConstPtr& shaderPropert
         retVal = _UsdTypeToUfe(typeName);
     }
 
-    if (retVal == Ufe::Attribute::kString && !shaderProperty->GetOptions().empty()) {
-        retVal = Ufe::Attribute::kEnumString;
+    if (retVal == Ufe::Attribute::kString) {
+        if (!shaderProperty->GetOptions().empty()) {
+            retVal = Ufe::Attribute::kEnumString;
+        }
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        else if (shaderProperty->IsAssetIdentifier()) {
+            retVal = Ufe::Attribute::kFilename;
+        }
+#endif
     }
 
     return retVal;
@@ -935,9 +577,8 @@ Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::UsdAttribute& usdAttr)
         if (type == Ufe::Attribute::kString) {
             // Both std::string and TfToken resolve to kString, but if there is a list of allowed
             // tokens, then we use kEnumString instead.
-            auto attrDefn
-                = usdAttr.GetPrim().GetPrimDefinition().GetSchemaAttributeSpec(usdAttr.GetName());
-            if (attrDefn && attrDefn->HasAllowedTokens()) {
+            if (usdAttr.GetPrim().GetPrimDefinition().GetPropertyMetadata<VtTokenArray>(
+                    usdAttr.GetName(), SdfFieldKeys->AllowedTokens, nullptr)) {
                 type = Ufe::Attribute::kEnumString;
             }
             // TfToken is also used in UsdShade as a Generic placeholder for connecting struct I/O.
@@ -959,27 +600,26 @@ Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::UsdAttribute& usdAttr)
 SdfValueTypeName ufeTypeToUsd(const Ufe::Attribute::Type ufeType)
 {
     // Map the USD type into UFE type.
-    static const std::unordered_map<Ufe::Attribute::Type, SdfValueTypeName> sUfeTypeToUsd
-    {
+    static const std::unordered_map<Ufe::Attribute::Type, SdfValueTypeName> sUfeTypeToUsd {
         { Ufe::Attribute::kBool, SdfValueTypeNames->Bool },
-            { Ufe::Attribute::kInt, SdfValueTypeNames->Int },
-            { Ufe::Attribute::kFloat, SdfValueTypeNames->Float },
-            { Ufe::Attribute::kDouble, SdfValueTypeNames->Double },
-            { Ufe::Attribute::kString, SdfValueTypeNames->String },
-            // Not enough info at this point to differentiate between TfToken and std:string.
-            { Ufe::Attribute::kEnumString, SdfValueTypeNames->Token },
-            { Ufe::Attribute::kInt3, SdfValueTypeNames->Int3 },
-            { Ufe::Attribute::kFloat3, SdfValueTypeNames->Float3 },
-            { Ufe::Attribute::kDouble3, SdfValueTypeNames->Double3 },
-            { Ufe::Attribute::kColorFloat3, SdfValueTypeNames->Color3f },
-            { Ufe::Attribute::kGeneric, SdfValueTypeNames->Token },
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
-            { Ufe::Attribute::kFilename, SdfValueTypeNames->Asset },
-            { Ufe::Attribute::kFloat2, SdfValueTypeNames->Float2 },
-            { Ufe::Attribute::kFloat4, SdfValueTypeNames->Float4 },
-            { Ufe::Attribute::kColorFloat4, SdfValueTypeNames->Color4f },
-            { Ufe::Attribute::kMatrix3d, SdfValueTypeNames->Matrix3d },
-            { Ufe::Attribute::kMatrix4d, SdfValueTypeNames->Matrix4d },
+        { Ufe::Attribute::kInt, SdfValueTypeNames->Int },
+        { Ufe::Attribute::kFloat, SdfValueTypeNames->Float },
+        { Ufe::Attribute::kDouble, SdfValueTypeNames->Double },
+        { Ufe::Attribute::kString, SdfValueTypeNames->String },
+        // Not enough info at this point to differentiate between TfToken and std:string.
+        { Ufe::Attribute::kEnumString, SdfValueTypeNames->Token },
+        { Ufe::Attribute::kInt3, SdfValueTypeNames->Int3 },
+        { Ufe::Attribute::kFloat3, SdfValueTypeNames->Float3 },
+        { Ufe::Attribute::kDouble3, SdfValueTypeNames->Double3 },
+        { Ufe::Attribute::kColorFloat3, SdfValueTypeNames->Color3f },
+        { Ufe::Attribute::kGeneric, SdfValueTypeNames->Token },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        { Ufe::Attribute::kFilename, SdfValueTypeNames->Asset },
+        { Ufe::Attribute::kFloat2, SdfValueTypeNames->Float2 },
+        { Ufe::Attribute::kFloat4, SdfValueTypeNames->Float4 },
+        { Ufe::Attribute::kColorFloat4, SdfValueTypeNames->Color4f },
+        { Ufe::Attribute::kMatrix3d, SdfValueTypeNames->Matrix3d },
+        { Ufe::Attribute::kMatrix4d, SdfValueTypeNames->Matrix4d },
 #endif
     };
 
@@ -1001,11 +641,17 @@ VtValue vtValueFromString(const SdfValueTypeName& typeName, const std::string& s
             { SdfValueTypeNames->Bool.GetCPPTypeName(),
               [](const std::string& s) { return VtValue("true" == s ? true : false); } },
             { SdfValueTypeNames->Int.GetCPPTypeName(),
-              [](const std::string& s) { return VtValue(std::stoi(s.c_str())); } },
+              [](const std::string& s) {
+                  return s.empty() ? VtValue() : VtValue(std::stoi(s.c_str()));
+              } },
             { SdfValueTypeNames->Float.GetCPPTypeName(),
-              [](const std::string& s) { return VtValue(std::stof(s.c_str())); } },
+              [](const std::string& s) {
+                  return s.empty() ? VtValue() : VtValue(std::stof(s.c_str()));
+              } },
             { SdfValueTypeNames->Double.GetCPPTypeName(),
-              [](const std::string& s) { return VtValue(std::stod(s.c_str())); } },
+              [](const std::string& s) {
+                  return s.empty() ? VtValue() : VtValue(std::stod(s.c_str()));
+              } },
             { SdfValueTypeNames->String.GetCPPTypeName(),
               [](const std::string& s) { return VtValue(s); } },
             { SdfValueTypeNames->Token.GetCPPTypeName(),
@@ -1112,49 +758,6 @@ VtValue vtValueFromString(const SdfValueTypeName& typeName, const std::string& s
         return iter->second(strValue);
     }
     return {};
-}
-
-#endif
-
-Ufe::Selection removeDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath)
-{
-    // Filter the src selection, removing items below the filterPath
-    Ufe::Selection dst;
-    for (const auto& item : src) {
-        const auto& itemPath = item->path();
-        // The filterPath itself is still valid.
-        if (!itemPath.startsWith(filterPath) || itemPath == filterPath) {
-            dst.append(item);
-        }
-    }
-    return dst;
-}
-
-Ufe::Selection recreateDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath)
-{
-    // If a src selection item starts with the filterPath, re-create it.
-    Ufe::Selection dst;
-    for (const auto& item : src) {
-        const auto& itemPath = item->path();
-        // The filterPath itself is still valid.
-        if (!itemPath.startsWith(filterPath) || itemPath == filterPath) {
-            dst.append(item);
-        } else {
-            auto recreatedItem = Ufe::Hierarchy::createItem(item->path());
-            TF_AXIOM(recreatedItem);
-            dst.append(recreatedItem);
-        }
-    }
-    return dst;
-}
-
-std::string pathSegmentSeparator()
-{
-#ifdef UFE_V2_FEATURES_AVAILABLE
-    return Ufe::PathString::pathSegmentSeparator();
-#else
-    return ",";
-#endif
 }
 
 std::vector<std::string> splitString(const std::string& str, const std::string& separators)
@@ -1294,7 +897,7 @@ void ReplicateExtrasToUSD::finalize(
                 usdPrimPath = usdPrimPath.ReplacePrefix(*oldPrefix, *newPrefix);
             }
 
-            auto                primPath = MayaUsd::ufe::usdPathToUfePathSegment(usdPrimPath);
+            auto                primPath = UsdUfe::usdPathToUfePathSegment(usdPrimPath);
             Ufe::Path::Segments segments { stagePath.getSegments()[0], primPath };
             Ufe::Path           ufePath(std::move(segments));
 
@@ -1303,6 +906,80 @@ void ReplicateExtrasToUSD::finalize(
         }
     }
 #endif
+}
+
+#ifdef HAS_ORPHANED_NODES_MANAGER
+
+static Ufe::BBox3d transformBBox(const PXR_NS::GfMatrix4d& matrix, const Ufe::BBox3d& bbox)
+{
+    Ufe::BBox3d transformed(bbox);
+
+    transformed.min = toUfe(matrix.Transform(toUsd(bbox.min)));
+    transformed.max = toUfe(matrix.Transform(toUsd(bbox.max)));
+
+    return transformed;
+}
+
+static Ufe::BBox3d transformBBox(const Ufe::Matrix4d& matrix, const Ufe::BBox3d& bbox)
+{
+    return transformBBox(toUsd(matrix), bbox);
+}
+
+static Ufe::BBox3d transformBBox(Ufe::SceneItem::Ptr& item, const Ufe::BBox3d& bbox)
+{
+    Ufe::Transform3d::Ptr t3d = Ufe::Transform3d::transform3d(item);
+    if (!t3d)
+        return bbox;
+
+    return transformBBox(t3d->matrix(), bbox);
+}
+
+static Ufe::BBox3d getTransformedBBox(const MDagPath& path)
+{
+    MFnDagNode node(path);
+
+    MBoundingBox mayaBBox = node.boundingBox();
+    return Ufe::BBox3d(
+        Ufe::Vector3d(mayaBBox.min().x, mayaBBox.min().y, mayaBBox.min().z),
+        Ufe::Vector3d(mayaBBox.max().x, mayaBBox.max().y, mayaBBox.max().z));
+}
+
+#endif /* HAS_ORPHANED_NODES_MANAGER */
+
+Ufe::BBox3d getPulledPrimsBoundingBox(const Ufe::Path& path)
+{
+    Ufe::BBox3d ufeBBox;
+
+#ifdef HAS_ORPHANED_NODES_MANAGER
+    const auto& updaterMgr = PXR_NS::PrimUpdaterManager::getInstance();
+    PXR_NS::PrimUpdaterManager::PulledPrimPaths pulledPaths = updaterMgr.getPulledPrimPaths();
+    for (const auto& paths : pulledPaths) {
+        const Ufe::Path& pulledPath = paths.first;
+
+        if (pulledPath == path)
+            continue;
+
+        if (!pulledPath.startsWith(path))
+            continue;
+
+        // Note: Maya implementation of the Object3d UFE interface does not
+        //       implement the boundingBox() function. So we ask the DAG instead.
+        const MDagPath& mayaPath = paths.second;
+        Ufe::BBox3d     pulledBBox = getTransformedBBox(mayaPath);
+
+        for (auto parentPath = pulledPath.pop(); parentPath != path;
+             parentPath = parentPath.pop()) {
+            Ufe::SceneItem::Ptr parentItem = Ufe::Hierarchy::createItem(parentPath);
+            if (!parentItem)
+                continue;
+            pulledBBox = transformBBox(parentItem, pulledBBox);
+        }
+
+        ufeBBox = UsdUfe::combineUfeBBox(ufeBBox, pulledBBox);
+    }
+#endif /* HAS_ORPHANED_NODES_MANAGER */
+
+    return ufeBBox;
 }
 
 } // namespace ufe

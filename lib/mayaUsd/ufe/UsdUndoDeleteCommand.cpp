@@ -16,39 +16,18 @@
 #include "UsdUndoDeleteCommand.h"
 
 #include "private/UfeNotifGuard.h"
-#include "private/Utils.h"
 
-#include <mayaUsd/ufe/Utils.h>
+#include <usdUfe/ufe/Utils.h>
+#include <usdUfe/undo/UsdUndoBlock.h>
+#include <usdUfe/utils/layers.h>
+#include <usdUfe/utils/usdUtils.h>
 
-#include <pxr/usd/pcp/layerStack.h>
 #include <pxr/usd/sdf/layer.h>
+#include <pxr/usd/usd/editContext.h>
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <mayaUsd/undo/UsdUndoBlock.h>
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#include <mayaUsd/ufe/UsdAttributes.h>
 #endif
-
-namespace {
-#ifdef MAYA_ENABLE_NEW_PRIM_DELETE
-bool hasLayersMuted(const PXR_NS::UsdPrim& prim)
-{
-    const PXR_NS::PcpPrimIndex& primIndex = prim.GetPrimIndex();
-
-    for (const PXR_NS::PcpNodeRef node : primIndex.GetNodeRange()) {
-
-        TF_AXIOM(node);
-
-        const PXR_NS::PcpLayerStackSite&   site = node.GetSite();
-        const PXR_NS::PcpLayerStackRefPtr& layerStack = site.layerStack;
-
-        const std::set<std::string>& mutedLayers = layerStack->GetMutedLayers();
-        if (mutedLayers.size() > 0) {
-            return true;
-        }
-    }
-    return false;
-}
-#endif
-} // anonymous namespace
 
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
@@ -66,13 +45,14 @@ UsdUndoDeleteCommand::Ptr UsdUndoDeleteCommand::create(const PXR_NS::UsdPrim& pr
     return std::make_shared<UsdUndoDeleteCommand>(prim);
 }
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
 void UsdUndoDeleteCommand::execute()
 {
     if (!_prim.IsValid())
         return;
 
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    enforceMutedLayer(_prim, "remove");
+
+    UsdUfe::InAddOrDeleteOperation ad;
 
     UsdUndoBlock undoBlock(&_undoableItem);
 
@@ -80,16 +60,29 @@ void UsdUndoDeleteCommand::execute()
     const auto& stage = _prim.GetStage();
     auto        targetPrimSpec = stage->GetEditTarget().GetPrimSpecForScenePath(_prim.GetPath());
 
-    if (hasLayersMuted(_prim)) {
-        TF_WARN("Cannot remove prim because there are muted layers.");
-        return;
-    }
-
-    if (MayaUsd::ufe::applyCommandRestrictionNoThrow(_prim, "delete")) {
-        auto retVal = stage->RemovePrim(_prim.GetPath());
-        if (!retVal) {
-            TF_VERIFY(retVal, "Failed to delete '%s'", _prim.GetPath().GetText());
+    if (UsdUfe::applyCommandRestrictionNoThrow(_prim, "delete")) {
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        UsdAttributes::removeAttributesConnections(_prim);
+#endif
+        // Let removeAttributesConnections be run first as it will also cleanup
+        // attributes that were authored only to be the destination of a connection.
+        if (!UsdUfe::cleanReferencedPath(_prim)) {
+            const std::string error = TfStringPrintf(
+                "Failed to cleanup references to prim \"%s\".", _prim.GetPath().GetText());
+            TF_WARN("%s", error.c_str());
+            throw std::runtime_error(error);
         }
+        PrimSpecFunc deleteFunc
+            = [stage](const UsdPrim& prim, const SdfPrimSpecHandle& primSpec) -> void {
+            PXR_NS::UsdEditContext ctx(stage, primSpec->GetLayer());
+            if (!stage->RemovePrim(prim.GetPath())) {
+                const std::string error
+                    = TfStringPrintf("Failed to delete prim \"%s\".", prim.GetPath().GetText());
+                TF_WARN("%s", error.c_str());
+                throw std::runtime_error(error);
+            }
+        };
+        applyToAllPrimSpecs(_prim, deleteFunc);
     }
 #else
     _prim.SetActive(false);
@@ -98,28 +91,17 @@ void UsdUndoDeleteCommand::execute()
 
 void UsdUndoDeleteCommand::undo()
 {
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    UsdUfe::InAddOrDeleteOperation ad;
 
     _undoableItem.undo();
 }
 
 void UsdUndoDeleteCommand::redo()
 {
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
+    UsdUfe::InAddOrDeleteOperation ad;
 
     _undoableItem.redo();
 }
-#else
-void UsdUndoDeleteCommand::perform(bool state)
-{
-    MayaUsd::ufe::InAddOrDeleteOperation ad;
-    _prim.SetActive(state);
-}
-
-void UsdUndoDeleteCommand::undo() { perform(true); }
-
-void UsdUndoDeleteCommand::redo() { perform(false); }
-#endif
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF

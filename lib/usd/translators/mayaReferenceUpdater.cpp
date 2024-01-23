@@ -15,6 +15,7 @@
 //
 #include "mayaReferenceUpdater.h"
 
+#include <mayaUsd/base/tokens.h>
 #include <mayaUsd/fileio/primUpdaterManager.h>
 #include <mayaUsd/fileio/primUpdaterRegistry.h>
 #include <mayaUsd/fileio/translators/translatorMayaReference.h>
@@ -22,12 +23,16 @@
 #include <mayaUsd/fileio/utils/xformStack.h>
 #include <mayaUsd/ufe/Utils.h>
 #include <mayaUsd/undo/OpUndoItems.h>
-#include <mayaUsd/utils/editRouter.h>
+#include <mayaUsd/utils/primActivation.h>
 #include <mayaUsd/utils/util.h>
 #include <mayaUsd/utils/utilSerialization.h>
 #include <mayaUsd/utils/variants.h>
 #include <mayaUsd_Schemas/ALMayaReference.h>
 #include <mayaUsd_Schemas/MayaReference.h>
+
+#include <usdUfe/base/tokens.h>
+#include <usdUfe/ufe/SetVariantSelectionCommand.h>
+#include <usdUfe/utils/editRouter.h>
 
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/tf/diagnostic.h>
@@ -51,15 +56,18 @@ namespace {
 // Clear the auto-edit flag on a USD Maya Reference so that it does not
 // get edited immediately again. Clear in all variants, since each
 // variant has its own copy of the flag.
-void clearAutoEdit(const UsdPrim& prim)
+void clearAutoEdit(const Ufe::Path& pulledPath)
 {
+    MayaUsd::PrimActivation activation(pulledPath);
+
     // The given prim can be invalid. This happens for example if an
     // ancestor was deactivated.
+    UsdPrim prim = MayaUsd::ufe::ufePathToPrim(pulledPath);
     if (!prim.IsValid())
         return;
 
     UsdPrim parentPrim = prim.GetParent();
-    MAYAUSD_NS::applyToAllVariants(parentPrim, true, [prim]() {
+    MayaUsd::applyToAllVariants(parentPrim, true, [prim]() {
         // Note: the prim might not exist in all variants, so check its validity.
         if (!prim.IsValid())
             return;
@@ -182,11 +190,11 @@ bool PxrUsdTranslators_MayaReferenceUpdater::editAsMaya()
 }
 
 bool callEditRouter(
-    const char*                 routerName,
+    const TfToken&              routerName,
     const PXR_NS::VtDictionary& routerContext,
     PXR_NS::VtDictionary&       routingData)
 {
-    MayaUsd::EditRouter::Ptr dstEditRouter = MayaUsd::getEditRouter(TfToken(routerName));
+    UsdUfe::EditRouter::Ptr dstEditRouter = UsdUfe::getEditRouter(routerName);
     if (!dstEditRouter)
         return false;
 
@@ -211,29 +219,29 @@ UsdMayaPrimUpdater::PushCopySpecs PxrUsdTranslators_MayaReferenceUpdater::pushCo
     PXR_NS::VtDictionary routerContext = getContext()->GetUserArgs();
 
     // Pass the source and destination stage, layer and path to routers.
-    routerContext["src_stage"] = PXR_NS::VtValue(srcStage);
-    routerContext["src_layer"] = PXR_NS::VtValue(srcLayer);
-    routerContext["src_path"] = PXR_NS::VtValue(srcSdfPath);
+    routerContext[MayaUsdEditRoutingTokens->SrcStage] = PXR_NS::VtValue(srcStage);
+    routerContext[MayaUsdEditRoutingTokens->SrcLayer] = PXR_NS::VtValue(srcLayer);
+    routerContext[MayaUsdEditRoutingTokens->SrcPath] = PXR_NS::VtValue(srcSdfPath);
 
-    routerContext["dst_stage"] = PXR_NS::VtValue(dstStage);
-    routerContext["dst_layer"] = PXR_NS::VtValue(dstLayer);
-    routerContext["dst_path"] = PXR_NS::VtValue(dstSdfPath);
+    routerContext[MayaUsdEditRoutingTokens->DstStage] = PXR_NS::VtValue(dstStage);
+    routerContext[MayaUsdEditRoutingTokens->DstLayer] = PXR_NS::VtValue(dstLayer);
+    routerContext[MayaUsdEditRoutingTokens->DstPath] = PXR_NS::VtValue(dstSdfPath);
 
     // Use the edit router to find the destination layer and path.
-    routerContext["stage"] = PXR_NS::VtValue(getContext()->GetUsdStage());
-    routerContext["prim"] = PXR_NS::VtValue(dstSdfPath.GetString());
+    routerContext[UsdUfe::EditRoutingTokens->Stage] = PXR_NS::VtValue(getContext()->GetUsdStage());
+    routerContext[UsdUfe::EditRoutingTokens->Prim] = PXR_NS::VtValue(dstSdfPath.GetString());
 
     PXR_NS::VtDictionary routingData;
 
-    if (!callEditRouter("mayaReferencePush", routerContext, routingData))
+    if (!callEditRouter(MayaUsdEditRoutingTokens->RouteCacheToUSD, routerContext, routingData))
         return PushCopySpecs::Failed;
 
     // Retrieve the destination layer and prim path from the routing data.
-    auto cacheDstLayerStr = findValue(routingData, TfToken("layer"));
+    auto cacheDstLayerStr = findValue(routingData, UsdUfe::EditRoutingTokens->Layer);
     if (!TF_VERIFY(!cacheDstLayerStr.empty()))
         return PushCopySpecs::Failed;
 
-    auto cacheDstPathStr = findValue(routingData, TfToken("path"));
+    auto cacheDstPathStr = findValue(routingData, MayaUsdEditRoutingTokens->Path);
     if (!TF_VERIFY(!cacheDstPathStr.empty()))
         return PushCopySpecs::Failed;
 
@@ -249,7 +257,7 @@ UsdMayaPrimUpdater::PushCopySpecs PxrUsdTranslators_MayaReferenceUpdater::pushCo
     const MObject& parentNode = getMayaObject();
     UsdMayaTranslatorMayaReference::UnloadMayaReference(parentNode);
 
-    auto saveLayer = findValue(routingData, TfToken("save_layer"));
+    auto saveLayer = findValue(routingData, MayaUsdEditRoutingTokens->SaveLayer);
     if (saveLayer == "yes")
         cacheDstLayer->Save();
 
@@ -266,10 +274,9 @@ bool PxrUsdTranslators_MayaReferenceUpdater::discardEdits()
     MStatus  status = MDagPath::getAPathTo(parentNode, dagPath);
     if (status == MS::kSuccess) {
         Ufe::Path pulledPath;
-        if (MAYAUSD_NS_DEF::readPullInformation(dagPath, pulledPath)) {
+        if (MayaUsd::readPullInformation(dagPath, pulledPath)) {
             // Reset the auto-edit when discarding the edit.
-            UsdPrim prim = MayaUsd::ufe::ufePathToPrim(pulledPath);
-            clearAutoEdit(prim);
+            clearAutoEdit(pulledPath);
         }
     }
 
@@ -290,9 +297,6 @@ bool PxrUsdTranslators_MayaReferenceUpdater::pushEnd()
 
     MayaUsd::LockNodesUndoItem::lock(
         "Maya reference pulled transform unlocking", transformPath, false);
-
-    // Clear the auto-edit flag.
-    clearAutoEdit(getUsdPrim());
 
     return true;
 }

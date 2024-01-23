@@ -46,8 +46,6 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
-using namespace MAYAUSD_NS_DEF;
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 TF_DEFINE_PRIVATE_TOKENS(
@@ -213,7 +211,7 @@ bool UsdMayaTranslatorUtil::CreateNode(
     // their edits to their parents-- if this is indeed the best pattern for
     // this, all Maya*Reader node creation needs to be adjusted accordingly (for
     // much less trivial cases like MFnMesh).
-    MDagModifier& dagMod = MDagModifierUndoItem::create("Generic node creation");
+    MDagModifier& dagMod = MayaUsd::MDagModifierUndoItem::create("Generic node creation");
     *mayaNodeObj = dagMod.createNode(nodeTypeName, parentNode, status);
     CHECK_MSTATUS_AND_RETURN(*status, false);
     *status = dagMod.renameNode(*mayaNodeObj, nodeName);
@@ -335,12 +333,7 @@ UsdMayaTranslatorUtil::ComputeShadingNodeTypeForMayaTypeName(const TfToken& maya
 
     // Loop over the compoundClassifications, though I believe
     // compoundClassifications will always have size 0 or 1.
-#if MAYA_API_VERSION >= 20190000
     for (const MString& compoundClassification : compoundClassifications) {
-#else
-    for (unsigned int i = 0u; i < compoundClassifications.length(); ++i) {
-        const MString& compoundClassification = compoundClassifications[i];
-#endif
         const std::string compoundClassificationStr(compoundClassification.asChar());
         for (const std::string& classification : TfStringSplit(compoundClassificationStr, ":")) {
             for (const auto& classPrefixAndType : _classificationsToTypes) {

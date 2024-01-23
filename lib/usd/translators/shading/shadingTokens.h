@@ -158,7 +158,8 @@ TF_DECLARE_PUBLIC_TOKENS(TrUsdTokens, , TR_USD_COMMON TR_USD_TEXTURE TR_USD_PRIM
     (filterType) \
     (invert) \
     ((UDIMTag, "<UDIM>")) \
-    (uvTilingMode) \
+    (uvTilingMode)   \
+    ((utilityRaw, "Utility - Raw"))  \
     (Raw) \
     (sRGB)
 
@@ -204,7 +205,7 @@ TF_DECLARE_PUBLIC_TOKENS(
 #define TR_MTLX_COMMON \
     ((conversionName, "MaterialX")) \
     ((contextName, "mtlx")) \
-    ((niceName, "MaterialX shading")) \
+    ((niceName, "MaterialX Shading")) \
     ((exportDescription, "Exports bound shaders as a MaterialX UsdShade network.")) \
     ((importDescription, "Search for a MaterialX UsdShade network to import.")) \
     ((ConstructorPrefix, "MayaCTOR")) \

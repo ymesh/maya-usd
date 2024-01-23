@@ -17,7 +17,7 @@
 
 from maya import cmds
 from maya import standalone
-from pxr import Usd, Sdf
+from pxr import Usd, Sdf, UsdUtils, UsdGeom
 
 import fixturesUtils
 import mayaUsd_createStageWithNewLayer
@@ -39,15 +39,20 @@ class testProxyShapeBase(unittest.TestCase):
 
         cls.mayaSceneFilePath = os.path.join(inputPath, 'ProxyShapeBaseTest',
             'ProxyShapeBase.ma')
+        cls.usdFilePath = os.path.join(inputPath, 'ProxyShapeBaseTest',
+            'CubeModel.usda')
 
     @classmethod
     def tearDownClass(cls):
         standalone.uninitialize()
 
+    def getTempFileName(self, filename):
+        return os.path.join(
+            self._currentTestDir, filename)
+
     def setupEmptyScene(self):
         self._currentTestDir = tempfile.mkdtemp(prefix='ProxyShapeBaseTest')
-        tempMayaFile = os.path.join(
-            self._currentTestDir, 'ProxyShapeBaseScene.ma')
+        tempMayaFile = self.getTempFileName('ProxyShapeBaseScene.ma')
         cmds.file(new=True, force=True)
         cmds.file(rename=tempMayaFile)
         return tempMayaFile
@@ -59,7 +64,6 @@ class testProxyShapeBase(unittest.TestCase):
         bboxSize = cmds.getAttr('Cube_usd.boundingBoxSize')[0]
         self.assertEqual(bboxSize, (1.0, 1.0, 1.0))
 
-    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 2, 'testDuplicateProxyStageAnonymous only available in UFE v2 or greater.')
     def testDuplicateProxyStageAnonymous(self):
         '''
         Verify stage with new anonymous layer is duplicated properly.
@@ -155,7 +159,6 @@ class testProxyShapeBase(unittest.TestCase):
         # Request the now dead proxy shape. This should not crash.
         result = handler.findGatewayItems(proxyShapePath)
 
-    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 2, 'testDeleteStageUndo uses PathString which is only available in UFE v2 or greater.')
     def testDeleteStageUndo(self):
         '''
         Verify that we can undo the deletion of the stage.
@@ -202,7 +205,6 @@ class testProxyShapeBase(unittest.TestCase):
         ufe.GlobalSelection.get().clear()
         ufe.GlobalSelection.get().append(cylItem)
 
-    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 2, 'testDuplicateProxyStageFileBacked only available in UFE v2 or greater.')
     def testDuplicateProxyStageFileBacked(self):
         '''
         Verify stage from file is duplicated properly.
@@ -561,7 +563,49 @@ class testProxyShapeBase(unittest.TestCase):
         # Verify that we did not lose the data on the root layer.
         verifyPrim()
 
-    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 2, 'testShareStageLoadRules only available in UFE v2 or greater.')
+    def testSettingStageViaIdPreservedWhenSaved(self):
+        '''
+        Verify that setting the stage via the stageCacheId on the proxy shape can be reloaded.
+        '''
+        cmds.file(new=True, force=True)
+
+        # Create a USD stage directly using USD.
+        filePath = testUtils.getTestScene('cylinder', 'cylinder.usda')
+        stageCache = UsdUtils.StageCache.Get()
+        with Usd.StageCacheContext(stageCache):
+            cachedStage = Usd.Stage.Open(filePath)
+
+        # Create a proxy shape and sets its stage ID attribute.           
+        stageId = stageCache.GetId(cachedStage).ToLongInt()
+        cmds.createNode('mayaUsdProxyShape')
+        shapeNode = cmds.ls(sl=True,l=True)[0]
+        cmds.setAttr('{}.stageCacheId'.format(shapeNode), stageId)
+
+        # Verify we can access the stage.
+        def verify():
+            item = ufeUtils.createUfeSceneItem(shapeNode,'/pCylinder1')
+            self.assertIsNotNone(item)
+
+        verify()
+
+        # Save the maya file
+        with testUtils.TemporaryDirectory(prefix='ProxyShapeBase', ignore_errors=True) as testDir:
+            # Make sure layers are saved to the desired location
+            # when the Maya scene is saved.
+            saveInUSD = 1
+            cmds.optionVar(intValue=('mayaUsd_SerializedUsdEditsLocation', saveInUSD))
+
+            # Save the stage.
+            tempMayaFile = os.path.join(testDir, 'StageViaIdPreservedWhenSaved')
+            cmds.file(rename=tempMayaFile)
+            cmds.file(save=True, force=True, type='mayaAscii')
+        
+            cmds.file(new=True, force=True)
+            cmds.file(tempMayaFile, force=True, open=True)
+
+            verify()
+
+
     def testShareStageLoadRules(self):
         '''
         Verify that share/unshare stage preserve the load rules of the stage.
@@ -586,9 +630,11 @@ class testProxyShapeBase(unittest.TestCase):
         proxyShapePath = proxyShapes[0]
         stage = mayaUsd.lib.GetPrim(proxyShapePath).GetStage()
 
-        # check that the stage has no load rules
+        # check that the stage has a single load rule to laod everything.
         loadRules = stage.GetLoadRules()
-        self.assertEqual(len(loadRules.GetRules()), 0)
+        self.assertEqual(len(loadRules.GetRules()), 1)
+        self.assertEqual(loadRules.GetRules()[0][0], "/")
+        self.assertEqual(loadRules.GetRules()[0][1], loadRules.AllRule)
 
         # add a new rule to unload the room
         cmd = contextOps.doOpCmd(['Unload'])
@@ -598,9 +644,11 @@ class testProxyShapeBase(unittest.TestCase):
         # check that the expected load rules are on the stage.
         def check_load_rules(stage):
             loadRules = stage.GetLoadRules()
-            self.assertEqual(len(loadRules.GetRules()), 1)
-            self.assertEqual(loadRules.GetRules()[0][0], "/Room_set")
-            self.assertEqual(loadRules.GetRules()[0][1], loadRules.NoneRule)
+            self.assertEqual(len(loadRules.GetRules()), 2)
+            self.assertEqual(loadRules.GetRules()[0][0], "/")
+            self.assertEqual(loadRules.GetRules()[0][1], loadRules.AllRule)
+            self.assertEqual(loadRules.GetRules()[1][0], "/Room_set")
+            self.assertEqual(loadRules.GetRules()[1][1], loadRules.NoneRule)
 
         check_load_rules(stage)
 
@@ -618,7 +666,6 @@ class testProxyShapeBase(unittest.TestCase):
         # check that the expected load rules are still on the stage.
         check_load_rules(stage)
 
-    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 2, 'testStageMutedLayers only available in UFE v2 or greater.')
     def testStageMutedLayers(self):
         '''
         Verify that stage preserve the muted layers of the stage when a scene is reloaded.
@@ -633,7 +680,7 @@ class testProxyShapeBase(unittest.TestCase):
         # Verify there are no muted layers by default.
         self.assertListEqual([], stage.GetMutedLayers())
 
-        # select the room and get its context menu.
+        # Change the muted layers.
         stage.MuteLayer("abc")
         stage.MuteLayer("def")
 
@@ -651,6 +698,41 @@ class testProxyShapeBase(unittest.TestCase):
 
         stage = mayaUsd.lib.GetPrim('|stage1|stageShape1').GetStage()
         verifyMuting(stage)
+
+    def testStageTargetLayer(self):
+        '''
+        Verify that stage preserve the target layer of the stage when a scene is reloaded.
+        '''
+        # create new scene
+        tempMayaFile = self.setupEmptyScene()
+
+        # create an empty scene
+        shapePath = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(shapePath).GetStage()
+
+        # Add a sub-layer and target it.
+        subLayerFileName = self.getTempFileName('targetSubLayer.usd')
+        usdFormat = Sdf.FileFormat.FindByExtension('usd')
+        subLayer = Sdf.Layer.New(usdFormat, subLayerFileName)
+        subLayer.Save()
+        stage.GetRootLayer().subLayerPaths.append(subLayer.identifier)
+        stage.SetEditTarget(subLayer)
+
+        def verifyTargetLayer(stage):
+            self.assertNotEqual(stage.GetRootLayer().identifier, stage.GetEditTarget().GetLayer().identifier)
+
+        verifyTargetLayer(stage)
+
+        # Save the Maya scene.
+        cmds.file(save=True, force=True)
+
+        # Reload the scene and verify the target layer is not the root layer.
+        cmds.file(new=True, force=True)
+        cmds.file(tempMayaFile, open=True)
+
+        stage = mayaUsd.lib.GetPrim('|stage1|stageShape1').GetStage()
+        self.assertListEqual(list(stage.GetRootLayer().subLayerPaths), [subLayer.identifier])
+        verifyTargetLayer(stage)
 
     def testSerializationShareStage(self):
         '''
@@ -870,6 +952,50 @@ class testProxyShapeBase(unittest.TestCase):
         self.assertEqual(unshareableLayerFromA.GetDisplayName(), "unshareableLayer")
         self.assertEqual(len(unshareableLayerFromA.subLayerPaths), 1)
         self.assertEqual(unshareableLayerFromA.subLayerPaths[0], originalRootIdentifierB)
+
+    def testCachedStage(self):
+        '''
+        Test saving cached stage
+        '''
+        stageCache = UsdUtils.StageCache.Get()
+        with Usd.StageCacheContext(stageCache):
+            cachedStage = Usd.Stage.Open(self.usdFilePath)
+            
+        stageId = stageCache.GetId(cachedStage).ToLongInt()
+        shapeNode = cmds.createNode('mayaUsdProxyShape')
+        cmds.setAttr('{}.stageCacheId'.format(shapeNode), stageId)
+        cachedStage.SetEditTarget(cachedStage.GetSessionLayer())
+
+        fullPath = cmds.ls(shapeNode, long=True)[0]
+        cmds.select("{},/CubeModel".format(fullPath))
+        # Move the cube prim
+        cmds.move(0, 0, 2, r=True)
+
+        # Make sure shareStage is ON
+        assert cmds.getAttr('{}.{}'.format(shapeNode,"shareStage"))
+
+        # Make sure there is no connection to inStageData
+        assert not cmds.listConnections('{}.inStageData'.format(shapeNode), s=True, d=False)
+
+        cmds.select(cmds.listRelatives(fullPath, p=True)[0], r=True)
+
+        with testUtils.TemporaryDirectory(prefix='ProxyShapeBase') as testDir:
+            pathToSave = "{}/CubeModel.ma".format(testDir)
+
+            cmds.file(rename=pathToSave)
+            cmds.file(save=True, force=True, type='mayaAscii')
+            
+            cmds.file(new=True, force=True)
+            cmds.file(pathToSave, force=True, open=True)
+
+            stage = mayaUsd.lib.GetPrim(fullPath).GetStage()
+            prim = stage.GetPrimAtPath('/CubeModel')
+            assert prim.IsValid()
+            
+            # Verify we get the saved changes we did 
+            xform = UsdGeom.Xformable(prim)
+            translate = xform.GetOrderedXformOps()[0].Get()
+            assert translate[2] == 2
 
 
 if __name__ == '__main__':

@@ -13,13 +13,133 @@
 // limitations under the License.
 //
 
-global proc string UsdLayerEditor_SaveLayerFileDialog() {
+// global used to store parent layer's directory to be used in usdRootFileRelative.uiInit
+global string $gLayerParentPathUsdLayerEditorSaveFileDialog = "";
+global string $gLayerParentPathUsdLayerEditorLoadFileDialog = "";
+
+///////////////////////////////////////////////////////////
+//
+// Root-relative callbacks
+
+global proc mayaUsd_USDRootFileRelative_UICreate(string $parent)
+{
+    // First create the scroll layout here and then call the python
+    // helper to add the rest of the UI.
+    setParent $parent;
+    string $layout = `scrollLayout -childResizable true`;
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdRootFileRelative.uiCreate('" + $layout + "')");
+}
+
+global proc mayaUsd_USDRootFileRelative_UIInit(string $parent, string $filterType)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdRootFileRelative.uiInit('" + $parent + "', '" + $filterType + "')");
+}
+
+global proc mayaUsd_USDRootFileRelative_UICommit(string $parent, string $selectedFile)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdRootFileRelative.uiCommit('" + $parent + "', '" + $selectedFile + "')");
+}
+
+global proc mayaUsd_USDRootFileRelative_SelectionChanged(string $parent, string $selection)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdRootFileRelative.selectionChanged('" + $parent + "', '" + $selection + "')");
+}
+
+global proc mayaUsd_USDRootFileRelative_FileTypeChanged(string $parent, string $newType)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdRootFileRelative.fileTypeChanged('" + $parent + "', '" + $newType + "')");
+}
+
+///////////////////////////////////////////////////////////
+//
+// Sub-layer-relative callbacks
+
+global proc mayaUsd_USDSubLayerFileRelative_UICreate(string $parent)
+{
+    // First create the scroll layout here and then call the python
+    // helper to add the rest of the UI.
+    setParent $parent;
+    string $layout = `scrollLayout -childResizable true`;
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiCreate('" + $layout + "')");
+}
+
+global proc mayaUsd_USDSubLayerFileRelative_UIInit(string $parent, string $filterType)
+{
+    global string $gLayerParentPathUsdLayerEditorSaveFileDialog;
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiInit('" + $parent + "', '" + $filterType + "',  '" + $gLayerParentPathUsdLayerEditorSaveFileDialog + "')");
+}
+
+global proc mayaUsd_USDSubLayerFileRelative_UICommit(string $parent, string $selectedFile)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiCommit('" + $parent + "', '" + $selectedFile + "')");
+}
+
+global proc mayaUsd_USDSubLayerFileRelative_SelectionChanged(string $parent, string $selection)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.selectionChanged('" + $parent + "', '" + $selection + "')");
+}
+
+global proc mayaUsd_USDSubLayerFileRelative_FileTypeChanged(string $parent, string $newType)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.fileTypeChanged('" + $parent + "', '" + $newType + "')");
+}
+
+///////////////////////////////////////////////////////////
+//
+// File dialog
+global proc string UsdLayerEditor_SaveLayerFileDialog(int $isRootLayer, string $parentLayerPath, int $captionMode)
+{
+    global string $gLayerParentPathUsdLayerEditorSaveFileDialog;
+    $gLayerParentPathUsdLayerEditorSaveFileDialog = $parentLayerPath;
     string $fileFilter = python("from mayaUsdUtils import getUSDDialogFileFilters; getUSDDialogFileFilters(False)");
 
+    string $startDir = "";
+    if (`file -q -exists`) {
+        string $fullPath = `file -q -loc`;
+        $startDir = dirname($fullPath);
+    }
+
+    string $createCallback;
+    string $initCallback;
+    string $commitCallback;
+    string $fileTypeCallback;
+    string $selectionCallback;
+    if ($isRootLayer) {
+        $createCallback = "mayaUsd_USDRootFileRelative_UICreate";
+        $initCallback   = "mayaUsd_USDRootFileRelative_UIInit";
+        $commitCallback = "mayaUsd_USDRootFileRelative_UICommit";
+        $fileTypeCallback = "mayaUsd_USDRootFileRelative_FileTypeChanged";
+        $selectionCallback = "mayaUsd_USDRootFileRelative_SelectionChanged";
+    } else {
+        $createCallback = "mayaUsd_USDSubLayerFileRelative_UICreate";
+        $initCallback   = "mayaUsd_USDSubLayerFileRelative_UIInit";
+        $commitCallback = "mayaUsd_USDSubLayerFileRelative_UICommit";
+        $fileTypeCallback = "mayaUsd_USDSubLayerFileRelative_FileTypeChanged";
+        $selectionCallback = "mayaUsd_USDSubLayerFileRelative_SelectionChanged";
+    }
+
+    string $titleCaption;
+    string $actionCaption;
+    if ($captionMode == 0) {
+        $titleCaption = getMayaUsdString("kMenuSaveAs");
+        $actionCaption = getMayaUsdString("kButtonSave");
+    } else {
+        $titleCaption = getMayaUsdString("kMenuSetAs");
+        $actionCaption = getMayaUsdString("kButtonSet");
+    }
+
     string $result[] = `fileDialog2 
-            -fileMode 0
-            -fileFilter $fileFilter
-            `;
+        -fileMode 0
+        -caption $titleCaption
+        -okCaption $actionCaption
+        -fileFilter $fileFilter
+        -optionsUICreate $createCallback
+        -optionsUIInit $initCallback
+        -optionsUICommit2 $commitCallback
+        -fileTypeChanged $fileTypeCallback
+        -selectionChanged $selectionCallback
+        -startingDirectory $startDir
+    `;
 
     if (size($result) > 0) {
         return $result[0];
@@ -28,7 +148,10 @@ global proc string UsdLayerEditor_SaveLayerFileDialog() {
     }
 }
 
-global proc string UsdLayerEditor_LoadLayersFileDialogOptions_Create(string $parent) {
+global proc UsdLayerEditor_LoadLayersFileDialogOptions_UICreate(string $parent)
+{
+    // First create the scroll layout here and then call the python
+    // helper to add the rest of the UI.
     setParent $parent;
 
     string $layout = `scrollLayout -childResizable true`;
@@ -36,21 +159,56 @@ global proc string UsdLayerEditor_LoadLayersFileDialogOptions_Create(string $par
     frameLayout -collapsable false -labelVisible false -marginHeight 20 -marginWidth 20;
 
     text -label `getMayaUsdString("kTipYouCanChooseMultipleFiles")` -align "left";
-    return $layout;
+
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiCreate('" + $layout + "')");
 }
 
+global proc UsdLayerEditor_LoadLayersFileDialogOptions_UIInit(string $parent, string $filterType)
+{
+    global string $gLayerParentPathUsdLayerEditorLoadFileDialog;
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiInit('" + $parent + "', '" + $filterType + "',  '" + $gLayerParentPathUsdLayerEditorLoadFileDialog + "')");
+}
 
-global proc string[] UsdLayerEditor_LoadLayersFileDialog(string $title, string $folder) {
+global proc UsdLayerEditor_LoadLayersFileDialogOptions_UICommit(string $parent, string $selectedFile)
+{
+    if ($selectedFile != "") {
+        setLatestLoadStageFolder( dirname($selectedFile) );
+    }
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.uiCommit('" + $parent + "', '" + $selectedFile + "')");
+}
+
+global proc UsdLayerEditor_LoadLayersFileDialogOptions_SelectionChanged(string $parent, string $selection)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.selectionChanged('" + $parent + "', '" + $selection + "')");
+}
+
+global proc UsdLayerEditor_LoadLayersFileDialogOptions_FileTypeChanged(string $parent, string $newType)
+{
+    python("import mayaUsd_USDRootFileRelative as murel\nmurel.usdSubLayerFileRelative.fileTypeChanged('" + $parent + "', '" + $newType + "')");
+}
+
+global proc string[] UsdLayerEditor_LoadLayersFileDialog(string $title, string $folder)
+{
+    // Always set parent path to empty to hide the file preview
+    global string $gLayerParentPathUsdLayerEditorLoadFileDialog;
+    $gLayerParentPathUsdLayerEditorLoadFileDialog = "";
+    
+    string $startingFolder = getLatestLoadStageFolder();
+
     string $fileFilter = python("from mayaUsdUtils import getUSDDialogFileFilters; getUSDDialogFileFilters(False)");
     $okCaption = getMayaUsdString("kLoad");
-    
+
     string $result[] = `fileDialog2 
             -caption $title
             -fileMode 4
             -okCaption $okCaption
-            -fileFilter $fileFilter -dialogStyle 2
-            -optionsUICreate "UsdLayerEditor_LoadLayersFileDialogOptions_Create"
-            -startingDirectory $folder
+            -fileFilter $fileFilter
+            -optionsUICreate "UsdLayerEditor_LoadLayersFileDialogOptions_UICreate"
+            -optionsUIInit "UsdLayerEditor_LoadLayersFileDialogOptions_UIInit"
+            -optionsUICommit2 "UsdLayerEditor_LoadLayersFileDialogOptions_UICommit"
+            -fileTypeChanged "UsdLayerEditor_LoadLayersFileDialogOptions_FileTypeChanged"
+            -selectionChanged "UsdLayerEditor_LoadLayersFileDialogOptions_SelectionChanged"
+            -startingDirectory $startingFolder
             `;
 
     return $result;

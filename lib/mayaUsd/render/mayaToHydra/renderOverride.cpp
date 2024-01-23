@@ -24,6 +24,7 @@
 #include <hdMaya/delegates/sceneDelegate.h>
 #include <hdMaya/utils.h>
 #include <mayaUsd/render/px_vp20/utils.h>
+#include <mayaUsd/ufe/Global.h>
 #include <mayaUsd/utils/hash.h>
 
 #include <pxr/base/gf/matrix4d.h>
@@ -45,30 +46,23 @@
 #include <maya/MConditionMessage.h>
 #include <maya/MDrawContext.h>
 #include <maya/MEventMessage.h>
+#include <maya/MFileIO.h>
 #include <maya/MGlobal.h>
 #include <maya/MNodeMessage.h>
 #include <maya/MSceneMessage.h>
 #include <maya/MSelectionList.h>
 #include <maya/MTimerMessage.h>
 #include <maya/MUiMessage.h>
+#include <ufe/globalSelection.h>
+#include <ufe/observableSelection.h>
+#include <ufe/path.h>
+#include <ufe/pathString.h>
+#include <ufe/selectionNotification.h>
 
 #include <atomic>
 #include <chrono>
 #include <exception>
 #include <limits>
-
-#if WANT_UFE_BUILD
-#include <mayaUsd/ufe/Global.h>
-
-#include <maya/MFileIO.h>
-#include <ufe/globalSelection.h>
-#include <ufe/observableSelection.h>
-#include <ufe/path.h>
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <ufe/pathString.h>
-#endif
-#include <ufe/selectionNotification.h>
-#endif // WANT_UFE_BUILD
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -80,22 +74,20 @@ namespace {
 std::mutex                       _allInstancesMutex;
 std::vector<MtohRenderOverride*> _allInstances;
 
-#if WANT_UFE_BUILD
-
 // Observe UFE scene items for transformation changed only when they are
 // selected.
-class UfeSelectionObserver : public UFE_NS::Observer
+class UfeSelectionObserver : public Ufe::Observer
 {
 public:
     UfeSelectionObserver(MtohRenderOverride& mtohRenderOverride)
-        : UFE_NS::Observer()
+        : Ufe::Observer()
         , _mtohRenderOverride(mtohRenderOverride)
     {
     }
 
     //~UfeSelectionObserver() override {}
 
-    void operator()(const UFE_NS::Notification& notification) override
+    void operator()(const Ufe::Notification& notification) override
     {
         // During Maya file read, each node will be selected in turn, so we get
         // notified for each node in the scene.  Prune this out.
@@ -103,7 +95,7 @@ public:
             return;
         }
 
-        auto selectionChanged = dynamic_cast<const UFE_NS::SelectionChanged*>(&notification);
+        auto selectionChanged = dynamic_cast<const Ufe::SelectionChanged*>(&notification);
         if (selectionChanged == nullptr) {
             return;
         }
@@ -117,10 +109,6 @@ public:
 private:
     MtohRenderOverride& _mtohRenderOverride;
 };
-
-#endif // WANT_UFE_BUILD
-
-#if MAYA_API_VERSION >= 20210000
 
 //! \brief  Get the index of the hit nearest to a given cursor point.
 int GetNearestHitIndex(
@@ -192,19 +180,13 @@ void ResolveUniqueHits_Workaround(const HdxPickHitVector& inHits, HdxPickHitVect
     }
 }
 
-#endif
-
 } // namespace
 
 MtohRenderOverride::MtohRenderOverride(const MtohRendererDescription& desc)
     : MHWRender::MRenderOverride(desc.overrideName.GetText())
     , _rendererDesc(desc)
     , _globals(MtohRenderGlobals::GetInstance())
-#if PXR_VERSION > 2005
     , _hgi(Hgi::CreatePlatformDefaultHgi())
-#else
-    , _hgi(Hgi::GetPlatformDefaultHgi())
-#endif
     , _hgiDriver { HgiTokens->renderDriver, VtValue(_hgi.get()) }
     , _selectionTracker(new HdxSelectionTracker)
     , _isUsingHdSt(desc.rendererName == MtohTokens->HdStormRendererPlugin)
@@ -252,24 +234,20 @@ MtohRenderOverride::MtohRenderOverride(const MtohRendererDescription& desc)
         _allInstances.push_back(this);
     }
 
-#if WANT_UFE_BUILD
-    const UFE_NS::GlobalSelection::Ptr& ufeSelection = UFE_NS::GlobalSelection::get();
+    const Ufe::GlobalSelection::Ptr& ufeSelection = Ufe::GlobalSelection::get();
     if (ufeSelection) {
         _ufeSelectionObserver = std::make_shared<UfeSelectionObserver>(*this);
         ufeSelection->addObserver(_ufeSelectionObserver);
     }
-#endif // WANT_UFE_BUILD
 }
 
 MtohRenderOverride::~MtohRenderOverride()
 {
-#if WANT_UFE_BUILD
     const Ufe::GlobalSelection::Ptr& ufeSelection = Ufe::GlobalSelection::get();
     if (ufeSelection) {
         ufeSelection->removeObserver(_ufeSelectionObserver);
         _ufeSelectionObserver = nullptr;
     }
-#endif // WANT_UFE_BUILD
 
     TF_DEBUG(HDMAYA_RENDEROVERRIDE_RESOURCES)
         .Msg(
@@ -480,14 +458,9 @@ MStatus MtohRenderOverride::Render(const MHWRender::MDrawContext& drawContext)
         //
         if (_playBlasting && !_isUsingHdSt && !tasks.empty()) {
             // XXX: Is this better as user-configurable ?
-            constexpr auto msWait = std::chrono::duration<float, std::milli>(100);
-#if PXR_VERSION >= 2005
+            constexpr auto                 msWait = std::chrono::duration<float, std::milli>(100);
             std::shared_ptr<HdxRenderTask> renderTask
                 = std::dynamic_pointer_cast<HdxRenderTask>(tasks.front());
-#else
-            boost::shared_ptr<HdxRenderTask> renderTask
-                = boost::dynamic_pointer_cast<HdxRenderTask>(tasks.front());
-#endif
             if (renderTask) {
                 HdTaskSharedPtrVector renderOnly = { renderTask };
                 _engine.Execute(_renderIndex, &renderOnly);
@@ -608,7 +581,7 @@ MStatus MtohRenderOverride::Render(const MHWRender::MDrawContext& drawContext)
         if (status == MStatus::kSuccess) {
 #ifdef MAYA_CURRENT_UFE_CAMERA_SUPPORT
             MString   ufeCameraPathString = getFrameContext()->getCurrentUfeCameraPath(&status);
-            Ufe::Path ufeCameraPath = Ufe::PathString::path(ufeCameraPathString.c_str());
+            Ufe::Path ufeCameraPath = Ufe::PathString::path(ufeCameraPathString.asChar());
             bool      isUsdCamera = ufeCameraPath.runTimeId() == MayaUsd::ufe::getUsdRunTimeId();
 #else
             static const MString defaultUfeProxyCameraShape(
@@ -650,17 +623,11 @@ MStatus MtohRenderOverride::Render(const MHWRender::MDrawContext& drawContext)
     _taskController->SetSelectionColor(_globals.colorSelectionHighlightColor);
     _taskController->SetEnableSelection(_globals.colorSelectionHighlight);
 
-#if PXR_VERSION >= 2005
     if (_globals.outlineSelectionWidth != 0.f) {
         _taskController->SetSelectionOutlineRadius(_globals.outlineSelectionWidth);
         _taskController->SetSelectionEnableOutline(true);
     } else
         _taskController->SetSelectionEnableOutline(false);
-#endif
-#if PXR_VERSION <= 2005
-    _taskController->SetColorizeQuantizationEnabled(_globals.enableColorQuantization);
-#endif
-
     _taskController->SetCollection(_renderCollection);
     if (_isUsingHdSt) {
         // TODO: Is there a way to improve this? Quite silly.
@@ -729,9 +696,6 @@ void MtohRenderOverride::_InitHydraResources()
 
     _initializationAttempted = true;
 
-#if PXR_VERSION < 2102
-    GlfGlewInit();
-#endif
     GlfContextCaps::InitInstance();
     _rendererPlugin
         = HdRendererPluginRegistry::GetInstance().GetRendererPlugin(_rendererDesc.rendererName);
@@ -832,12 +796,7 @@ void MtohRenderOverride::ClearHydraResources()
 
     // Cleanup internal context data that keep references to data that is now
     // invalid.
-#if PXR_VERSION >= 2108
     _engine.ClearTaskContextData();
-#else
-    for (const auto& token : HdxTokens->allTokens)
-        _engine.RemoveTaskContextData(token);
-#endif
 
     if (_taskController != nullptr) {
         delete _taskController;
@@ -893,12 +852,9 @@ void MtohRenderOverride::_SelectionChanged()
     SdfPathVector selectedPaths;
     auto          selection = std::make_shared<HdSelection>();
 
-#if WANT_UFE_BUILD
-    const UFE_NS::GlobalSelection::Ptr& ufeSelection = UFE_NS::GlobalSelection::get();
-#endif // WANT_UFE_BUILD
+    const Ufe::GlobalSelection::Ptr& ufeSelection = Ufe::GlobalSelection::get();
 
     for (auto& it : _delegates) {
-#if WANT_UFE_BUILD
         if (it->SupportsUfeSelection()) {
             if (ufeSelection) {
                 it->PopulateSelectedPaths(*ufeSelection, selectedPaths, selection);
@@ -906,7 +862,6 @@ void MtohRenderOverride::_SelectionChanged()
             // skip non-ufe PopulateSelectedPaths call
             continue;
         }
-#endif // WANT_UFE_BUILD
         it->PopulateSelectedPaths(sel, selectedPaths, selection);
     }
     _selectionCollection.SetRootPaths(selectedPaths);
@@ -1003,7 +958,6 @@ bool MtohRenderOverride::nextRenderOperation()
     return ++_currentOperation < static_cast<int>(_operations.size());
 }
 
-#if MAYA_API_VERSION >= 20210000
 bool MtohRenderOverride::select(
     const MHWRender::MFrameContext&  frameContext,
     const MHWRender::MSelectionInfo& selectInfo,
@@ -1106,7 +1060,6 @@ bool MtohRenderOverride::select(
 
     return true;
 }
-#endif
 
 void MtohRenderOverride::_ClearHydraCallback(void* data)
 {

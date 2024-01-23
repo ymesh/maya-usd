@@ -27,10 +27,6 @@
 #include <boost/python.hpp>
 #include <boost/python/def.hpp>
 
-using namespace std;
-using namespace boost::python;
-using namespace boost;
-
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
@@ -67,7 +63,7 @@ bool mergeToUsd(const std::string& nodeName, const VtDictionary& userArgs = VtDi
         return false;
 
     Ufe::Path path;
-    if (!MAYAUSD_NS_DEF::readPullInformation(dagPath, path))
+    if (!MayaUsd::readPullInformation(dagPath, path))
         return false;
 
     return PrimUpdaterManager::getInstance().mergeToUsd(dagNode, path, userArgs);
@@ -113,20 +109,27 @@ std::string readPullInformationString(const PXR_NS::UsdPrim& prim)
 {
     std::string dagPathStr;
     // Ignore boolean return value, empty string is the proper error result.
-    MAYAUSD_NS_DEF::readPullInformation(prim, dagPathStr);
+    MayaUsd::readPullInformation(prim, dagPathStr);
     return dagPathStr;
+}
+
+bool isEditedPrimOrphaned(const PXR_NS::UsdPrim& prim)
+{
+    return MayaUsd::isEditedAsMayaOrphaned(prim);
 }
 
 } // namespace
 
 void wrapPrimUpdaterManager()
 {
-    class_<PrimUpdaterManager, noncopyable>("PrimUpdaterManager", no_init)
+    boost::python::class_<PrimUpdaterManager, boost::noncopyable>(
+        "PrimUpdaterManager", boost::python::no_init)
         .def("isAnimated", isAnimated)
         .def("mergeToUsd", mergeToUsd, mergeToUsd_overloads())
         .def("editAsMaya", editAsMaya)
         .def("canEditAsMaya", canEditAsMaya)
         .def("discardEdits", discardEdits)
         .def("duplicate", duplicate, duplicate_overloads())
+        .def("isEditedAsMayaOrphaned", isEditedPrimOrphaned)
         .def("readPullInformation", readPullInformationString);
 }

@@ -36,30 +36,10 @@
 #include <maya/MObject.h>
 #include <maya/MObjectArray.h>
 #include <maya/MPxSubSceneOverride.h>
-
-#include <memory>
-#if defined(WANT_UFE_BUILD)
 #include <ufe/observer.h>
 #include <ufe/path.h>
-#endif
 
-// Conditional compilation due to Maya API gap.
-#if MAYA_API_VERSION >= 20200000
-#define MAYA_ENABLE_UPDATE_FOR_SELECTION
-#endif
-
-#if PXR_VERSION < 2008
-#define ENABLE_RENDERTAG_VISIBILITY_WORKAROUND
-/*  In USD v20.05 and earlier when the purpose of an rprim changes the visibility gets dirtied,
-    and that doesn't update the render tag version.
-
-    Pixar is in the process of fixing this one as noted in:
-    https://groups.google.com/forum/#!topic/usd-interest/9pzFbtCEY-Y
-
-    Logged as:
-    https://github.com/PixarAnimationStudios/USD/issues/1243
-*/
-#endif
+#include <memory>
 
 // Use the latest MPxSubSceneOverride API
 #ifndef OPENMAYA_MPXSUBSCENEOVERRIDE_LATEST_NAMESPACE
@@ -105,6 +85,14 @@ enum class UsdPointInstancesPickMode
     Prototypes
 };
 
+enum InstancingType
+{
+    kNativeInstancing,
+    kPointInstancing
+};
+
+using InstancePrototypePath = std::pair<SdfPath, InstancingType>;
+
 /*! \brief  USD Proxy rendering routine via VP2 MPxSubSceneOverride
 
     This drawing routine leverages HdVP2RenderDelegate for synchronization
@@ -134,10 +122,8 @@ public:
     MAYAUSD_CORE_PUBLIC
     MHWRender::DrawAPI supportedDrawAPIs() const override;
 
-#if defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
     MAYAUSD_CORE_PUBLIC
     bool enableUpdateForSelection() const override;
-#endif
 
     MAYAUSD_CORE_PUBLIC
     bool requiresUpdate(const MSubSceneContainer& container, const MFrameContext& frameContext)
@@ -174,9 +160,6 @@ public:
 #endif
 
     MAYAUSD_CORE_PUBLIC
-    bool SupportPerInstanceDisplayLayers(const SdfPath& rprimId) const;
-
-    MAYAUSD_CORE_PUBLIC
     void SelectionChanged();
 
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
@@ -210,6 +193,9 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     void ColorPrefsChanged();
+
+    MAYAUSD_CORE_PUBLIC
+    void ColorManagementRefresh();
 
     MAYAUSD_CORE_PUBLIC
     MColor GetWireframeColor();
@@ -254,13 +240,13 @@ public:
 
     // Takes in a path to instanced rprim and returns a path to the correspoding UsdPrim
     MAYAUSD_CORE_PUBLIC
-    SdfPath GetPathInPrototype(const SdfPath& id);
+    InstancePrototypePath GetPathInPrototype(const SdfPath& id);
 
     MAYAUSD_CORE_PUBLIC
     void UpdateInstancingMapEntry(
-        const SdfPath& oldPathInPrototype,
-        const SdfPath& newPathInPrototype,
-        const SdfPath& rprimId);
+        const InstancePrototypePath& oldPathInPrototype,
+        const InstancePrototypePath& newPathInPrototype,
+        const SdfPath&               rprimId);
 
 #ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
     MAYAUSD_CORE_PUBLIC
@@ -368,7 +354,7 @@ private:
     bool                                _needTexturedMaterials = false;
 
     // maps from a path in USD prototype to the corresponding rprim paths
-    std::multimap<SdfPath, SdfPath> _instancingMap;
+    std::multimap<InstancePrototypePath, SdfPath> _instancingMap;
 
     bool _isPopulated {
         false
@@ -392,6 +378,7 @@ private:
 #endif
 
     std::vector<MCallbackId> _mayaColorPrefsCallbackIds;
+    std::vector<MCallbackId> _mayaColorManagementCallbackIds;
 
 #ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
     bool _selectionModeChanged { true }; //!< Whether the global selection mode has changed
@@ -473,15 +460,9 @@ private:
     HdSelectionSharedPtr _leadSelection;   //!< A collection of Rprims being lead selection
     HdSelectionSharedPtr _activeSelection; //!< A collection of Rprims being active selection
 
-#if defined(WANT_UFE_BUILD)
     //! Observer to listen to UFE changes
     Ufe::Observer::Ptr _observer;
-#else
-    //! Minimum support for proxy selection when UFE is not available.
-    MCallbackId _mayaSelectionCallbackId { 0 };
-#endif
 
-#if defined(WANT_UFE_BUILD) && defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
     //! Adjustment mode for global selection list: ADD, REMOVE, REPLACE, XOR
     MGlobal::ListAdjustment _globalListAdjustment;
 
@@ -490,7 +471,6 @@ private:
 
     //! Pick resolution behavior to use when the picked object is a point instance.
     UsdPointInstancesPickMode _pointInstancesPickMode;
-#endif
 };
 
 /*! \brief  Is this object properly initialized and can start receiving updates. Once this is done,

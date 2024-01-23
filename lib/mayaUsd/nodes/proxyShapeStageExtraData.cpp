@@ -16,6 +16,7 @@
 #include "proxyShapeStageExtraData.h"
 
 #include <mayaUsd/utils/loadRules.h>
+#include <mayaUsd/utils/targetLayer.h>
 
 #include <maya/MSceneMessage.h>
 
@@ -62,6 +63,11 @@ void saveTrackedLoadRules(const UsdStageRefPtr& stage)
     saveTrackedData(stage, copyLoadRulesToAttribute);
 }
 
+void saveTrackedTargetLayer(const UsdStageRefPtr& stage)
+{
+    saveTrackedData(stage, copyTargetLayerToAttribute);
+}
+
 } // namespace
 
 /* static */
@@ -89,6 +95,13 @@ MStatus MayaUsdProxyShapeStageExtraData::finalize()
 }
 
 /* static */
+bool MayaUsdProxyShapeStageExtraData::containsProxyShape(MayaUsdProxyShapeBase& proxyShape)
+{
+    auto it = getTrackedProxyShapes().find(&proxyShape);
+    return it != getTrackedProxyShapes().end();
+}
+
+/* static */
 void MayaUsdProxyShapeStageExtraData::addProxyShape(MayaUsdProxyShapeBase& proxyShape)
 {
     getTrackedProxyShapes().insert(&proxyShape);
@@ -101,7 +114,11 @@ void MayaUsdProxyShapeStageExtraData::removeProxyShape(MayaUsdProxyShapeBase& pr
 }
 
 /* static */
-void MayaUsdProxyShapeStageExtraData::saveAllStageData() { saveAllLoadRules(); }
+void MayaUsdProxyShapeStageExtraData::saveAllStageData()
+{
+    saveAllLoadRules();
+    saveAllTargetLayers();
+}
 
 /* static */
 void MayaUsdProxyShapeStageExtraData::saveAllLoadRules()
@@ -114,6 +131,19 @@ void MayaUsdProxyShapeStageExtraData::saveAllLoadRules()
 void MayaUsdProxyShapeStageExtraData::saveLoadRules(const UsdStageRefPtr& stage)
 {
     saveTrackedLoadRules(stage);
+}
+
+/* static */
+void MayaUsdProxyShapeStageExtraData::saveAllTargetLayers()
+{
+    // Note: passing nullptr means save all stages.
+    saveTrackedTargetLayer(nullptr);
+}
+
+/* static */
+void MayaUsdProxyShapeStageExtraData::saveTargetLayer(const UsdStageRefPtr& stage)
+{
+    saveTrackedTargetLayer(stage);
 }
 
 } // namespace MAYAUSD_NS_DEF

@@ -43,6 +43,9 @@ std::string getSceneFolder();
 MAYAUSD_CORE_PUBLIC
 std::string generateUniqueFileName(const std::string& basename);
 
+MAYAUSD_CORE_PUBLIC
+std::string generateUniqueLayerFileName(const std::string& basename, const SdfLayerRefPtr& layer);
+
 /*! \brief Queries the Maya optionVar that decides what the internal format
     of a .usd file should be, either "usdc" or "usda".
  */
@@ -62,10 +65,15 @@ MAYAUSD_CORE_PUBLIC
 USDUnsavedEditsOption serializeUsdEditsLocationOption();
 
 /*! \brief Utility function to update the file path attribute on the proxy shape
-    when an anonymous root layer gets exported to disk.
+    when an anonymous root layer gets exported to disk. Also optionally updates
+    the target layer if the anonymous layer was the target layer.
  */
 MAYAUSD_CORE_PUBLIC
-void setNewProxyPath(const MString& proxyNodeName, const MString& newValue);
+void setNewProxyPath(
+    const MString&        proxyNodeName,
+    const MString&        newValue,
+    const SdfLayerRefPtr& layer,
+    bool                  isTargetLayer);
 
 struct LayerParent
 {
@@ -76,16 +84,36 @@ struct LayerParent
     std::string    _proxyPath;
 };
 
-struct stageLayersToSave
+struct LayerInfo
 {
-    std::vector<std::pair<SdfLayerRefPtr, LayerParent>> _anonLayers;
-    std::vector<SdfLayerRefPtr>                         _dirtyFileBackedLayers;
+    UsdStageRefPtr              stage;
+    SdfLayerRefPtr              layer;
+    MayaUsd::utils::LayerParent parent;
+};
+
+struct PathInfo
+{
+    std::string absolutePath;
+    bool        savePathAsRelative { false };
+    std::string customRelativeAnchor;
+};
+
+using LayerInfos = std::vector<LayerInfo>;
+
+struct StageLayersToSave
+{
+    LayerInfos                  _anonLayers;
+    std::vector<SdfLayerRefPtr> _dirtyFileBackedLayers;
 };
 
 /*! \brief Save an layer to disk to the given file path and using the given format.
     If the file path is empty then use the current file path of the layer.
     If the format is empty then use the current user-selected USD format option
     as defined by the usdFormatArgOption() function. (See above.)
+
+    If the file path is relative, then it can be made relative to either the scene
+    file (for the root layer) or its parent layer (for sub-layers). We assume the
+    caller voluntarily made the path relative.
  */
 MAYAUSD_CORE_PUBLIC
 bool saveLayerWithFormat(
@@ -98,6 +126,7 @@ bool saveLayerWithFormat(
  */
 MAYAUSD_CORE_PUBLIC
 PXR_NS::SdfLayerRefPtr saveAnonymousLayer(
+    PXR_NS::UsdStageRefPtr stage,
     PXR_NS::SdfLayerRefPtr anonLayer,
     LayerParent            parent,
     const std::string&     basename,
@@ -108,16 +137,34 @@ PXR_NS::SdfLayerRefPtr saveAnonymousLayer(
  */
 MAYAUSD_CORE_PUBLIC
 PXR_NS::SdfLayerRefPtr saveAnonymousLayer(
+    PXR_NS::UsdStageRefPtr stage,
     PXR_NS::SdfLayerRefPtr anonLayer,
-    const std::string&     path,
+    const PathInfo&        pathInfo,
     LayerParent            parent,
     std::string            formatArg = "");
 
-/*! \brief Check the sublayer stack of the stage looking for any anonymnous
+/*! \brief Update the list of sub-layers with a new layer identity.
+ *         The new sub-layer is identified by its path explicitly,
+ *         because a given layer might get referenced through multiple
+ *         different relative paths, so we cannot interrogate it about
+ *         what its path is.
+ */
+MAYAUSD_CORE_PUBLIC
+void updateSubLayer(
+    const SdfLayerRefPtr& parentLayer,
+    const SdfLayerRefPtr& oldSubLayer,
+    const std::string&    newSubLayerPath);
+
+/*! \brief Ensures that the filepath contains a valid USD extension.
+ */
+MAYAUSD_CORE_PUBLIC
+void ensureUSDFileExtension(std::string& filePath);
+
+/*! \brief Check the sublayer stack of the stage looking for any anonymous
     layers that will need to be saved.
  */
 MAYAUSD_CORE_PUBLIC
-void getLayersToSaveFromProxy(const std::string& proxyPath, stageLayersToSave& layersInfo);
+void getLayersToSaveFromProxy(const std::string& proxyPath, StageLayersToSave& layersInfo);
 
 } // namespace utils
 } // namespace MAYAUSD_NS_DEF

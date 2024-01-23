@@ -16,6 +16,7 @@
 #include "proxyRenderDelegate.h"
 
 #include "draw_item.h"
+#include "material.h"
 #include "mayaPrimCommon.h"
 #include "render_delegate.h"
 #include "tokens.h"
@@ -23,7 +24,10 @@
 #include <mayaUsd/base/tokens.h>
 #include <mayaUsd/nodes/proxyShapeBase.h>
 #include <mayaUsd/nodes/stageData.h>
+#include <mayaUsd/utils/diagnosticDelegate.h>
 #include <mayaUsd/utils/selectability.h>
+
+#include <usdUfe/ufe/Utils.h>
 
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/base/tf/staticTokens.h>
@@ -68,15 +72,13 @@
 #include <maya/MNodeMessage.h>
 #endif
 
-#if defined(WANT_UFE_BUILD)
 #include <mayaUsd/ufe/Global.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
 #include <mayaUsd/ufe/Utils.h>
 
+#include <usdUfe/ufe/UsdSceneItem.h>
+
 #include <ufe/globalSelection.h>
-#ifdef UFE_V2_FEATURES_AVAILABLE
 #include <ufe/namedSelection.h>
-#endif
 #include <ufe/observableSelection.h>
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
 #include <ufe/pathString.h>
@@ -88,7 +90,6 @@
 #include <ufe/sceneItem.h>
 #include <ufe/sceneNotification.h>
 #include <ufe/selectionNotification.h>
-#endif
 
 #if defined(BUILD_HDMAYA)
 #include <mayaUsd/render/mayaToHydra/utils.h>
@@ -101,7 +102,6 @@ namespace {
 //! Representation selector for point snapping
 const HdReprSelector kPointsReprSelector(TfToken(), TfToken(), HdReprTokens->points);
 
-#if defined(WANT_UFE_BUILD)
 //! \brief  Query the global selection list adjustment.
 MGlobal::ListAdjustment GetListAdjustment()
 {
@@ -215,7 +215,7 @@ void PopulateSelection(
     }
 
     // Filter out non-USD items.
-    auto usdItem = std::dynamic_pointer_cast<MayaUsd::ufe::UsdSceneItem>(item);
+    auto usdItem = std::dynamic_pointer_cast<UsdUfe::UsdSceneItem>(item);
     if (!usdItem) {
         return;
     }
@@ -230,7 +230,6 @@ void PopulateSelection(
     sceneDelegate.PopulateSelection(
         HdSelection::HighlightModeSelect, usdPath, instanceIndex, result);
 }
-#endif // defined(WANT_UFE_BUILD)
 
 //! \brief  Append the selected prim paths to the result list.
 void AppendSelectedPrimPaths(const HdSelectionSharedPtr& selection, SdfPathVector& result)
@@ -278,6 +277,13 @@ void _ConfigureReprs()
         /*flatShadingEnabled=*/false,
         /*blendWireframeColor=*/false);
 
+    const HdMeshReprDesc reprDescWire(
+        HdMeshGeomStyleHullEdgeOnly,
+        HdCullStyleDontCare,
+        HdMeshReprDescTokens->surfaceShader,
+        /*flatShadingEnabled=*/false,
+        /*blendWireframeColor=*/true);
+
     // Hull desc for shaded display, edge desc for selection highlight.
     HdMesh::ConfigureRepr(HdReprTokens->smoothHull, reprDescHull, reprDescEdge);
     HdMesh::ConfigureRepr(HdVP2ReprTokens->smoothHullUntextured, reprDescHull, reprDescEdge);
@@ -293,6 +299,10 @@ void _ConfigureReprs()
 
     // Forced representations are used for instanced geometry with display layer overrides
     HdMesh::ConfigureRepr(HdVP2ReprTokens->forcedBbox, reprDescEdge);
+    HdMesh::ConfigureRepr(HdVP2ReprTokens->forcedWire, reprDescWire);
+    // forcedUntextured repr doesn't use reprDescEdge descriptor because
+    // its selection highlight will be drawn through a non-forced repr
+    HdMesh::ConfigureRepr(HdVP2ReprTokens->forcedUntextured, reprDescHull);
 
     // smooth hull for untextured display
     HdBasisCurves::ConfigureRepr(
@@ -309,7 +319,6 @@ void _ConfigureReprs()
     HdPoints::ConfigureRepr(HdVP2ReprTokens->smoothHullUntextured, HdPointsGeomStylePoints);
 }
 
-#if defined(WANT_UFE_BUILD)
 class UfeObserver : public Ufe::Observer
 {
 public:
@@ -385,15 +394,6 @@ public:
 private:
     ProxyRenderDelegate& _proxyRenderDelegate;
 };
-#else
-void SelectionChangedCB(void* data)
-{
-    ProxyRenderDelegate* prd = static_cast<ProxyRenderDelegate*>(data);
-    if (prd) {
-        prd->SelectionChanged();
-    }
-}
-#endif
 
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
 #ifdef MAYA_HAS_NEW_DISPLAY_LAYER_MESSAGING_API
@@ -432,6 +432,14 @@ void colorPrefsChangedCB(void* clientData)
     ProxyRenderDelegate* prd = static_cast<ProxyRenderDelegate*>(clientData);
     if (prd) {
         prd->ColorPrefsChanged();
+    }
+}
+
+void colorManagementRefreshCB(void* clientData)
+{
+    ProxyRenderDelegate* prd = static_cast<ProxyRenderDelegate*>(clientData);
+    if (prd) {
+        prd->ColorManagementRefresh();
     }
 }
 
@@ -565,11 +573,6 @@ ProxyRenderDelegate::~ProxyRenderDelegate()
 {
     _ClearRenderDelegate();
 
-#if !defined(WANT_UFE_BUILD)
-    if (_mayaSelectionCallbackId != 0) {
-        MMessage::removeCallback(_mayaSelectionCallbackId);
-    }
-#endif
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
     if (_mayaDisplayLayerAddedCallbackId != 0)
         MMessage::removeCallback(_mayaDisplayLayerAddedCallbackId);
@@ -584,16 +587,17 @@ ProxyRenderDelegate::~ProxyRenderDelegate()
     for (auto id : _mayaColorPrefsCallbackIds) {
         MMessage::removeCallback(id);
     }
+    for (auto id : _mayaColorManagementCallbackIds) {
+        MMessage::removeCallback(id);
+    }
 }
 
 //! \brief  This drawing routine supports all devices (DirectX and OpenGL)
 MHWRender::DrawAPI ProxyRenderDelegate::supportedDrawAPIs() const { return MHWRender::kAllDevices; }
 
-#if defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
 //! \brief  Enable subscene update in selection passes for deferred update of selection render
 //! items.
 bool ProxyRenderDelegate::enableUpdateForSelection() const { return true; }
-#endif
 
 //! \brief  Always requires update since changes are tracked by Hydraw change tracker and it will
 //! guarantee minimal update; only exception is if rendering through Maya-to-Hydra
@@ -657,6 +661,13 @@ void ProxyRenderDelegate::_InitRenderDelegate()
 {
     TF_VERIFY(_proxyShapeData->ProxyShape());
 
+    // Initialize the optionVar ShowDisplayColorTextureOff, which will decide if display color will
+    // be used when untextured mode is selected
+    const MString optionVarName(MayaUsdOptionVars->ShowDisplayColorTextureOff.GetText());
+    if (!MGlobal::optionVarExists(optionVarName)) {
+        MGlobal::setOptionVarValue(optionVarName, 0);
+    }
+
     // No need to run all the checks if we got till the end
     if (_isInitialized())
         return;
@@ -709,7 +720,6 @@ void ProxyRenderDelegate::_InitRenderDelegate()
         _defaultCollection.reset(new HdRprimCollection());
         _defaultCollection->SetName(HdTokens->geometry);
 
-#if defined(WANT_UFE_BUILD)
         if (!_observer) {
             _observer = std::make_shared<UfeObserver>(*this);
 
@@ -718,19 +728,8 @@ void ProxyRenderDelegate::_InitRenderDelegate()
                 globalSelection->addObserver(_observer);
             }
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
             Ufe::Scene::instance().addObserver(_observer);
-#else
-            Ufe::Scene::instance().addObjectAddObserver(_observer);
-#endif
         }
-#else
-        // Without UFE, support basic selection highlight at proxy shape level.
-        if (!_mayaSelectionCallbackId) {
-            _mayaSelectionCallbackId
-                = MEventMessage::addEventCallback("SelectionChanged", SelectionChangedCB, this);
-        }
-#endif
 
 #ifdef MAYA_HAS_DISPLAY_LAYER_API
         // Display layers maybe loaded before us, so make sure to track/cache them
@@ -769,6 +768,16 @@ void ProxyRenderDelegate::_InitRenderDelegate()
             MEventMessage::addEventCallback("DisplayColorChanged", colorPrefsChangedCB, this));
         _mayaColorPrefsCallbackIds.push_back(
             MEventMessage::addEventCallback("DisplayRGBColorChanged", colorPrefsChangedCB, this));
+
+        // Monitor color management prefs.
+        _mayaColorManagementCallbackIds.push_back(MEventMessage::addEventCallback(
+            "colorMgtEnabledChanged", colorManagementRefreshCB, this));
+        _mayaColorManagementCallbackIds.push_back(MEventMessage::addEventCallback(
+            "colorMgtWorkingSpaceChanged", colorManagementRefreshCB, this));
+        _mayaColorManagementCallbackIds.push_back(MEventMessage::addEventCallback(
+            "colorMgtConfigChanged", colorManagementRefreshCB, this));
+        _mayaColorManagementCallbackIds.push_back(MEventMessage::addEventCallback(
+            "colorMgtConfigFilePathChanged", colorManagementRefreshCB, this));
 
         // We don't really need any HdTask because VP2RenderDelegate uses Hydra
         // engine for data preparation only, but we have to add a dummy render
@@ -879,33 +888,42 @@ void ProxyRenderDelegate::_UpdateSceneDelegate()
     }
 }
 
-SdfPath ProxyRenderDelegate::GetPathInPrototype(const SdfPath& id)
+InstancePrototypePath ProxyRenderDelegate::GetPathInPrototype(const SdfPath& id)
 {
-    auto usdInstancePath = GetScenePrimPath(id, 0);
+    HdInstancerContext instancerContext;
+    auto               usdInstancePath = GetScenePrimPath(id, 0, &instancerContext);
+
+    // In case of point instancer, we already have the path in prototype, return it.
+    if (!instancerContext.empty()) {
+        return InstancePrototypePath(usdInstancePath, kPointInstancing);
+    }
+
+    // In case of a native instance, obtain the path in prototype and return it.
     auto usdInstancePrim = _proxyShapeData->UsdStage()->GetPrimAtPath(usdInstancePath);
-    return usdInstancePrim.GetPrimInPrototype().GetPath();
+    auto usdPrototypePath = usdInstancePrim.GetPrimInPrototype().GetPath();
+    return InstancePrototypePath(usdPrototypePath, kNativeInstancing);
 }
 
 void ProxyRenderDelegate::UpdateInstancingMapEntry(
-    const SdfPath& oldPathInPrototype,
-    const SdfPath& newPathInPrototype,
-    const SdfPath& rprimId)
+    const InstancePrototypePath& oldPathInPrototype,
+    const InstancePrototypePath& newPathInPrototype,
+    const SdfPath&               rprimId)
 {
     if (oldPathInPrototype != newPathInPrototype) {
         // remove the old entry from the map
-        if (!oldPathInPrototype.IsEmpty()) {
+        if (!oldPathInPrototype.first.IsEmpty()) {
             auto range = _instancingMap.equal_range(oldPathInPrototype);
             auto it = std::find(
                 range.first,
                 range.second,
-                std::pair<const SdfPath, SdfPath>(oldPathInPrototype, rprimId));
+                std::pair<const InstancePrototypePath, SdfPath>(oldPathInPrototype, rprimId));
             if (it != range.second) {
                 _instancingMap.erase(it);
             }
         }
 
         // add new entry to the map
-        if (!newPathInPrototype.IsEmpty()) {
+        if (!newPathInPrototype.first.IsEmpty()) {
             _instancingMap.insert(std::make_pair(newPathInPrototype, rprimId));
         }
     }
@@ -925,14 +943,26 @@ void ProxyRenderDelegate::_DirtyUsdSubtree(const UsdPrim& prim)
             | MayaUsdRPrim::DirtySelectionHighlight | HdChangeTracker::DirtyMaterialId;
 
         if (prim.IsA<UsdGeomGprim>()) {
-            if (prim.IsInstanceProxy()) {
-                auto range = _instancingMap.equal_range(prim.GetPrimInPrototype().GetPath());
+            auto range = _instancingMap.equal_range(
+                InstancePrototypePath(prim.GetPath(), kPointInstancing));
+            if (range.first != range.second) {
+                // Point instancing prim
+                for (auto it = range.first; it != range.second; ++it) {
+                    if (_renderIndex->HasRprim(it->second)) {
+                        changeTracker.MarkRprimDirty(it->second, dirtyBits);
+                    }
+                }
+            } else if (prim.IsInstanceProxy()) {
+                // Native instancing prim
+                range = _instancingMap.equal_range(
+                    InstancePrototypePath(prim.GetPrimInPrototype().GetPath(), kNativeInstancing));
                 for (auto it = range.first; it != range.second; ++it) {
                     if (_renderIndex->HasRprim(it->second)) {
                         changeTracker.MarkRprimDirty(it->second, dirtyBits);
                     }
                 }
             } else {
+                // Non-instanced prim
                 auto indexPath = _sceneDelegate->ConvertCachePathToIndexPath(prim.GetPath());
                 if (_renderIndex->HasRprim(indexPath)) {
                     changeTracker.MarkRprimDirty(indexPath, dirtyBits);
@@ -1058,13 +1088,9 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
     // If update for selection is enabled, the draw data for the "points" repr
     // won't be prepared until point snapping is activated; otherwise the draw
     // data have to be prepared early for possible activation of point snapping.
-#if defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
     const bool inSelectionPass = (frameContext.getSelectionInfo() != nullptr);
-#if !defined(MAYA_NEW_POINT_SNAPPING_SUPPORT) || defined(WANT_UFE_BUILD)
     const bool inPointSnapping = pointSnappingActive();
-#endif
 
-#if defined(WANT_UFE_BUILD)
     // Query selection adjustment and kind only if the update is triggered in a selection pass.
     if (inSelectionPass && !inPointSnapping) {
         _globalListAdjustment = GetListAdjustment();
@@ -1075,16 +1101,6 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
         _selectionKind = TfToken();
         _pointInstancesPickMode = UsdPointInstancesPickMode::PointInstancer;
     }
-#endif // defined(WANT_UFE_BUILD)
-
-#else // !defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
-    _combinedDisplayStyles[HdReprTokens->points] = _frameCounter;
-
-    constexpr bool inSelectionPass = false;
-#if !defined(MAYA_NEW_POINT_SNAPPING_SUPPORT)
-    constexpr bool inPointSnapping = false;
-#endif
-#endif // defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
 
     // Work around USD issue #1516. There is a significant performance overhead caused by populating
     // selection, so only force the populate selection to occur when we detect a change which
@@ -1165,6 +1181,10 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
                 HdPrimTypeTokens->material, SdfPath::AbsoluteRootPath());
             for (auto material : materials) {
                 changeTracker.MarkSprimDirty(material, HdMaterial::DirtyParams);
+                // Tell all the Rprims associated with this material to recompute primvars
+                HdVP2Material* vp2material = static_cast<HdVP2Material*>(
+                    _renderIndex->GetSprim(HdPrimTypeTokens->material, material));
+                vp2material->MaterialChanged(_sceneDelegate.get());
             }
         }
 
@@ -1198,11 +1218,7 @@ void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameCont
     const MSelectionInfo* selectionInfo = frameContext.getSelectionInfo();
     if (selectionInfo) {
         bool oldSnapToPoints = _snapToPoints;
-#if MAYA_API_VERSION >= 20220000
         _snapToPoints = selectionInfo->pointSnapping();
-#else
-        _snapToPoints = pointSnappingActive();
-#endif
         if (_snapToPoints != oldSnapToPoints) {
             _selectionModeChanged = true;
         }
@@ -1212,7 +1228,9 @@ void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameCont
     if (selectionInfo) {
         bool oldSnapToSelectedObjects = _snapToSelectedObjects;
         _snapToSelectedObjects = selectionInfo->snapToActive(&status);
-        TF_VERIFY(status == MStatus::kSuccess);
+        if (status != MStatus::kSuccess) {
+            TF_WARN("Could not snap selected object.");
+        }
         if (_snapToSelectedObjects != oldSnapToSelectedObjects) {
             _selectionModeChanged = true;
         }
@@ -1311,22 +1329,12 @@ SdfPath ProxyRenderDelegate::GetScenePrimPath(const SdfPath& rprimId, int instan
     return usdPath;
 }
 
-bool ProxyRenderDelegate::SupportPerInstanceDisplayLayers(const SdfPath& rprimId) const
-{
-    // For now, per-instance display layers are supported only for native instancing
-    HdInstancerContext instancerContext;
-    GetScenePrimPath(rprimId, 0, &instancerContext);
-    bool nativeInstancing = instancerContext.empty();
-    return nativeInstancing;
-}
-
 //! \brief  Selection for both instanced and non-instanced cases.
 bool ProxyRenderDelegate::getInstancedSelectionPath(
     const MHWRender::MRenderItem&   renderItem,
     const MHWRender::MIntersection& intersection,
     MDagPath&                       dagPath) const
 {
-#if defined(WANT_UFE_BUILD)
     // When point snapping, only the point position matters, so return the DAG path and avoid the
     // UFE global selection list to be updated.
     if (pointSnappingActive()) {
@@ -1337,10 +1345,6 @@ bool ProxyRenderDelegate::getInstancedSelectionPath(
     if (!_proxyShapeData->ProxyShape() || !_proxyShapeData->ProxyShape()->isUfeSelectionEnabled()) {
         return false;
     }
-
-    auto handler = Ufe::RunTimeMgr::instance().hierarchyHandler(USD_UFE_RUNTIME_ID);
-    if (handler == nullptr)
-        return false;
 
     const SdfPath rprimId = HdVP2DrawItem::RenderItemToPrimPath(renderItem);
 
@@ -1377,22 +1381,15 @@ bool ProxyRenderDelegate::getInstancedSelectionPath(
         topLevelInstanceIndex = instancerContext.front().second;
     }
 #else
-    SdfPath                         usdPath = GetScenePrimPath(rprimId, instanceIndex);
+    SdfPath usdPath = GetScenePrimPath(rprimId, instanceIndex);
 #endif
 
     // If update for selection is enabled, we can query the Maya selection list
     // adjustment, USD selection kind, and USD point instances pick mode once
     // per selection update to avoid the cost of executing MEL commands or
     // searching optionVars for each intersection.
-#if defined(MAYA_ENABLE_UPDATE_FOR_SELECTION)
     const TfToken&                   selectionKind = _selectionKind;
     const UsdPointInstancesPickMode& pointInstancesPickMode = _pointInstancesPickMode;
-    const MGlobal::ListAdjustment&   listAdjustment = _globalListAdjustment;
-#else
-    const TfToken                   selectionKind = GetSelectionKind();
-    const UsdPointInstancesPickMode pointInstancesPickMode = GetPointInstancesPickMode();
-    const MGlobal::ListAdjustment   listAdjustment = GetListAdjustment();
-#endif
 
     UsdPrim       prim = _proxyShapeData->UsdStage()->GetPrimAtPath(usdPath);
     const UsdPrim topLevelPrim = _proxyShapeData->UsdStage()->GetPrimAtPath(topLevelPath);
@@ -1462,44 +1459,15 @@ bool ProxyRenderDelegate::getInstancedSelectionPath(
         }
     }
 
-    const Ufe::PathSegment pathSegment
-        = MayaUsd::ufe::usdPathToUfePathSegment(usdPath, instanceIndex);
-    const Ufe::SceneItem::Ptr& si
-        = handler->createItem(_proxyShapeData->ProxyShape()->ufePath() + pathSegment);
+    const Ufe::PathSegment pathSegment = UsdUfe::usdPathToUfePathSegment(usdPath, instanceIndex);
+    auto si = Ufe::Hierarchy::createItem(_proxyShapeData->ProxyShape()->ufePath() + pathSegment);
     if (!si) {
         TF_WARN("Failed to create UFE scene item for Rprim '%s'", rprimId.GetText());
         return false;
     }
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
-    TF_UNUSED(listAdjustment);
-
     auto ufeSel = Ufe::NamedSelection::get("MayaSelectTool");
     ufeSel->append(si);
-#else
-    auto                            globalSelection = Ufe::GlobalSelection::get();
-
-    switch (listAdjustment) {
-    case MGlobal::kReplaceList:
-        // The list has been cleared before viewport selection runs, so we
-        // can add the new hits directly. UFE selection list is a superset
-        // of Maya selection list, calling clear()/replaceWith() on UFE
-        // selection list would clear Maya selection list.
-        globalSelection->append(si);
-        break;
-    case MGlobal::kAddToList: globalSelection->append(si); break;
-    case MGlobal::kRemoveFromList: globalSelection->remove(si); break;
-    case MGlobal::kXORWithList:
-        if (!globalSelection->remove(si)) {
-            globalSelection->append(si);
-        }
-        break;
-    default: TF_WARN("Unexpected MGlobal::ListAdjustment enum for selection."); break;
-    }
-#endif
-#else
-    dagPath = _proxyShapeData->ProxyDagPath();
-#endif
 
     return true;
 }
@@ -1744,10 +1712,22 @@ void ProxyRenderDelegate::ColorPrefsChanged()
     _RequestRefresh();
 }
 
+void ProxyRenderDelegate::ColorManagementRefresh()
+{
+    // Need to resync all color management aware materials
+    HdChangeTracker& changeTracker = _renderIndex->GetChangeTracker();
+    auto             materials
+        = _renderIndex->GetSprimSubtree(HdPrimTypeTokens->material, SdfPath::AbsoluteRootPath());
+    for (auto material : materials) {
+        changeTracker.MarkSprimDirty(material, HdMaterial::DirtyParams);
+    }
+
+    _RequestRefresh();
+}
+
 //! \brief  Populate lead and active selection for Rprims under the proxy shape.
 void ProxyRenderDelegate::_PopulateSelection()
 {
-#if defined(WANT_UFE_BUILD)
     if (_proxyShapeData->ProxyShape() == nullptr) {
         return;
     }
@@ -1769,7 +1749,6 @@ void ProxyRenderDelegate::_PopulateSelection()
             PopulateSelection(*it, proxyPath, *_sceneDelegate, _activeSelection);
         }
     }
-#endif
 }
 
 /*! \brief  Notify selection change to rprims.
@@ -1869,10 +1848,15 @@ void ProxyRenderDelegate::_UpdateRenderTags()
     // changed since the last time we set the render tags so we know if there is a change
     // to an individual rprim or not.
     bool rprimRenderTagChanged = !_changeVersions.renderTagValid(changeTracker);
-#ifdef ENABLE_RENDERTAG_VISIBILITY_WORKAROUND
-    rprimRenderTagChanged
-        = rprimRenderTagChanged || !_changeVersions.visibilityValid(changeTracker);
-#endif
+    if (rprimRenderTagChanged) {
+        for (auto path : _renderIndex->GetRprimIds()) {
+            if (changeTracker.GetRprimDirtyBits(path) & HdChangeTracker::DirtyRenderTag) {
+                // Since USD 23.02, DirtyRenderTag is not enough to provoke a sync,
+                // so we add an extra dirty flag - DirtyVisibility
+                changeTracker.MarkRprimDirty(path, HdChangeTracker::DirtyVisibility);
+            }
+        }
+    }
 
     bool renderPurposeChanged = false;
     bool proxyPurposeChanged = false;
@@ -1905,41 +1889,26 @@ void ProxyRenderDelegate::_UpdateRenderTags()
             // this call to MarkRprimDirty will increment the change tracker render
             // tag version. We don't want this to cause rprimRenderTagChanged to be
             // true when a tag hasn't actually changed.
-            changeTracker.MarkRprimDirty(id, HdChangeTracker::DirtyRenderTag);
+            // Since USD 23.02, DirtyRenderTag is not enough to provoke a sync,
+            // so we add an extra dirty flag - DirtyVisibility
+            changeTracker.MarkRprimDirty(
+                id, HdChangeTracker::DirtyRenderTag | HdChangeTracker::DirtyVisibility);
         }
     }
 
-    // Vp2RenderDelegate implements render tags as a per-render item setting.
-    // To handle cases when an rprim changes from a displayed tag to a hidden tag
-    // we need to visit all the rprims and set the enable flag correctly on
-    // all their render items. Do visit all the rprims we need to set the
-    // render tags to be all the tags.
-    // When an rprim has it's renderTag changed the global render tag version
-    // id will change.
-    if (rprimRenderTagChanged) {
-        // Sync every rprim, no matter what it's tag is. We don't know the tag(s) of
-        // the rprim that changed, so the only way we can be sure to sync it is by
-        // syncing everything.
-        TfTokenVector renderTags = { HdRenderTagTokens->geometry,
-                                     HdRenderTagTokens->render,
-                                     HdRenderTagTokens->proxy,
-                                     HdRenderTagTokens->guide };
-        _taskController->SetRenderTags(renderTags);
-        _taskRenderTagsValid = false;
-    }
     // When the render tag on an rprim changes we do a pass over all rprims to update
     // their visibility. The frame after we do the pass over all the tags, set the tags back to
     // the minimum set of tags.
-    else if (anyPurposeChanged || !_taskRenderTagsValid) {
+    if (anyPurposeChanged || rprimRenderTagChanged || !_taskRenderTagsValid) {
         TfTokenVector renderTags
             = { HdRenderTagTokens->geometry }; // always draw geometry render tag purpose.
-        if (_proxyShapeData->DrawRenderPurpose() || renderPurposeChanged) {
+        if (_proxyShapeData->DrawRenderPurpose() || renderPurposeChanged || rprimRenderTagChanged) {
             renderTags.push_back(HdRenderTagTokens->render);
         }
-        if (_proxyShapeData->DrawProxyPurpose() || proxyPurposeChanged) {
+        if (_proxyShapeData->DrawProxyPurpose() || proxyPurposeChanged || rprimRenderTagChanged) {
             renderTags.push_back(HdRenderTagTokens->proxy);
         }
-        if (_proxyShapeData->DrawGuidePurpose() || guidePurposeChanged) {
+        if (_proxyShapeData->DrawGuidePurpose() || guidePurposeChanged || rprimRenderTagChanged) {
             renderTags.push_back(HdRenderTagTokens->guide);
         }
         _taskController->SetRenderTags(renderTags);
@@ -1947,7 +1916,7 @@ void ProxyRenderDelegate::_UpdateRenderTags()
         // in the _taskController just so that we get one sync to hide the render
         // items. In that case we need to leave _taskRenderTagsValid false, so that
         // we get a chance to remove that tag next frame.
-        _taskRenderTagsValid = !anyPurposeChanged;
+        _taskRenderTagsValid = !(anyPurposeChanged || rprimRenderTagChanged);
     }
 
     // TODO: UsdImagingDelegate is purpose-aware. There are methods

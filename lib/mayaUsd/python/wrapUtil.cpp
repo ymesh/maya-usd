@@ -15,6 +15,8 @@
 //
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/utils/util.h>
+#include <mayaUsd/utils/utilFileSystem.h>
+#include <mayaUsd/utils/utilSerialization.h>
 
 #include <pxr/base/tf/pyResultConversions.h>
 #include <pxr/pxr.h>
@@ -26,7 +28,7 @@
 
 using namespace boost::python;
 
-PXR_NAMESPACE_USING_DIRECTIVE;
+PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 class UsdMayaUtilScope
@@ -43,13 +45,30 @@ VtDictionary getDictionaryFromEncodedOptions(const std::string& textOptions)
     return dictOptions;
 }
 
+std::string ensureUSDFileExtension(const std::string& fileToCheck)
+{
+    std::string ret(fileToCheck);
+    MayaUsd::utils::ensureUSDFileExtension(ret);
+    return ret;
+}
+
 } // namespace
 
 void wrapUtil()
 {
-    scope s = class_<UsdMayaUtilScope>("Util", no_init)
-                  .def("IsAuthored", UsdMayaUtil::IsAuthored)
-                  .def("prettifyName", &UsdMayaUtil::prettifyName)
-                  .staticmethod("prettifyName")
-                  .def("getDictionaryFromEncodedOptions", getDictionaryFromEncodedOptions);
+    scope s
+        = class_<UsdMayaUtilScope>("Util", no_init)
+              .def("IsAuthored", UsdMayaUtil::IsAuthored)
+              .def("prettifyName", &UsdMayaUtil::prettifyName)
+              .staticmethod("prettifyName")
+              .def("getDictionaryFromEncodedOptions", getDictionaryFromEncodedOptions)
+              .def(
+                  "getPathRelativeToMayaSceneFile",
+                  UsdMayaUtilFileSystem::getPathRelativeToMayaSceneFile)
+              .def("getPathRelativeToDirectory", UsdMayaUtilFileSystem::getPathRelativeToDirectory)
+              .def(
+                  "handleAssetPathThatMaybeRelativeToLayer",
+                  UsdMayaUtilFileSystem::handleAssetPathThatMaybeRelativeToLayer)
+              .def("ensureUSDFileExtension", ensureUSDFileExtension)
+              .staticmethod("getPathRelativeToMayaSceneFile");
 }
