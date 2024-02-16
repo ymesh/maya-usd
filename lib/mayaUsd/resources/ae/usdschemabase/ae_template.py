@@ -13,11 +13,17 @@
 # limitations under the License.
 #
 
+from .custom_image_control import customImageControlCreator
+from .attribute_custom_control import getNiceAttributeName
+from .attribute_custom_control import cleanAndFormatTooltip
+from .attribute_custom_control import AttributeCustomControl
+
 import collections
 import fnmatch
 from functools import partial
 import re
 import ufe
+import usdUfe
 import maya.mel as mel
 import maya.cmds as cmds
 import mayaUsd.ufe as mayaUsdUfe
@@ -38,7 +44,7 @@ from maya.OpenMaya import MGlobal
 
 # We manually import all the classes which have a 'GetSchemaAttributeNames'
 # method so we have access to it and the 'pythonClass' method.
-from pxr import Usd, UsdGeom, UsdLux, UsdRender, UsdRi, UsdShade, UsdSkel, UsdUI, UsdVol, Kind, Tf, Sdr
+from pxr import Usd, UsdGeom, UsdLux, UsdRender, UsdRi, UsdShade, UsdSkel, UsdUI, UsdVol, Kind, Tf, Sdr, Sdf
 
 nameTxt = 'nameTxt'
 attrValueFld = 'attrValueFld'
@@ -53,6 +59,22 @@ class AEUITemplate:
 
     def __exit__(self, mytype, value, tb):
         cmds.setUITemplate(ppt=True)
+
+_editorRefreshQueued = False
+
+def _refreshEditor():
+    '''Reset the queued refresh flag and refresh the AE.'''
+    global _editorRefreshQueued
+    _editorRefreshQueued = False
+    cmds.refreshEditorTemplates()
+    
+def _queueEditorRefresh():
+    '''If there is not already a AE refresh queued, queue a refresh.'''
+    global _editorRefreshQueued
+    if _editorRefreshQueued:
+        return
+    cmds.evalDeferred(_refreshEditor, low=True)
+    _editorRefreshQueued = True
 
 # Custom control, but does not have any UI. Instead we use
 # this control to be notified from UFE when any attribute has changed
@@ -76,7 +98,7 @@ class UfeAttributesObserver(ufe.Observer):
         if hasattr(ufe, "AttributeRemoved") and isinstance(notification, ufe.AttributeRemoved):
             refreshEditor = True
         if refreshEditor:
-            mel.eval("evalDeferred -low \"refreshEditorTemplates\";")
+            _queueEditorRefresh()
 
 
     def onCreate(self, *args):
@@ -96,7 +118,7 @@ class UfeConnectionChangedObserver(ufe.Observer):
 
     def __call__(self, notification):
         if hasattr(ufe, "AttributeConnectionChanged") and isinstance(notification, ufe.AttributeConnectionChanged):
-            mel.eval("evalDeferred -low \"refreshEditorTemplates\";")
+            _queueEditorRefresh()
 
     def onCreate(self, *args):
         ufe.Attributes.addObserver(self._item, self)
@@ -110,6 +132,7 @@ class MetaDataCustomControl(object):
     def __init__(self, item, prim, useNiceName):
         # In Maya 2022.1 we need to hold onto the Ufe SceneItem to make
         # sure it doesn't go stale. This is not needed in latest Maya.
+        super(MetaDataCustomControl, self).__init__()
         mayaVer = '%s.%s' % (cmds.about(majorVersion=True), cmds.about(minorVersion=True))
         self.item = item if mayaVer == '2022.1' else None
         self.prim = prim
@@ -219,14 +242,26 @@ class MetaDataCustomControl(object):
 
     def _onActiveChanged(self, value):
         with mayaUsdLib.UsdUndoBlock():
-            self.prim.SetActive(value)
+            try:
+                usdUfe.ToggleActiveCommand(self.prim).execute()
+            except Exception as ex:
+                # Note: the command might not work because there is a stronger
+                #       opinion, so update the checkbox.
+                cmds.checkBoxGrp(self.active, edit=True, value1=self.prim.IsActive())
+                cmds.error(str(ex))
 
     def _onInstanceableChanged(self, value):
         with mayaUsdLib.UsdUndoBlock():
-            self.prim.SetInstanceable(value)
+            try:
+                usdUfe.ToggleInstanceableCommand(self.prim).execute()
+            except Exception as ex:
+                # Note: the command might not work because there is a stronger
+                #       opinion, so update the checkbox.
+                cmds.checkBoxGrp(self.instan, edit=True, value1=self.prim.IsInstanceable())
+                cmds.error(str(ex))
 
 # Custom control for all array attribute.
-class ArrayCustomControl(object):
+class ArrayCustomControl(AttributeCustomControl):
 
     if hasAEPopupMenu:
         class ArrayAEPopup(attributes.AEPopupMenu):
@@ -255,11 +290,8 @@ class ArrayCustomControl(object):
                     self._buildFromActions(self.HAS_VALUE_MENU, addItemCmd)
 
     def __init__(self, ufeAttr, prim, attrName, useNiceName):
-        self.ufeAttr = ufeAttr
+        super(ArrayCustomControl, self).__init__(ufeAttr, attrName, useNiceName)
         self.prim = prim
-        self.attrName = attrName
-        self.useNiceName = useNiceName
-        super(ArrayCustomControl, self).__init__()
 
     def onCreate(self, *args):
         attr = self.prim.GetAttribute(self.attrName)
@@ -273,13 +305,13 @@ class ArrayCustomControl(object):
             typeNameStr = str(typeName.scalarType)
             typeNameStr += ("[" + str(len(values)) + "]") if hasValue else "[]"
 
-            attrLabel = mayaUsdLib.Util.prettifyName(self.attrName) if self.useNiceName else self.attrName
+            attrLabel = self.getUILabel()
             singleWidgetWidth = mel.eval('global int $gAttributeEditorTemplateSingleWidgetWidth; $gAttributeEditorTemplateSingleWidgetWidth += 0')
             with AEUITemplate():
                 # See comment in ConnectionsCustomControl below for why nc=5.
                 rl = cmds.rowLayout(nc=5, adj=3)
                 with LayoutManager(rl):
-                    cmds.text(nameTxt, al='right', label=attrLabel, annotation=attr.GetDocumentation())
+                    cmds.text(nameTxt, al='right', label=attrLabel, annotation=cleanAndFormatTooltip(attr.GetDocumentation()))
                     cmds.textField(attrTypeFld, editable=False, text=typeNameStr, font='obliqueLabelFont', width=singleWidgetWidth*1.5)
 
                 if hasAEPopupMenu:
@@ -320,36 +352,21 @@ class ArrayCustomControl(object):
         cb = attributes.createChangeCb(self.updateUi, ufeAttr, uiControl)
         cmds.textField(attrTypeFld, edit=True, parent=uiControl, changeCommand=cb)
 
-
 def showEditorForUSDPrim(usdPrimPathStr):
     # Simple helper to open the AE on input prim.
     mel.eval('evalDeferred "showEditor(\\\"%s\\\")"' % usdPrimPathStr)
 
 # Custom control for all attributes that have connections.
-class ConnectionsCustomControl(object):
-    def __init__(self, ufeItem, prim, attrName, useNiceName):
+class ConnectionsCustomControl(AttributeCustomControl):
+    def __init__(self, ufeItem, ufeAttr, prim, attrName, useNiceName):
+        super(ConnectionsCustomControl, self).__init__(ufeAttr, attrName, useNiceName)
         self.path = ufeItem.path()
         self.prim = prim
-        self.attrName = attrName
-        self.useNiceName = useNiceName
-        super(ConnectionsCustomControl, self).__init__()
 
     def onCreate(self, *args):
         frontPath = self.path.popSegment()
         attr = self.prim.GetAttribute(self.attrName)
-        attrLabel = self.attrName
-        if self.useNiceName:
-            attrLabel = mayaUsdLib.Util.prettifyName(self.attrName)
-            ufeItem = ufe.SceneItem(self.path)
-            if ufeItem:
-                try:
-                    ufeAttrS = ufe.Attributes.attributes(ufeItem)
-                    ufeAttr = ufeAttrS.attribute(self.attrName)
-                    if ufeAttr.hasMetadata("uiname"):
-                        attrLabel = str(ufeAttr.getMetadata("uiname"))
-                except:
-                    pass
-
+        attrLabel = self.getUILabel()
         attrType = attr.GetMetadata('typeName')
 
         singleWidgetWidth = mel.eval('global int $gAttributeEditorTemplateSingleWidgetWidth; $gAttributeEditorTemplateSingleWidgetWidth += 0')
@@ -360,7 +377,7 @@ class ConnectionsCustomControl(object):
             # remain at a given width.
             rl = cmds.rowLayout(nc=5, adj=3)
             with LayoutManager(rl):
-                cmds.text(nameTxt, al='right', label=attrLabel, annotation=attr.GetDocumentation())
+                cmds.text(nameTxt, al='right', label=attrLabel, annotation=cleanAndFormatTooltip(attr.GetDocumentation()))
                 cmds.textField(attrTypeFld, editable=False, text=attrType, backgroundColor=[0.945, 0.945, 0.647], font='obliqueLabelFont', width=singleWidgetWidth*1.5)
 
                 # Add a menu item for each connection.
@@ -379,6 +396,7 @@ class ConnectionsCustomControl(object):
         # We only display the attribute name and type. Neither of these are time
         # varying, so we don't need to implement the replace.
         pass
+
 
 class NoticeListener(object):
     # Inserted as a custom control, but does not have any UI. Instead we use
@@ -413,7 +431,8 @@ class NoticeListener(object):
 
 def connectionsCustomControlCreator(aeTemplate, c):
     if aeTemplate.attributeHasConnections(c):
-        return ConnectionsCustomControl(aeTemplate.item, aeTemplate.prim, c, aeTemplate.useNiceName)
+        ufeAttr = aeTemplate.attrS.attribute(c)
+        return ConnectionsCustomControl(aeTemplate.item, ufeAttr, aeTemplate.prim, c, aeTemplate.useNiceName)
     else:
         return None
 
@@ -429,7 +448,9 @@ def arrayCustomControlCreator(aeTemplate, c):
         return None
 
 def defaultControlCreator(aeTemplate, c):
-    cmds.editorTemplate(addControl=[c])
+    ufeAttr = aeTemplate.attrS.attribute(c)
+    uiLabel = getNiceAttributeName(ufeAttr, c) if aeTemplate.useNiceName else c
+    cmds.editorTemplate(addControl=[c], label=uiLabel, annotation=cleanAndFormatTooltip(ufeAttr.getDocumentation()))
     return None
 
 class AEShaderLayout(object):
@@ -596,6 +617,7 @@ class AETemplate(object):
     learn how attributes are stored.
     '''
     def __init__(self, ufeSceneItem):
+        self.assetPathType = Tf.Type.FindByName('SdfAssetPath')
         self.item = ufeSceneItem
         self.prim = mayaUsdUfe.ufePathToPrim(ufe.PathString.string(self.item.path()))
 
@@ -631,7 +653,7 @@ class AETemplate(object):
             except:
                 pass
 
-    _controlCreators = [connectionsCustomControlCreator, arrayCustomControlCreator, defaultControlCreator]
+    _controlCreators = [connectionsCustomControlCreator, arrayCustomControlCreator, customImageControlCreator, defaultControlCreator]
 
     @staticmethod
     def prependControlCreator(controlCreator):
@@ -641,10 +663,14 @@ class AETemplate(object):
         for c in controls:
             if c not in self.suppressedAttrs:
                 for controlCreator in AETemplate._controlCreators:
-                    createdControl = controlCreator(self, c)
-                    if createdControl:
-                        self.defineCustom(createdControl, c)
-                        break
+                    try:
+                        createdControl = controlCreator(self, c)
+                        if createdControl:
+                            self.defineCustom(createdControl, c)
+                            break
+                    except Exception as ex:
+                        # Do not let one custom control failure affect others.
+                        print('Failed to create control %s: %s' % (c, ex))
                 self.addedAttrs.append(c)
 
     def suppress(self, control):
@@ -780,12 +806,7 @@ class AETemplate(object):
         self.createSection(sectionName, extraAttrs, True)
 
     def createAppliedSchemasSection(self):
-        # USD version 0.21.2 is required because of
-        # Usd.SchemaRegistry().GetPropertyNamespacePrefix()
         usdVer = Usd.GetVersion()
-        if usdVer < (0, 21, 2):
-            return
-
         showAppliedSchemasSection = False
 
         # loop on all applied schemas and store all those
@@ -809,10 +830,7 @@ class AETemplate(object):
         schemaAttrsDict = {}
         appliedSchemas = self.prim.GetAppliedSchemas()
         for schema in appliedSchemas:
-            if usdVer > (0, 21, 5):
-                typeAndInstance = Usd.SchemaRegistry().GetTypeNameAndInstance(schema)
-            else:
-                typeAndInstance = Usd.SchemaRegistry().GetTypeAndInstance(schema)
+            typeAndInstance = Usd.SchemaRegistry().GetTypeNameAndInstance(schema)
             typeName        = typeAndInstance[0]
             schemaType      = Usd.SchemaRegistry().GetTypeFromName(typeName)
 
@@ -896,6 +914,18 @@ class AETemplate(object):
             typeName = attr.GetTypeName()
             return typeName.isArray
         return False
+
+    def isImageAttribute(self, attrName):
+        kFilenameAttr = ufe.Attribute.kFilename if hasattr(ufe.Attribute, "kFilename") else 'Filename'
+        if self.attrS.attributeType(attrName) != kFilenameAttr:
+            return False
+        attr = self.prim.GetAttribute(attrName)
+        if not attr:
+            return False
+        typeName = attr.GetTypeName()
+        if not typeName:
+            return False
+        return self.assetPathType == typeName.type
 
     def attributeHasConnections(self, attrName):
         # Simple helper to return whether the input attribute (by name) has

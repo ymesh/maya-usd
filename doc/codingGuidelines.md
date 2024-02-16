@@ -165,7 +165,7 @@ In general, macros should be avoided (see [Modern C++](https://docs.google.com/d
 inline PXR_NS::UsdPrim prim() const
 {
     PXR_NAMESPACE_USING_DIRECTIVE
-    TF_AXIOM(fItem != nullptr);
+    TF_VERIFY(fItem != nullptr);
     return fItem->prim();
 }
 ```
@@ -200,23 +200,26 @@ Headers should be included in the following order, with each section separated b
 1. Related header
 2. All private headers
 3. All public headers from this repository (maya-usd)
-4. Pixar + USD headers
-5. Autodesk + Maya headers
-6. Other libraries' headers
-7. C++ standard library headers
-8. C system headers
-9. Conditional includes
+4. UsdUfe library headers
+5. Pixar + USD headers
+6. Autodesk + Maya headers
+7. Other libraries' headers
+8. C++ standard library headers
+9. C system headers
+10. Conditional includes
 
 ```cpp
 #include "exportTranslator.h"
 
 #include "private/util.h"
- 
+
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/jobs/writeJob.h>
 #include <mayaUsd/fileio/shading/shadingModeRegistry.h>
 #include <mayaUsd/fileio/utils/writeUtil.h>
- 
+
+#include <usdUfe/ufe/UsdSceneItem.h>
+
 #include <maya/MFileObject.h>
 #include <maya/MGlobal.h>
 #include <maya/MSelectionList.h>
@@ -224,8 +227,8 @@ Headers should be included in the following order, with each section separated b
 
 #include <string>
 
-#if defined(WANT_UFE_BUILD)
-  #include <ufe/ufe.h>
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <ufe/types.h>
 #endif
 ```
 
@@ -236,9 +239,10 @@ Headers should be included in the following order, with each section separated b
 ### Conditional compilation (Maya, USD, UFE version)
 **Maya**
 	* `MAYA_API_VERSION` is the consistent macro to test Maya version (`MAYA_APP_VERSION` * 10000 + `MAJOR_VERSION` * 100 + `MINOR_VERSION`)
-	* `MAYA_APP_VERSION` is available only since Maya 2019 and is a simple year number, so it is not allowed.
+	* `MAYA_APP_VERSION` is a simple year number, so it is not allowed in C++ code. However it is set as a CMake variable and allowed in cmake files.
+
 **UFE**
-	* `WANT_UFE_BUILD` equals 1 if UFE is found and it should be used for conditional compilation on codes depending on UFE.
+	* Each version of Ufe contains a features available define (in ufe.h) such as `UFE_V4_FEATURES_AVAILABLE` that can be used for conditional compilation on code depending on Ufe Version.
 
 **USD**
 	* `PXR_VERSION` is the macro to test USD version (`PXR_MAJOR_VERSION` * 10000 + `PXR_MINOR_VERSION` * 100 + `PXR_PATCH_VERSION`)

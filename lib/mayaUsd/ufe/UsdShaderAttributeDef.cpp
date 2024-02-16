@@ -47,19 +47,19 @@ UsdShaderAttributeDef::~UsdShaderAttributeDef() { }
 
 std::string UsdShaderAttributeDef::name() const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     return fShaderAttributeDef->GetName().GetString();
 }
 
 std::string UsdShaderAttributeDef::type() const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     return usdTypeToUfe(fShaderAttributeDef);
 }
 
 std::string UsdShaderAttributeDef::defaultValue() const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     std::ostringstream defaultValue;
     defaultValue << fShaderAttributeDef->GetDefaultValue();
     return defaultValue.str();
@@ -67,7 +67,7 @@ std::string UsdShaderAttributeDef::defaultValue() const
 
 Ufe::AttributeDef::IOType UsdShaderAttributeDef::ioType() const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     return fShaderAttributeDef->IsOutput() ? Ufe::AttributeDef::OUTPUT_ATTR
                                            : Ufe::AttributeDef::INPUT_ATTR;
 }
@@ -117,13 +117,51 @@ static const MetadataMap _metaMap = {
       } },
     { MayaUsdMetadata->UISoftMin
           .GetString(), // Maya has 0-100 sliders. In rendering, sliders are 0-1.
-      [](const PXR_NS::SdrShaderProperty&) {
-          return std::string { "0.0" }; // Will only be returned if the metadata does not exist.
+      [](const PXR_NS::SdrShaderProperty& p) {
+          // Will only be returned if the metadata does not exist.
+          static const auto defaultSoftMin = std::unordered_map<std::string, Ufe::Value> {
+              { Ufe::Attribute::kFloat, std::string { "0" } },
+              { Ufe::Attribute::kFloat3, std::string { "0,0,0" } },
+              { Ufe::Attribute::kColorFloat3, std::string { "0,0,0" } },
+              { Ufe::Attribute::kDouble, std::string { "0" } },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+              { Ufe::Attribute::kFloat2, std::string { "0,0" } },
+              { Ufe::Attribute::kFloat4, std::string { "0,0,0,0" } },
+              { Ufe::Attribute::kColorFloat4, std::string { "0,0,0,0" } },
+#endif
+          };
+          // If there is a UIMin value, use it as the soft min.
+          const NdrTokenMap& metadata = p.GetMetadata();
+          auto               it = metadata.find(MayaUsdMetadata->UIMin);
+          if (it != metadata.cend()) {
+              return Ufe::Value(it->second);
+          }
+          auto itDefault = defaultSoftMin.find(usdTypeToUfe(&p));
+          return itDefault != defaultSoftMin.end() ? itDefault->second : Ufe::Value();
       } },
     { MayaUsdMetadata->UISoftMax
           .GetString(), // Maya has 0-100 sliders. In rendering, sliders are 0-1.
-      [](const PXR_NS::SdrShaderProperty&) {
-          return std::string { "1.0" }; // Will only be returned if the metadata does not exist.
+      [](const PXR_NS::SdrShaderProperty& p) {
+          // Will only be returned if the metadata does not exist.
+          static const auto defaultSoftMax = std::unordered_map<std::string, Ufe::Value> {
+              { Ufe::Attribute::kFloat, std::string { "1" } },
+              { Ufe::Attribute::kFloat3, std::string { "1,1,1" } },
+              { Ufe::Attribute::kColorFloat3, std::string { "1,1,1" } },
+              { Ufe::Attribute::kDouble, std::string { "1" } },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+              { Ufe::Attribute::kFloat2, std::string { "1,1" } },
+              { Ufe::Attribute::kFloat4, std::string { "1,1,1,1" } },
+              { Ufe::Attribute::kColorFloat4, std::string { "1,1,1,1" } },
+#endif
+          };
+          // If there is a UIMax value, use it as the soft max.
+          const NdrTokenMap& metadata = p.GetMetadata();
+          auto               it = metadata.find(MayaUsdMetadata->UIMax);
+          if (it != metadata.cend()) {
+              return Ufe::Value(it->second);
+          }
+          auto itDefault = defaultSoftMax.find(usdTypeToUfe(&p));
+          return itDefault != defaultSoftMax.end() ? itDefault->second : Ufe::Value();
       } },
     // If Ufe decides to use another completely different convention, it can be added here:
 };
@@ -131,7 +169,7 @@ static const MetadataMap _metaMap = {
 
 Ufe::Value UsdShaderAttributeDef::getMetadata(const std::string& key) const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     const NdrTokenMap& metadata = fShaderAttributeDef->GetMetadata();
     auto               it = metadata.find(TfToken(key));
     if (it != metadata.cend()) {
@@ -154,7 +192,7 @@ Ufe::Value UsdShaderAttributeDef::getMetadata(const std::string& key) const
 
 bool UsdShaderAttributeDef::hasMetadata(const std::string& key) const
 {
-    TF_AXIOM(fShaderAttributeDef);
+    TF_DEV_AXIOM(fShaderAttributeDef);
     const NdrTokenMap& metadata = fShaderAttributeDef->GetMetadata();
     auto               it = metadata.find(TfToken(key));
     if (it != metadata.cend()) {

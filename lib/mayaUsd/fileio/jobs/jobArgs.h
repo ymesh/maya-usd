@@ -64,6 +64,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (compatibility) \
     (defaultCameras) \
     (defaultMeshScheme) \
+    (defaultPrim) \
     (defaultUSDFormat) \
     (eulerFilter) \
     (exportBlendShapes) \
@@ -76,9 +77,11 @@ TF_DECLARE_PUBLIC_TOKENS(
     (referenceObjectMode) \
     (exportRefsAsInstanceable) \
     (exportRoots) \
+    (exportSelected) \
     (exportSkels) \
     (exportSkin) \
     (exportUVs) \
+    (exportRelativeTextures) \
     (exportVisibility) \
     (jobContext) \
     (exportComponentTags) \
@@ -107,9 +110,17 @@ TF_DECLARE_PUBLIC_TOKENS(
     (staticSingleSample) \
     (geomSidedness)   \
     (worldspace) \
+    (writeDefaults) \
     (customLayerData) \
+    (metersPerUnit) \
+    /* Types of objects to export */ \
+    (excludeExportTypes) \
     /* Special "none" token */ \
     (none) \
+    /* relative textures values */ \
+    (automatic) \
+    (absolute) \
+    (relative) \
     /* referenceObjectMode values */ \
     (attributeOnly) \
     (defaultToMesh) \
@@ -139,6 +150,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (apiSchema) \
     (assemblyRep) \
     (excludePrimvar) \
+    (excludePrimvarNamespace) \
     (jobContext) \
     (metadata) \
     (shadingMode) \
@@ -147,15 +159,22 @@ TF_DECLARE_PUBLIC_TOKENS(
     (importInstances) \
     (importUSDZTextures) \
     (importUSDZTexturesFilePath) \
+    (importRelativeTextures) \
     (pullImportStage) \
     (preserveTimeline) \
+    /* values for import relative textures */ \
+    (automatic) \
+    (absolute) \
+    (relative) \
+    (none) \
     /* assemblyRep values */ \
     (Collapsed) \
     (Full) \
     (Import) \
     ((Unloaded, "")) \
     (chaser) \
-    (chaserArgs)
+    (chaserArgs) \
+    (applyEulerFilter)
 // clang-format on
 
 TF_DECLARE_PUBLIC_TOKENS(
@@ -185,8 +204,10 @@ struct UsdMayaJobExportArgs
     const bool        exportMaterialCollections;
     const bool        exportMeshUVs;
     const bool        exportNurbsExplicitUV;
+    const TfToken     exportRelativeTextures;
     const TfToken     referenceObjectMode;
     const bool        exportRefsAsInstanceable;
+    const bool        exportSelected;
     const TfToken     exportSkels;
     const TfToken     exportSkin;
     const bool        exportBlendShapes;
@@ -212,6 +233,8 @@ struct UsdMayaJobExportArgs
     const bool stripNamespaces;
     // Export root prims using their worldspace transform instead of local transform.
     const bool worldspace;
+    // Write default values at default time.
+    const bool writeDefaults;
 
     /// This is the path of the USD prim under which *all* prims will be
     /// authored.
@@ -227,11 +250,14 @@ struct UsdMayaJobExportArgs
     const TfToken      geomSidedness;
     const TfToken::Set includeAPINames;
     const TfToken::Set jobContextNames;
+    const TfToken::Set excludeExportTypes;
+    const std::string  defaultPrim;
 
     using ChaserArgs = std::map<std::string, std::string>;
     const std::vector<std::string>          chaserNames;
     const std::map<std::string, ChaserArgs> allChaserArgs;
     const VtDictionary                      customLayerData;
+    const double                            metersPerUnit;
 
     const std::map<std::string, std::string> remapUVSetsTo;
 
@@ -321,6 +347,7 @@ struct UsdMayaJobImportArgs
 {
     const TfToken      assemblyRep;
     const TfToken::Set excludePrimvarNames;
+    const TfToken::Set excludePrimvarNamespaces;
     const TfToken::Set includeAPINames;
     const TfToken::Set jobContextNames;
     const TfToken::Set includeMetadataKeys;
@@ -334,10 +361,12 @@ struct UsdMayaJobImportArgs
     const TfToken        preferredMaterial;
     const std::string    importUSDZTexturesFilePath;
     const bool           importUSDZTextures;
+    const std::string    importRelativeTextures;
     const bool           importInstances;
     const bool           useAsAnimationCache;
     const bool           importWithProxyShapes;
     const bool           preserveTimeline;
+    const bool           applyEulerFilter;
     const UsdStageRefPtr pullImportStage;
     /// The interval over which to import animated data.
     /// An empty interval (<tt>GfInterval::IsEmpty()</tt>) means that no

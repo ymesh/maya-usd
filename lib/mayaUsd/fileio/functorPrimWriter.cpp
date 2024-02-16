@@ -53,7 +53,11 @@ void UsdMaya_FunctorPrimWriter::Write(const UsdTimeCode& usdTime)
 {
     UsdMayaTransformWriter::Write(usdTime);
 
-    const UsdMayaPrimWriterArgs args(GetDagPath(), _GetExportArgs().exportRefsAsInstanceable);
+    const UsdMayaPrimWriterArgs args(
+        GetDagPath(),
+        _GetExportArgs().exportRefsAsInstanceable,
+        _GetExportArgs().excludeExportTypes,
+        _GetExportArgs().defaultPrim);
 
     UsdMayaPrimWriterContext ctx(usdTime, GetUsdPath(), GetUsdStage());
 

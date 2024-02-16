@@ -4,16 +4,31 @@
 target_sources(${PROJECT_NAME} 
     PRIVATE
         GlslFragmentGenerator.cpp
+        GlslOcioNodeImpl.cpp
         OgsFragment.cpp
         OgsXmlGenerator.cpp
+        ShaderGenUtil.cpp
         Nodes/SurfaceNodeMaya.cpp
+        Nodes/TexcoordNodeMaya.cpp
         PugiXML/pugixml.cpp
 )
 
+if(MaterialX_VERSION VERSION_LESS "1.38.9")
+target_sources(${PROJECT_NAME} 
+    PRIVATE
+        Nodes/MayaTransformNormalNodeGlsl.cpp
+        Nodes/MayaTransformPointNodeGlsl.cpp
+        Nodes/MayaTransformVectorNodeGlsl.cpp
+)
+endif()
+
 set(HEADERS
+    CombinedMaterialXVersion.h
     GlslFragmentGenerator.h
+    GlslOcioNodeImpl.h
     OgsFragment.h
     OgsXmlGenerator.h
+    ShaderGenUtil.h
 )
 
 # -----------------------------------------------------------------------------
@@ -52,6 +67,15 @@ list(APPEND NODE_GLSL_IMPLEMENTATIONS_VERSIONED
     libraries/mx_srgb_texture_to_linrec2020_color4.glsl
 )
 
+list(APPEND NODE_GLSL_LIB_VERSIONED
+    libraries/usd_transform_color.glsl
+)
+
+list(APPEND NODE_GLSL_EXTRA_IMPLEMENTATIONS_VERSIONED
+    libraries/mx_srgb_texture_to_lin_rec709_color3.glsl
+    libraries/mx_srgb_texture_to_lin_rec709_color4.glsl
+)
+
 # -----------------------------------------------------------------------------
 # promote headers
 # -----------------------------------------------------------------------------
@@ -60,6 +84,10 @@ mayaUsd_promoteHeaderList(HEADERS ${HEADERS} SUBDIR render/MaterialXGenOgsXml)
 # -----------------------------------------------------------------------------
 # install
 # -----------------------------------------------------------------------------
+
+install(FILES ${HEADERS}
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/include/${PROJECT_NAME}/render/MaterialXGenOgsXml
+)
 
 install(FILES ${NODE_DECLARATIONS}
     DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/adsk/maya
@@ -83,10 +111,30 @@ if(MaterialX_VERSION VERSION_LESS "1.38.4")
             DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/pbrlib/genglsl/ogsxml
         )
     endforeach()
+elseif(MaterialX_VERSION VERSION_LESS "1.38.8")
+    MESSAGE(STATUS "Using 1.38.[4-7] libraries with MaterialX ${MaterialX_VERSION}")
+    foreach(MTLX_FILE ${NODE_GLSL_IMPLEMENTATIONS_VERSIONED})
+        string(REPLACE "libraries/" "libraries/1.38.7/" MTLX_FILE ${MTLX_FILE})
+        install(FILES "${MTLX_FILE}"
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/adsk/maya/genglsl
+        )
+    endforeach()
+    foreach(MTLX_FILE ${LIGHT_IMPLEMENTATIONS})
+        string(REPLACE "libraries/" "libraries/1.38.7/" MTLX_FILE ${MTLX_FILE})
+        install(FILES "${MTLX_FILE}"
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/pbrlib/genglsl/ogsxml
+        )
+    endforeach()
 else()
     MESSAGE(STATUS "Using latest libraries with MaterialX ${MaterialX_VERSION}")
     install(FILES ${NODE_GLSL_IMPLEMENTATIONS_VERSIONED}
         DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/adsk/maya/genglsl
+    )
+    install(FILES ${NODE_GLSL_EXTRA_IMPLEMENTATIONS_VERSIONED}
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/adsk/maya/genglsl
+    )
+    install(FILES ${NODE_GLSL_LIB_VERSIONED}
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/adsk/maya/genglsl/lib
     )
     install(FILES ${LIGHT_IMPLEMENTATIONS}
         DESTINATION ${CMAKE_INSTALL_PREFIX}/libraries/pbrlib/genglsl/ogsxml

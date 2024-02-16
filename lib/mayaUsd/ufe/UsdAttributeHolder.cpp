@@ -16,8 +16,13 @@
 #include "UsdAttributeHolder.h"
 
 #include "Utils.h"
+#include "private/UfeNotifGuard.h"
 
 #include <mayaUsd/utils/util.h>
+
+#include <usdUfe/ufe/Utils.h>
+#include <usdUfe/utils/editRouter.h>
+#include <usdUfe/utils/editRouterContext.h>
 #ifdef UFE_V3_FEATURES_AVAILABLE
 #include <mayaUsd/base/tokens.h>
 #endif
@@ -26,6 +31,7 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/pxr.h>
+#include <pxr/usd/usd/stage.h>
 
 namespace {
 #ifdef UFE_V3_FEATURES_AVAILABLE
@@ -38,6 +44,8 @@ bool setUsdAttrMetadata(
     const Ufe::Value&           value)
 {
     PXR_NAMESPACE_USING_DIRECTIVE
+    UsdUfe::InSetAttribute inSetAttr;
+
     // Special cases for known Ufe metadata keys.
 
     // Note: we allow the locking attribute to be changed even if attribute is locked
@@ -48,7 +56,9 @@ bool setUsdAttrMetadata(
     }
 
     // If attribute is locked don't allow setting Metadata.
-    MayaUsd::ufe::enforceAttributeEditAllowed(attr);
+    UsdUfe::enforceAttributeEditAllowed(attr);
+
+    UsdUfe::AttributeEditRouterContext ctx(attr.GetPrim(), attr.GetName());
 
     PXR_NS::TfToken tok(key);
     if (PXR_NS::UsdShadeNodeGraph(attr.GetPrim())) {
@@ -109,9 +119,19 @@ UsdAttributeHolder::UPtr UsdAttributeHolder::create(const PXR_NS::UsdAttribute& 
 std::string UsdAttributeHolder::isEditAllowedMsg() const
 {
     if (isValid()) {
-        std::string errMsg;
-        isAttributeEditAllowed(_usdAttr, &errMsg);
-        return errMsg;
+        PXR_NS::UsdPrim prim = _usdAttr.GetPrim();
+
+        // Edit routing is done by a user-provided implementation that can raise exceptions.
+        // In particular, they can raise an exception to prevent the execution of the associated
+        // command. This is directly relevant for this check of allowed edits.
+        try {
+            std::string                errMsg;
+            AttributeEditRouterContext ctx(prim, _usdAttr.GetName());
+            UsdUfe::isAttributeEditAllowed(_usdAttr, &errMsg);
+            return errMsg;
+        } catch (std::exception&) {
+            return "Editing has been prevented by edit router.";
+        }
     } else {
         return "Editing is not allowed.";
     }
@@ -121,6 +141,18 @@ std::string UsdAttributeHolder::defaultValue() const { return std::string(); }
 
 std::string UsdAttributeHolder::nativeType() const
 {
+#ifdef UFE_V3_FEATURES_AVAILABLE
+    if (usdAttributeType() == SdfValueTypeNames->Token && PXR_NS::UsdShadeNodeGraph(usdPrim())) {
+        // We might have saved the Sdr native type as metadata:
+        if (PXR_NS::UsdShadeInput::IsInput(_usdAttr)
+            || PXR_NS::UsdShadeOutput::IsOutput(_usdAttr)) {
+            const auto metaValue = getMetadata(UsdAttributeGeneric::nativeSdrTypeMetadata());
+            if (!metaValue.empty() && metaValue.isType<std::string>()) {
+                return metaValue.get<std::string>();
+            }
+        }
+    }
+#endif
     return usdAttributeType().GetType().GetTypeName();
 }
 
@@ -145,6 +177,9 @@ bool UsdAttributeHolder::set(const PXR_NS::VtValue& value, PXR_NS::UsdTimeCode t
         }
     }
 
+    AttributeEditRouterContext ctx(_usdAttr.GetPrim(), _usdAttr.GetName());
+
+    UsdUfe::InSetAttribute inSetAttr;
     return _usdAttr.Set(value, time);
 }
 
@@ -154,6 +189,24 @@ std::string UsdAttributeHolder::name() const
 {
     if (isValid()) {
         return _usdAttr.GetName().GetString();
+    } else {
+        return std::string();
+    }
+}
+
+std::string UsdAttributeHolder::displayName() const
+{
+    if (isValid()) {
+        std::string dn = _usdAttr.GetDisplayName();
+        if (dn.empty()) {
+            static const std::string prefixesToRemove = "xformOp";
+            dn = _usdAttr.GetName().GetString();
+            if (PXR_NS::TfStringStartsWith(dn, prefixesToRemove)) {
+                dn = dn.substr(prefixesToRemove.size());
+            }
+            dn = prettifyName(dn);
+        }
+        return dn;
     } else {
         return std::string();
     }
@@ -383,6 +436,9 @@ Ufe::Value UsdAttributeHolder::getMetadata(const std::string& key) const
             }
 #endif
             return Ufe::Value(niceName);
+        } else if (key == SdfFieldKeys->ColorSpace) {
+            const auto csValue = _usdAttr.GetColorSpace();
+            return !csValue.IsEmpty() ? Ufe::Value(csValue.GetString()) : Ufe::Value();
         }
         PXR_NS::VtValue v;
         if (_usdAttr.GetMetadata(tok, &v)) {
@@ -410,9 +466,17 @@ Ufe::Value UsdAttributeHolder::getMetadata(const std::string& key) const
 
 bool UsdAttributeHolder::setMetadata(const std::string& key, const Ufe::Value& value)
 {
-    if (isValid())
+    if (isValid()) {
+        if (key == SdfFieldKeys->ColorSpace) {
+            if (!value.empty() && value.isType<std::string>()) {
+                const AttributeEditRouterContext ctx(_usdAttr.GetPrim(), _usdAttr.GetName());
+                _usdAttr.SetColorSpace(TfToken(value.get<std::string>()));
+                return true;
+            }
+            return false;
+        }
         return setUsdAttrMetadata(_usdAttr, key, value);
-    else {
+    } else {
         return false;
     }
 }
@@ -420,7 +484,11 @@ bool UsdAttributeHolder::setMetadata(const std::string& key, const Ufe::Value& v
 bool UsdAttributeHolder::clearMetadata(const std::string& key)
 {
     PXR_NAMESPACE_USING_DIRECTIVE
+    UsdUfe::InSetAttribute inSetAttr;
+
     if (isValid()) {
+        AttributeEditRouterContext ctx(_usdAttr.GetPrim(), _usdAttr.GetName());
+
         PXR_NS::TfToken tok(key);
         // Special cases for NodeGraphs:
         if (PXR_NS::UsdShadeNodeGraph(usdPrim())) {
@@ -431,9 +499,14 @@ bool UsdAttributeHolder::clearMetadata(const std::string& key)
             }
             return !hasMetadata(key);
         }
+
         // Special cases for known Ufe metadata keys.
         if (key == Ufe::Attribute::kLocked) {
             return _usdAttr.ClearMetadata(MayaUsdMetadata->Lock);
+        }
+
+        if (key == SdfFieldKeys->ColorSpace) {
+            return _usdAttr.ClearColorSpace();
         }
         return _usdAttr.ClearMetadata(tok);
     } else {
@@ -483,11 +556,68 @@ Ufe::AttributeEnumString::EnumValues UsdAttributeHolder::getEnumValues() const
 {
     Ufe::AttributeEnumString::EnumValues retVal;
     if (_usdAttr.IsValid()) {
-        auto attrDefn
-            = _usdAttr.GetPrim().GetPrimDefinition().GetSchemaAttributeSpec(_usdAttr.GetName());
-        if (attrDefn && attrDefn->HasAllowedTokens()) {
-            for (auto const& token : attrDefn->GetAllowedTokens()) {
-                retVal.push_back(token.GetString());
+        for (auto const& option : getEnums()) {
+            retVal.push_back(option.first);
+        }
+    }
+
+    return retVal;
+}
+
+UsdAttributeHolder::EnumOptions UsdAttributeHolder::getEnums() const
+{
+    UsdAttributeHolder::EnumOptions retVal;
+    if (_usdAttr.IsValid()) {
+        VtTokenArray allowedTokens;
+        if (_usdAttr.GetPrim().GetPrimDefinition().GetPropertyMetadata(
+                _usdAttr.GetName(), SdfFieldKeys->AllowedTokens, &allowedTokens)) {
+            for (auto const& token : allowedTokens) {
+                retVal.emplace_back(token.GetString(), "");
+            }
+        }
+        // We might have a propagated enum copied into the created NodeGraph port, resulting from
+        // connecting a shader enum property.
+        PXR_NS::UsdShadeNodeGraph ngPrim(_usdAttr.GetPrim());
+        if (ngPrim && UsdShadeInput::IsInput(_usdAttr)) {
+            const auto shaderInput = UsdShadeInput { _usdAttr };
+            const auto enumLabels = shaderInput.GetSdrMetadataByKey(TfToken("enum"));
+            const auto enumValues = shaderInput.GetSdrMetadataByKey(TfToken("enumvalues"));
+            const std::vector<std::string> allLabels = splitString(enumLabels, ", ");
+            std::vector<std::string>       allValues = splitString(enumValues, ", ");
+
+            if (!allValues.empty() && allValues.size() != allLabels.size()) {
+                // An array of vector2 values will produce twice the expected number of
+                // elements. We can fix that by regrouping them.
+                if (allValues.size() > allLabels.size()
+                    && allValues.size() % allLabels.size() == 0) {
+
+                    size_t                   stride = allValues.size() / allLabels.size();
+                    std::vector<std::string> rebuiltValues;
+                    std::string              currentValue;
+                    for (size_t i = 0; i < allValues.size(); ++i) {
+                        if (i % stride != 0) {
+                            currentValue += ",";
+                        }
+                        currentValue += allValues[i];
+                        if ((i + 1) % stride == 0) {
+                            rebuiltValues.push_back(currentValue);
+                            currentValue = "";
+                        }
+                    }
+                    allValues.swap(rebuiltValues);
+                } else {
+                    // Can not reconcile the size difference:
+                    allValues.clear();
+                }
+            }
+
+            const bool hasValues = allLabels.size() == allValues.size();
+            for (size_t i = 0; i < allLabels.size(); ++i) {
+                if (hasValues) {
+                    retVal.emplace_back(allLabels[i], allValues[i]);
+                } else {
+                    retVal.emplace_back(allLabels[i], "");
+                }
             }
         }
     }

@@ -1,2 +1,5 @@
-add_subdirectory(mayaUsd)
-add_subdirectory(usd)
+add_subdirectory(usdUfe)
+if (BUILD_MAYAUSD_LIBRARY)
+    add_subdirectory(mayaUsd)
+    add_subdirectory(usd)
+endif()

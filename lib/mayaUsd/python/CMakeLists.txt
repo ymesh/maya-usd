@@ -31,8 +31,9 @@ target_sources(${PYTHON_TARGET_NAME}
         wrapBlockSceneModificationContext.cpp
         wrapColorSpace.cpp
         wrapConverter.cpp
+        wrapCopyLayerPrims.cpp
         wrapDiagnosticDelegate.cpp
-        wrapEditRouter.cpp
+        wrapLoadRules.cpp
         wrapMeshWriteUtils.cpp
         wrapOpUndoItem.cpp
         wrapQuery.cpp

@@ -28,7 +28,7 @@
 
 namespace MayaUsdUtils {
 
-PXR_NAMESPACE_USING_DIRECTIVE;
+PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 
@@ -394,7 +394,7 @@ bool isDataAtPathsModified(
     }
 
     if (src.path.ContainsPropertyElements()) {
-        const UsdProperty srcProp = srcPrim.GetPropertyAtPath(src.path);
+        const UsdProperty srcProp = srcPrim.GetPropertyAtPath(src.path.StripAllVariantSelections());
 
         // Note: we only return early for transform property if the local transform has
         //       not changed. The reason is that when the transform has changed, we *do*
@@ -414,7 +414,7 @@ bool isDataAtPathsModified(
             }
         }
 
-        const UsdProperty dstProp = dstPrim.GetPropertyAtPath(dst.path);
+        const UsdProperty dstProp = dstPrim.GetPropertyAtPath(dst.path.StripAllVariantSelections());
         if (!srcProp.IsValid() || !dstProp.IsValid()) {
             printInvalidField(ctx, src, "prop", srcProp.IsValid(), dstProp.IsValid());
             return srcProp.IsValid() != dstProp.IsValid();
@@ -456,16 +456,20 @@ bool isDataAtPathsModified(
 //----------------------------------------------------------------------------------------------------------------------
 /// Decides if we should merge a value.
 bool shouldMergeValue(
-    const MergeContext&       ctx,
-    SdfSpecType               specType,
-    const TfToken&            field,
-    const SdfLayerHandle&     srcLayer,
-    const SdfPath&            srcPath,
-    bool                      fieldInSrc,
-    const SdfLayerHandle&     dstLayer,
-    const SdfPath&            dstPath,
-    bool                      fieldInDst,
+    const MergeContext&   ctx,
+    SdfSpecType           specType,
+    const TfToken&        field,
+    const SdfLayerHandle& srcLayer,
+    const SdfPath&        srcPath,
+    bool                  fieldInSrc,
+    const SdfLayerHandle& dstLayer,
+    const SdfPath&        dstPath,
+    bool                  fieldInDst,
+#if PXR_VERSION > 2311
+    std::optional<VtValue>* valueToCopy)
+#else
     boost::optional<VtValue>* valueToCopy)
+#endif
 {
     const bool isCopiable = SdfShouldCopyValue(
         ctx.srcRootPath,
@@ -866,16 +870,21 @@ bool filterChildren(
 //----------------------------------------------------------------------------------------------------------------------
 /// Decides if we should merge children.
 bool shouldMergeChildren(
-    const MergeContext&       ctx,
-    const TfToken&            childrenField,
-    const SdfLayerHandle&     srcLayer,
-    const SdfPath&            srcPath,
-    bool                      fieldInSrc,
-    const SdfLayerHandle&     dstLayer,
-    const SdfPath&            dstPath,
-    bool                      fieldInDst,
+    const MergeContext&   ctx,
+    const TfToken&        childrenField,
+    const SdfLayerHandle& srcLayer,
+    const SdfPath&        srcPath,
+    bool                  fieldInSrc,
+    const SdfLayerHandle& dstLayer,
+    const SdfPath&        dstPath,
+    bool                  fieldInDst,
+#if PXR_VERSION > 2311
+    std::optional<VtValue>* srcChildren,
+    std::optional<VtValue>* dstChildren)
+#else
     boost::optional<VtValue>* srcChildren,
     boost::optional<VtValue>* dstChildren)
+#endif
 {
     const bool shouldMerge = SdfShouldCopyChildren(
         ctx.srcRootPath,
@@ -932,15 +941,6 @@ bool mergeDiffPrims(
     auto copyValue = makeFuncWithContext(ctx, shouldMergeValue);
     auto copyChildren = makeFuncWithContext(ctx, shouldMergeChildren);
     return SdfCopySpec(srcLayer, srcPath, dstLayer, dstPath, copyValue, copyChildren);
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-/// Create any missing parents as "over". Parents may be missing because we are targeting a
-/// different layer than where the destination prim is authored. The SdfCopySpec function does not
-/// automatically create the missing parent, unlike other functions like UsdStage::CreatePrim.
-void createMissingParents(const SdfLayerRefPtr& dstLayer, const SdfPath& dstPath)
-{
-    SdfJustCreatePrimInLayer(dstLayer, dstPath.GetParentPath());
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -1022,7 +1022,11 @@ bool mergePrims(
 
     UsdEditContext editCtx(dstStage, target);
 
-    createMissingParents(dstLayer, augmentedDstPath);
+    /// Create any missing prim in the dst hierarchy as "over". Prims may be missing because we are
+    /// targeting a different layer than where the destination prim is authored. The SdfCopySpec
+    /// function does not automatically create the missing parent, unlike other functions like
+    /// UsdStage::CreatePrim.
+    SdfJustCreatePrimInLayer(dstLayer, augmentedDstPath);
 
     if (options.ignoreUpperLayerOpinions) {
         auto           tempStage = UsdStage::CreateInMemory();

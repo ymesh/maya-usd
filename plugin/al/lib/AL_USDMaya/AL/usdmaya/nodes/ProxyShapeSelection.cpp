@@ -31,14 +31,8 @@ namespace usdmaya {
 namespace nodes {
 namespace {
 
-const int _proxyShapeSelectionProfilerCategory = MProfiler::addCategory(
-#if MAYA_API_VERSION >= 20190000
-    "AL_usdmaya_ProxyShape_selection",
-    "AL_usdmaya_ProxyShape_selection"
-#else
-    "AL_usdmaya_ProxyShape_selection"
-#endif
-);
+const int _proxyShapeSelectionProfilerCategory
+    = MProfiler::addCategory("AL_usdmaya_ProxyShape_selection", "AL_usdmaya_ProxyShape_selection");
 
 typedef void (
     *proxy_function_prototype)(void* userData, AL::usdmaya::nodes::ProxyShape* proxyInstance);
@@ -141,14 +135,12 @@ inline bool ProxyShape::TransformReference::checkRef(const TransformReason reaso
             m_selected,
             m_refCount,
             m_required);
-    uint32_t sl = m_selected;
     uint32_t rc = m_refCount;
     uint32_t rq = m_required;
 
     switch (reason) {
     case kSelection:
         assert(m_selected);
-        --sl;
         --m_selectedTemp;
         break;
     case kRequested:

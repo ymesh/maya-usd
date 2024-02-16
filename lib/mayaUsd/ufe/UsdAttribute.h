@@ -17,7 +17,7 @@
 
 #include "UsdAttributeHolder.h"
 
-#include <mayaUsd/ufe/UsdSceneItem.h>
+#include <usdUfe/ufe/UsdSceneItem.h>
 
 #include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usd/attribute.h>
@@ -29,10 +29,18 @@
 #endif
 
 // Ufe::Attribute overrides (minus the type method)
+#ifdef UFE_HAS_DISPLAY_NAME
+#define UFE_V5_ATTRIBUTE_OVERRIDES \
+    std::string displayName() const override { return UsdAttribute::_displayName(); }
+#else
+#define UFE_V5_ATTRIBUTE_OVERRIDES
+#endif
+
 #ifdef UFE_V4_FEATURES_AVAILABLE
 #define UFE_ATTRIBUTE_OVERRIDES                                                               \
     bool        hasValue() const override { return UsdAttribute::_hasValue(); }               \
     std::string name() const override { return UsdAttribute::_name(); }                       \
+    UFE_V5_ATTRIBUTE_OVERRIDES                                                                \
     std::string documentation() const override { return UsdAttribute::_documentation(); }     \
     std::string string() const override                                                       \
     {                                                                                         \
@@ -106,7 +114,7 @@ namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
 //! \brief Internal helper class to implement the pure virtual methods from Ufe::Attribute.
-class UsdAttribute
+class MAYAUSD_CORE_PUBLIC UsdAttribute
 {
 public:
     UsdAttribute(UsdAttributeHolder::UPtr&& attrHolder);
@@ -124,6 +132,7 @@ public:
 #ifdef UFE_V4_FEATURES_AVAILABLE
     bool        _hasValue() const;
     std::string _name() const;
+    std::string _displayName() const;
     std::string _documentation() const;
     std::string _string(const Ufe::SceneItem::Ptr& item) const;
 
@@ -136,6 +145,7 @@ public:
     // Ufe::Attribute override methods that we've mimic'd here.
     bool                      hasValue() const;
     std::string               name() const;
+    std::string               displayName() const;
     std::string               documentation() const;
     std::string               string(const Ufe::SceneItem::Ptr& item) const;
 #ifdef UFE_V3_FEATURES_AVAILABLE
@@ -182,17 +192,17 @@ public:
 
     // Ufe::AttributeGeneric overrides
     std::string nativeType() const override;
+
+    // Metadata used when creating a dynamic attribute on NodeGraph/Material boundaries that
+    // remembers the native type of a generic shader property.
+    static const std::string& nativeSdrTypeMetadata();
 }; // UsdAttributeGeneric
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
 //! \brief Interface for USD token attributes.
 class UsdAttributeFilename
     : public Ufe::AttributeFilename
-#ifdef UFE_V4_FEATURES_AVAILABLE
     , public UsdAttribute
-#else
-    , private UsdAttribute
-#endif
 {
 public:
     typedef std::shared_ptr<UsdAttributeFilename> Ptr;
@@ -412,7 +422,7 @@ public:
     create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder);
 }; // UsdAttributeColorFloat3
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
 //! \brief Interface for USD RGB color (float) attributes.
 class UsdAttributeColorFloat4 : public TypedUsdAttribute<Ufe::Color4f>
 {
@@ -440,7 +450,7 @@ public:
     create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder);
 }; // UsdAttributeInt3
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
 //! \brief Interface for USD Vector2f (float) attributes.
 class UsdAttributeFloat2 : public TypedUsdAttribute<Ufe::Vector2f>
 {
@@ -468,7 +478,7 @@ public:
     create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder);
 }; // UsdAttributeFloat3
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
 //! \brief Interface for USD Vector4f (float) attributes.
 class UsdAttributeFloat4 : public TypedUsdAttribute<Ufe::Vector4f>
 {
@@ -496,7 +506,7 @@ public:
     create(const UsdSceneItem::Ptr& item, UsdAttributeHolder::UPtr&& attrHolder);
 }; // UsdAttributeDouble3
 
-#if (UFE_PREVIEW_VERSION_NUM >= 4015)
+#ifdef UFE_V4_FEATURES_AVAILABLE
 //! \brief Interface for USD Matrix3d (double) attributes.
 class UsdAttributeMatrix3d : public TypedUsdAttribute<Ufe::Matrix3d>
 {

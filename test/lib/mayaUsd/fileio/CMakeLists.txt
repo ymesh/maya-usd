@@ -1,4 +1,6 @@
 set(TEST_SCRIPT_FILES
+    testComponentTags.py
+    testCopyLayerPrims.py
     testPrimReader.py
     testPrimWriter.py
     testExportChaser.py
@@ -11,20 +13,18 @@ set(TEST_SCRIPT_FILES
     # will be skipped if not found (probably because BUILD_PXR_PLUGIN is off).
     testSchemaApiAdaptor.py
 )
-if (MAYA_APP_VERSION VERSION_GREATER_EQUAL 2022)
-    list(APPEND TEST_SCRIPT_FILES
-        testComponentTags.py
-    )
-endif()
 
 if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
     list(APPEND TEST_SCRIPT_FILES
         testEditAsMaya.py
+        testEditAsMayaBBox.py
+        testEditAsMayaDefaultValue.py
         testMergeToUsd.py
         testDuplicateAs.py
         testPrimUpdater.py
         testCacheToUsd.py
         testMayaUsdOptions.py
+        testSwitchMayaReference.py
     )
 endif()
 
@@ -35,7 +35,7 @@ if(UFE_TRIE_NODE_HAS_CHILDREN_COMPONENTS_ACCESSOR)
 endif()
 
 # requires MaterialX support
-if (MAYA_APP_VERSION VERSION_GREATER 2022 AND PXR_VERSION VERSION_GREATER 2102)
+if (MAYA_APP_VERSION VERSION_GREATER 2022)
     list(APPEND TEST_SCRIPT_FILES
         testShaderReader.py
         testShaderWriter.py

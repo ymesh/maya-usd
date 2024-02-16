@@ -24,6 +24,7 @@ from mayaUsdLibRegisterStrings import getMayaUsdLibString
 import mayaUsdUtils
 import mayaUsdMayaReferenceUtils as mayaRefUtils
 import mayaUsdOptions
+import mayaUsd_USDRootFileRelative as murel
 
 from pxr import Sdf, Tf
 
@@ -46,61 +47,6 @@ _mayaRefDagPath = None
 
 # Pulled Maya reference prim.
 _pulledMayaRefPrim = None
-
-_compositionArcLabels = [getMayaUsdLibString('kMenuPayload'), getMayaUsdLibString('kMenuReference')]
-_compositionArcValues = [                         'Payload',                           'Reference' ]
-
-_listEditedAsLabels = [getMayaUsdLibString('kMenuAppend'), getMayaUsdLibString('kMenuPrepend')]
-_listEditedAsValues = [                         'Append',                           'Prepend' ]
-
-
-def _getMenuGrpValue(menuName, values, defaultIndex = 0):
-    """
-    Retrieves the currently selected values from a menu.
-    """
-    # Note: option menu selection index start at 1, so we subtract 1.
-    menuIndex = cmds.optionMenuGrp(menuName, query=True, select=True) - 1
-    if 0 <= menuIndex < len(values):
-        return values[menuIndex]
-    else:
-        return values[defaultIndex]
-
-def _getMenuValue(menuName, values, defaultIndex = 0):
-    """
-    Retrieves the currently selected values from a menu.
-    """
-    # Note: option menu selection index start at 1, so we subtract 1.
-    menuIndex = cmds.optionMenu(menuName, query=True, select=True) - 1
-    if 0 <= menuIndex < len(values):
-        return values[menuIndex]
-    else:
-        return values[defaultIndex]
-
-
-def _getMenuIndex(values, current, defaultIndex = 1):
-    """
-    Retrieves the menu index corresponding to the current value selected amongst values.
-    If the value is invalid, returns the defaultIndex.
-    """
-    try:
-        # Note: menu index is 1-based.
-        return values.index(current) + 1
-    except:
-        return defaultIndex
-
-
-def compositionArcChanged(selectedItem):
-    """
-    Reacts to the composition arc type being selected by the user.
-    """
-    pass
-
-
-def listEditChanged(selectedItem):
-    """
-    Reacts to the list edited UI being changed by the user.
-    """
-    pass
 
 
 def variantSetNameChanged(selectedItem):
@@ -183,18 +129,7 @@ def cacheFileUsdHierarchyOptions(topForm):
                                  l=getMayaUsdLibString('kCacheFileWillAppear'))
         cmds.textField(text=str(_pulledMayaRefPrim.GetParent().GetPath()), editable=False)
 
-    with mayaRefUtils.SetParentContext(cmds.rowLayout(numberOfColumns=2)):
-        cmds.optionMenuGrp('compositionArcTypeMenu',
-                           label=getMayaUsdLibString('kOptionAsUSDReference'),
-                           cc=compositionArcChanged,
-                           annotation=getMayaUsdLibString('kOptionAsUSDReferenceToolTip'))
-        for label in _compositionArcLabels:
-            cmds.menuItem(label=label)
-        cmds.optionMenu('listEditedAsMenu',
-                        label=getMayaUsdLibString('kOptionListEditedAs'),
-                        cc=listEditChanged)
-        for label in _listEditedAsLabels:
-            cmds.menuItem(label=label)
+    mayaRefUtils.createUsdRefOrPayloadUI()
 
     variantRb = cmds.radioButtonGrp('variantRadioButton',
                                     nrb=1,
@@ -261,13 +196,16 @@ def fileOptionsTabPage(tabLayout):
 
     optBoxMarginWidth = mel.eval('global int $gOptionBoxTemplateDescriptionMarginWidth; $gOptionBoxTemplateDescriptionMarginWidth += 0')
     cmds.setParent(topForm)
+    
     cmds.frameLayout(label=getMayaUsdLibString("kMayaRefDescription"), mw=optBoxMarginWidth, height=160, collapsable=False)
     cmds.columnLayout()
     cmds.text(align="left", wordWrap=True, height=70, label=getMayaUsdLibString("kMayaRefCacheToUSDDescription1"))
     cmds.text(align="left", wordWrap=True, height=50, label=getMayaUsdLibString("kMayaRefCacheToUSDDescription2"))
-
+   
     cmds.setParent(topForm)
     cmds.frameLayout(label=getMayaUsdLibString("kCacheMayaRefOptions"))
+
+    murel.usdFileRelativeToEditTargetLayer.uiCreateFields(True)
 
     # USD file option controls will be parented under this layout.
     # resultCallback not called on "post", is therefore an empty string.
@@ -314,6 +252,8 @@ def cacheInitUi(parent, filterType):
     Fills the cache-to-USD UI.
     Called by the fileDialog command via the MEL mayaUsdCacheMayaReference_cacheInitUi function.
     """
+    murel.usdFileRelativeToEditTargetLayer.uiInit(parent, filterType)
+
     optionsDict = cacheToUsd.loadCacheCreationOptions()
 
     cmds.setParent(parent)
@@ -322,11 +262,9 @@ def cacheInitUi(parent, filterType):
     # variant is the default, otherwise all variant options are disabled.
     mayaRefPrimParent = _pulledMayaRefPrim.GetParent()
 
-    menuIndex = _getMenuIndex(_compositionArcValues, optionsDict['rn_payloadOrReference'])
-    cmds.optionMenuGrp('compositionArcTypeMenu', edit=True, select=menuIndex)
-
-    menuIndex = _getMenuIndex(_listEditedAsValues, optionsDict['rn_listEditType'])
-    cmds.optionMenu('listEditedAsMenu', edit=True, select=menuIndex)
+    mayaRefUtils.initUsdRefOrPayloadUI({
+        mayaRefUtils.compositionArcKey: optionsDict['rn_payloadOrReference'],
+        mayaRefUtils.listEditTypeKey: optionsDict['rn_listEditType']})
 
     if mayaRefPrimParent.HasVariantSets():
         # Define in variant is the default.
@@ -374,13 +312,20 @@ def cacheCommitUi(parent, selectedFile):
     """
     # Read data to set up cache.
 
+    murel.usdFileRelativeToEditTargetLayer.uiCommit(parent, selectedFile)
+
+    optionVarName = "mayaUsd_MakePathRelativeToEditTargetLayer"
+    requireRelative = cmds.optionVar(exists=optionVarName) and cmds.optionVar(query=optionVarName)
+
     # The following call will set _cacheExportOptions.  Initial settings not
     # accessed on "query", is therefore an empty string.
     mel.eval('mayaUsdTranslatorExport("fileOptionsScroll", "query={exportOpts}", "", "mayaUsdCacheMayaReference_setCacheOptions")'.format(exportOpts=kTranslatorExportOptions))
 
     primName = cmds.textFieldGrp('primNameText', query=True, text=True)
-    payloadOrReference = _getMenuGrpValue('compositionArcTypeMenu', _compositionArcValues)
-    listEditType = _getMenuValue('listEditedAsMenu', _listEditedAsValues)
+    
+    values = mayaRefUtils.commitUsdRefOrPayloadUI()
+    compositionArc = values[mayaRefUtils.compositionArcKey]
+    listEditType = values[mayaRefUtils.listEditTypeKey]
     
     defineInVariant = cmds.radioButtonGrp('variantRadioButton', query=True, select=True)
     if defineInVariant:
@@ -393,18 +338,25 @@ def cacheCommitUi(parent, selectedFile):
         variantSetName = None
 
     userArgs = cacheToUsd.createCacheCreationOptions(
-        getCacheExportOptions(), selectedFile, primName, payloadOrReference,
-        listEditType, variantSetName, variantName)
+        getCacheExportOptions(), selectedFile, primName, compositionArc,
+        listEditType, variantSetName, variantName, requireRelative)
 
     cacheToUsd.saveCacheCreationOptions(userArgs)
     mayaUsdUtils.saveLastUsedUSDDialogFileFilter(mayaUsdUtils.getUserSelectedUSDDialogFileFilter())
 
-
-    # Call push.
-    if not mayaUsd.lib.PrimUpdaterManager.mergeToUsd(_mayaRefDagPath, userArgs):
-        errorMsgFormat = getMayaUsdLibString('kErrorCacheToUsdFailed')
-        errorMsg = cmds.format(errorMsgFormat, stringArg=(_mayaRefDagPath))
-        cmds.error(errorMsg)
+    # Call merge-to-USD.
+    #
+    # Note: the undo item are captured in the undo item list below and then
+    #       thrown away because during the merge-to-USD operation, the Maya
+    #       reference is unloaded which unconditionally flushes the undo queue.
+    #       This prevents undoing back, so there is no point trying to create
+    #       an undo in the Maya undo queue. We still need to capture the undo
+    #       items to avoid leaving them behind.
+    with mayaUsd.lib.OpUndoItemList():
+        if not mayaUsd.lib.PrimUpdaterManager.mergeToUsd(_mayaRefDagPath, userArgs):
+            errorMsgFormat = getMayaUsdLibString('kErrorCacheToUsdFailed')
+            errorMsg = cmds.format(errorMsgFormat, stringArg=(_mayaRefDagPath))
+            cmds.error(errorMsg)
 
 
 def fileTypeChangedUi(parent, fileType):
@@ -431,6 +383,9 @@ def cacheDialog(dagPath, pulledMayaRefPrim, _):
     
     _mayaRefDagPath = dagPath
     _pulledMayaRefPrim = pulledMayaRefPrim
+
+    layerDirName = mayaUsdUtils.getCurrentTargetLayerDir(pulledMayaRefPrim)
+    murel.usdFileRelativeToEditTargetLayer.setRelativeFilePathRoot(layerDirName)
 
     ok = getMayaUsdLibString('kCacheMayaRefCache')
     fileFilter = mayaUsdUtils.getUSDDialogFileFilters(False)

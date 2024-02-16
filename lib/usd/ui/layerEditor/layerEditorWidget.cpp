@@ -31,7 +31,13 @@
 
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QTimer>
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtGui/QActionGroup>
+#else
 #include <QtWidgets/QActionGroup>
+#endif
+
 #include <QtWidgets/QGraphicsOpacityEffect>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QMainWindow>
@@ -47,70 +53,6 @@ PXR_NAMESPACE_USING_DIRECTIVE
 namespace {
 
 using namespace UsdLayerEditor;
-
-// returns image_100.png" when you pass "image",
-// using the DPI setting and also returns always 100 on mac, because Qt doesn't
-// properly support high dpi with style sheets
-QString getDPIPixmapName(QString baseName)
-{
-#ifdef Q_OS_DARWIN
-    return baseName + "_100.png";
-#else
-    const auto scale = utils->dpiScale();
-    if (scale >= 2.0)
-        return baseName + "_200.png";
-    else if (scale >= 1.5)
-        return baseName + "_150.png";
-    return baseName + "_100.png";
-#endif
-}
-
-// setup a push button with DPI-appropriate regular, hover and pressed png in the
-// autodesk human interface guideline style
-static void setupButtonWithHIGBitmaps(QPushButton* button, const QString& baseName)
-{
-    button->setFlat(true);
-
-    // regular size: 16px, pressed:24px
-    // therefore, border is 4
-    int     padding = DPIScale(4);
-    QString cssTemplate(R"CSS(
-    QPushButton {
-        padding : %1px;
-        background-image: url(%2);
-        background-position: center center;
-        background-repeat: no-repeat;
-        border: 0px;
-        background-origin: content;
-        }
-    QPushButton::hover {
-            background-image: url(%3);
-        }
-    QPushButton::pressed {
-        background-image: url(%4);
-        border: 0px;
-        padding: 0px;
-        background-origin: content;
-        })CSS");
-
-    QString css = cssTemplate.arg(padding)
-                      .arg(getDPIPixmapName(baseName))
-                      .arg(getDPIPixmapName(baseName + "_hover"))
-                      .arg(getDPIPixmapName(baseName + "_pressed"));
-
-    button->setStyleSheet(css);
-
-    // overkill, but used to generate the grayed out version
-    auto effect = new QGraphicsOpacityEffect(button);
-    button->setGraphicsEffect(effect);
-}
-
-void disableHIGButton(QPushButton* button, bool disable = true)
-{
-    button->setDisabled(disable);
-    auto effect = dynamic_cast<QGraphicsOpacityEffect*>(button->graphicsEffect());
-    effect->setOpacity(disable ? 0.4 : 1.0);
-}
 
 // create the default menus on the parent QMainWindow
 void setupDefaultMenu(SessionState* in_sessionState, QMainWindow* in_parent)
@@ -136,59 +78,6 @@ void setupDefaultMenu(SessionState* in_sessionState, QMainWindow* in_parent)
             action, &QAction::toggled, in_sessionState, &SessionState::setAutoHideSessionLayer);
         action->setCheckable(true);
         action->setChecked(in_sessionState->autoHideSessionLayer());
-
-        auto usdSaveMenu = optionMenu->addMenu(
-            StringResources::getAsQString(StringResources::kUsdSaveFileFormat));
-
-        // Add the save confirm existing file save checkbox
-        static const MString kConfirmExistingFileSave
-            = MayaUsdOptionVars->ConfirmExistingFileSave.GetText();
-        auto confirmExistingFileSaveAct = optionMenu->addAction(
-            StringResources::getAsQString(StringResources::kConfirmExistFileSave));
-
-        confirmExistingFileSaveAct->setCheckable(true);
-
-        QObject::connect(confirmExistingFileSaveAct, &QAction::toggled, in_parent, [](bool enable) {
-            MGlobal::setOptionVarValue(kConfirmExistingFileSave, enable);
-        });
-
-        if (MGlobal::optionVarExists(kConfirmExistingFileSave)) {
-            confirmExistingFileSaveAct->setChecked(
-                MGlobal::optionVarIntValue(kConfirmExistingFileSave) != 0);
-        } else {
-            confirmExistingFileSaveAct->setChecked(true);
-        }
-
-        auto formatGroup = new QActionGroup(usdSaveMenu);
-        formatGroup->setExclusive(true);
-        auto formatBinary
-            = formatGroup->addAction(StringResources::getAsQString(StringResources::kBinary));
-        auto formatAscii
-            = formatGroup->addAction(StringResources::getAsQString(StringResources::kAscii));
-        auto grpAnn = StringResources::getAsQString(StringResources::kSaveLayerUsdFileFormatAnn);
-        auto grpSbm = StringResources::getAsQString(StringResources::kSaveLayerUsdFileFormatSbm);
-        formatBinary->setCheckable(true);
-        formatBinary->setData(1);
-        formatBinary->setToolTip(grpAnn);
-        formatBinary->setStatusTip(grpSbm);
-        formatAscii->setCheckable(true);
-        formatAscii->setData(0);
-        formatAscii->setToolTip(grpAnn);
-        formatAscii->setStatusTip(grpSbm);
-        usdSaveMenu->addAction(formatBinary);
-        usdSaveMenu->addAction(formatAscii);
-        bool isBinary = true;
-
-        static const MString kSaveLayerFormatBinaryOption(
-            MayaUsdOptionVars->SaveLayerFormatArgBinaryOption.GetText());
-        if (MGlobal::optionVarExists(kSaveLayerFormatBinaryOption)) {
-            isBinary = MGlobal::optionVarIntValue(kSaveLayerFormatBinaryOption) != 0;
-        }
-        isBinary ? formatBinary->setChecked(true) : formatAscii->setChecked(true);
-        auto onFileFormatChanged = [=](QAction* action) {
-            MGlobal::setOptionVarValue(kSaveLayerFormatBinaryOption, action->data().toInt());
-        };
-        QObject::connect(formatGroup, &QActionGroup::triggered, in_parent, onFileFormatChanged);
 
         auto helpMenu = menuBar->addMenu(StringResources::getAsQString(StringResources::kHelp));
         helpMenu->addAction(
@@ -225,7 +114,7 @@ QLayout* LayerEditorWidget::setupLayout_toolbar()
               auto higButtonYOffset = DPIScale(4);
               auto higBtn = new QPushButton();
               higBtn->move(0, higButtonYOffset);
-              setupButtonWithHIGBitmaps(higBtn, iconName);
+              QtUtils::setupButtonWithHIGBitmaps(higBtn, iconName);
               higBtn->setFixedSize(buttonSize, buttonSize);
               higBtn->setToolTip(tooltip);
               toolbar->addWidget(higBtn, 0, buttonAlignment);
@@ -279,7 +168,7 @@ QLayout* LayerEditorWidget::setupLayout_toolbar()
         _saveButtonParent->setFixedSize(saveButtonSize);
         auto saveStageBtn = new QPushButton(_saveButtonParent);
         saveStageBtn->move(0, saveButtonYOffset);
-        setupButtonWithHIGBitmaps(saveStageBtn, ":/UsdLayerEditor/LE_save_all");
+        QtUtils::setupButtonWithHIGBitmaps(saveStageBtn, ":/UsdLayerEditor/LE_save_all");
         saveStageBtn->setFixedSize(buttonSize, buttonSize);
         saveStageBtn->setToolTip(
             StringResources::getAsQString(StringResources::kSaveAllEditsInLayerStack));
@@ -371,7 +260,7 @@ void LayerEditorWidget::updateButtons()
         int        count = static_cast<int>(layers.size());
         _buttons._dirtyCountBadge->updateCount(count);
         bool disable = count == 0;
-        disableHIGButton(_buttons._saveStageButton, disable);
+        QtUtils::disableHIGButton(_buttons._saveStageButton, disable);
     } else {
         _saveButtonParent->setVisible(false);
     }

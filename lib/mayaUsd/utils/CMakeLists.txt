@@ -6,18 +6,19 @@ target_sources(${PROJECT_NAME}
         blockSceneModificationContext.cpp
         colorSpace.cpp
         converter.cpp
+        copyLayerPrims.cpp
         customLayerData.cpp
         diagnosticDelegate.cpp
         dynamicAttribute.cpp
         editability.cpp
-        editRouter.cpp
+        json.cpp
         layerMuting.cpp
         layers.cpp
-        loadRules.cpp
-        loadRulesText.cpp
         loadRulesAttribute.cpp
+        mayaEditRouter.cpp
         query.cpp
         plugRegistryHelper.cpp
+        primActivation.cpp
         progressBarScope.cpp
         selectability.cpp
         stageCache.cpp
@@ -31,34 +32,30 @@ target_sources(${PROJECT_NAME}
         variants.cpp
 )
 
-if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
-    target_sources(${PROJECT_NAME}
-        PRIVATE
-            json.cpp
-            primActivation.cpp
-    )
-endif()
-
 set(HEADERS
     blockSceneModificationContext.h
     colorSpace.h
     customLayerData.h
     converter.h
+    copyLayerPrims.h
     diagnosticDelegate.h
     dynamicAttribute.h
     editability.h
-    editRouter.h
     hash.h
+    json.h
     layerMuting.h
     layers.h
     loadRules.h
+    mayaEditRouter.h
     query.h
     plugRegistryHelper.h
+    primActivation.h
     progressBarScope.h
     selectability.h
     stageCache.h
     targetLayer.h
     traverseLayer.h
+    trieVisitor.h
     undoHelperCommand.h
     util.h
     utilDictionary.h
@@ -66,12 +63,6 @@ set(HEADERS
     utilSerialization.h
     variants.h
 )
-if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
-    list(APPEND HEADERS
-        json.h
-        primActivation.h
-    )
-endif()
 
 set(PLUGINFO
     plugInfo.json)

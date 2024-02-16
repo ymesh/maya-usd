@@ -38,19 +38,11 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
+#include <ufe/ufe.h>
 
 #include <map>
 
-#if defined(WANT_UFE_BUILD)
-#include <ufe/ufe.h>
-
 UFE_NS_DEF { class Path; }
-
-constexpr int  MAYA_UFE_RUNTIME_ID = 1;
-constexpr char MAYA_UFE_SEPARATOR = '|';
-constexpr int  USD_UFE_RUNTIME_ID = 2;
-constexpr char USD_UFE_SEPARATOR = '/';
-#endif
 
 #include <mayaUsd/base/api.h>
 #include <mayaUsd/listeners/stageNoticeListener.h>
@@ -93,6 +85,8 @@ public:
     MAYAUSD_CORE_PUBLIC
     static MObject filePathAttr;
     MAYAUSD_CORE_PUBLIC
+    static MObject filePathRelativeAttr;
+    MAYAUSD_CORE_PUBLIC
     static MObject primPathAttr;
     MAYAUSD_CORE_PUBLIC
     static MObject excludePrimPathsAttr;
@@ -124,6 +118,12 @@ public:
     MAYAUSD_CORE_PUBLIC
     static MObject mutedLayersAttr;
 
+    // Change counter attributes
+    MAYAUSD_CORE_PUBLIC
+    static MObject updateCounterAttr;
+    MAYAUSD_CORE_PUBLIC
+    static MObject resyncCounterAttr;
+
     // Output attributes
     MAYAUSD_CORE_PUBLIC
     static MObject outTimeAttr;
@@ -152,6 +152,9 @@ public:
     static MayaUsdProxyShapeBase* GetShapeAtDagPath(const MDagPath& dagPath);
 
     MAYAUSD_CORE_PUBLIC
+    static int countProxyShapeInstances();
+
+    MAYAUSD_CORE_PUBLIC
     static void SetClosestPointDelegate(ClosestPointDelegate delegate);
 
     // UsdMayaUsdPrimProvider overrides:
@@ -169,6 +172,8 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     void postConstructor() override;
+    MAYAUSD_CORE_PUBLIC
+    bool getInternalValue(const MPlug&, MDataHandle&) override;
     MAYAUSD_CORE_PUBLIC
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
     MAYAUSD_CORE_PUBLIC
@@ -237,7 +242,6 @@ public:
         const MEvaluationNode& evaluationNode,
         PostEvaluationType     evalType) override;
 
-#if MAYA_API_VERSION >= 20210000
     MAYAUSD_CORE_PUBLIC
     void getCacheSetup(
         const MEvaluationNode&   evalNode,
@@ -247,7 +251,6 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     void configCache(const MEvaluationNode& evalNode, MCacheSchema& schema) const override;
-#endif
 
     MAYAUSD_CORE_PUBLIC
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& plugArray) override;
@@ -261,10 +264,8 @@ public:
     MDagPath parentTransform();
 
     // Is this required if there is parentTransform?
-#if defined(WANT_UFE_BUILD)
     MAYAUSD_CORE_PUBLIC
     Ufe::Path ufePath() const;
-#endif
 
     /// Returns whether the proxy shape allows subpaths within its
     /// hierarchy to be selected independently when using the Viewport 2.0
@@ -288,6 +289,9 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     bool isIncomingLayer(const std::string& layerIdentifier) const;
+
+    MAYAUSD_CORE_PUBLIC
+    void onAncestorPlugDirty(MPlug& plug);
 
 protected:
     MAYAUSD_CORE_PUBLIC
@@ -364,6 +368,9 @@ private:
     MStatus computeOutStageData(MDataBlock& dataBlock);
     MStatus computeOutStageCacheId(MDataBlock& dataBlock);
 
+    void clearAncestorCallbacks();
+    void updateAncestorCallbacks();
+
     void updateShareMode(
         const UsdStageRefPtr&    sharedUsdStage,
         const UsdStageRefPtr&    unsharedUsdStage,
@@ -392,11 +399,17 @@ private:
     void _OnLayerMutingChanged(const UsdNotice::LayerMutingChanged& notice);
     void _OnStageEditTargetChanged(const UsdNotice::StageEditTargetChanged& notice);
 
+    static void renameCallback(MObject& node, const MString& str, void* clientData);
+
     UsdMayaStageNoticeListener _stageNoticeListener;
 
     std::map<UsdTimeCode, MBoundingBox> _boundingBoxCache;
     size_t                              _excludePrimPathsVersion { 1 };
     size_t                              _UsdStageVersion { 1 };
+
+    // Notification counters:
+    MInt64 _UsdStageUpdateCounter { 1 };
+    MInt64 _UsdStageResyncCounter { 1 };
 
     MayaUsd::ProxyAccessor::Owner _usdAccessor;
 
@@ -416,11 +429,25 @@ private:
     SdfLayerRefPtr _unsharedStageSessionLayer;
     SdfLayerRefPtr _unsharedStageRootLayer;
 
+    // Current edit target for the stage. Kept in a dynamic attribute for save/load,
+    // transferred to this variable on the first compute. Afterward, when the edit
+    // target is changed, this gets updated via a notification listener.
+    SdfLayerRefPtr _targetLayer;
+
     // We need to keep track of unshared sublayers (otherwise they get removed)
     std::vector<SdfLayerRefPtr> _unsharedStageRootSublayers;
 
     // Keep track of the incoming layers
     std::set<std::string> _incomingLayers;
+
+    // Callbacks for listening to ancestor dirty messages.
+    // That includes the proxy shape itself.
+    std::vector<MCallbackId> _ancestorCallbacks;
+    MString                  _ancestorCallbacksPath;
+    bool                     _inAncestorCallback { false };
+
+    MCallbackId _preSaveCallbackId { 0 };
+    MCallbackId _renameCallbackId { 0 };
 
 public:
     // Counter for the number of times compute is re-entered

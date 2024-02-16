@@ -16,7 +16,13 @@
 
 #include "layerEditorCommand.h"
 
+#include <mayaUsd/ufe/Global.h>
+#include <mayaUsd/utils/layerMuting.h>
 #include <mayaUsd/utils/query.h>
+#include <mayaUsd/utils/stageCache.h>
+#include <mayaUsd/utils/utilFileSystem.h>
+
+#include <usdUfe/ufe/Utils.h>
 
 #include <pxr/base/tf/diagnostic.h>
 
@@ -24,14 +30,10 @@
 #include <maya/MArgParser.h>
 #include <maya/MStringArray.h>
 #include <maya/MSyntax.h>
-
-#if defined(WANT_UFE_BUILD)
-#include <mayaUsd/ufe/Global.h>
-#include <mayaUsd/ufe/Utils.h>
-
 #include <ufe/globalSelection.h>
 #include <ufe/observableSelection.h>
-#endif
+
+#include <ghc/filesystem.hpp>
 
 #include <cstddef>
 #include <string>
@@ -160,6 +162,7 @@ public:
             if (!validateAndReportIndex(layer, _index, (int)layer->GetNumSubLayerPaths())) {
                 return false;
             }
+            saveSelection();
             _subPath = layer->GetSubLayerPaths()[_index];
             holdOnPathIfDirty(layer, _subPath);
 
@@ -255,6 +258,7 @@ public:
             } else {
                 return false;
             }
+            restoreSelection();
         }
         return true;
     }
@@ -275,8 +279,38 @@ public:
         }
     }
 
+    void saveSelection()
+    {
+        // Make a copy of the global selection, to restore it on undo.
+        auto globalSn = Ufe::GlobalSelection::get();
+        _savedSn.replaceWith(*globalSn);
+        // Filter the global selection, removing items below our proxy shape.
+        // We know the path to the proxy shape has a single segment. Not
+        // using Ufe::PathString::path() for UFE v1 compatibility, which
+        // unfortunately reveals leading "world" path component implementation
+        // detail.
+        Ufe::Path path(
+            Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
+        globalSn->replaceWith(UsdUfe::removeDescendants(_savedSn, path));
+    }
+
+    void restoreSelection()
+    {
+        // Restore the saved selection to the global selection.  If a saved
+        // selection item started with the proxy shape path, re-create it.
+        // We know the path to the proxy shape has a single segment.  Not
+        // using Ufe::PathString::path() for UFE v1 compatibility, which
+        // unfortunately reveals leading "world" path component implementation
+        // detail.
+        Ufe::Path path(
+            Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
+        auto globalSn = Ufe::GlobalSelection::get();
+        globalSn->replaceWith(UsdUfe::recreateDescendants(_savedSn, path));
+    }
+
 protected:
-    std::string _editTargetPath;
+    std::string    _editTargetPath;
+    Ufe::Selection _savedSn;
 
     UsdStageWeakPtr getStage()
     {
@@ -333,6 +367,7 @@ public:
         _oldIndex = subPathIndex; // save for undo
 
         SdfLayerHandle newParentLayer;
+        std::string    newPath = _path;
 
         if (layer->GetIdentifier() == _newParentLayer) {
 
@@ -359,11 +394,41 @@ public:
                 return false;
             }
 
+            // See if the path should be reparented
+            ghc::filesystem::path filePath(_path);
+            bool                  needsRepathing = !SdfLayer::IsAnonymousLayerIdentifier(_path);
+            needsRepathing &= filePath.is_relative();
+            needsRepathing &= !layer->GetRealPath().empty();
+            needsRepathing &= !newParentLayer->GetRealPath().empty();
+
+            // Reparent the path if needed
+            if (needsRepathing) {
+                auto oldLayerDir = ghc::filesystem::path(layer->GetRealPath()).remove_filename();
+                auto newLayerDir
+                    = ghc::filesystem::path(newParentLayer->GetRealPath()).remove_filename();
+
+                std::string absolutePath
+                    = (oldLayerDir / filePath).lexically_normal().generic_string();
+                auto result = UsdMayaUtilFileSystem::makePathRelativeTo(
+                    absolutePath, newLayerDir.lexically_normal().generic_string());
+
+                if (result.second) {
+                    newPath = result.first;
+                } else {
+                    newPath = absolutePath;
+                    TF_WARN(
+                        "File name (%s) cannot be resolved as relative to the layer %s, "
+                        "using the absolute path.",
+                        absolutePath.c_str(),
+                        newParentLayer->GetIdentifier().c_str());
+                }
+            }
+
             // make sure the subpath is not already in the new parent layer.
             // Otherwise, the SdfLayer::InsertSubLayerPath() below will do nothing
             // and the subpath will be removed from it's current parent.
-            if (newParentLayer->GetSubLayerPaths().Find(_path) != size_t(-1)) {
-                std::string message = std::string("SubPath ") + _path
+            if (newParentLayer->GetSubLayerPaths().Find(newPath) != size_t(-1)) {
+                std::string message = std::string("SubPath ") + newPath
                     + std::string(" already exist in layer ") + newParentLayer->GetIdentifier();
                 MPxCommand::displayError(message.c_str());
                 return false;
@@ -376,7 +441,7 @@ public:
         // oterwise InsertSubLayerPath() will fail because the subLayer
         // already exists.
         layer->RemoveSubLayerPath(subPathIndex);
-        newParentLayer->InsertSubLayerPath(_path, _newIndex);
+        newParentLayer->InsertSubLayerPath(newPath, _newIndex);
 
         return true;
     }
@@ -483,11 +548,9 @@ public:
 
     bool doIt(SdfLayerHandle layer) override
     {
+        backupLayer(layer);
+
         // using reload will correctly reset the dirty bit
-        if (layer->IsDirty()) {
-            _backupLayer = SdfLayer::CreateAnonymous();
-            _backupLayer->TransferContent(layer);
-        }
         holdOntoSubLayers(layer);
 
         if (_cmdId == CmdId::kDiscardEdit) {
@@ -495,19 +558,105 @@ public:
         } else if (_cmdId == CmdId::kClearLayer) {
             layer->Clear();
         }
+
+        // Note: backup the edit targets after the layer is cleared because we use
+        //       the fact that a stage edit target is now invalid to decice to backup
+        //       that edit target.
+        backupEditTargets(layer);
+
         return true;
     }
+
     bool undoIt(SdfLayerHandle layer) override
     {
-        if (_backupLayer == nullptr) {
-            layer->Reload();
-        } else {
-            layer->TransferContent(_backupLayer);
-            _backupLayer = nullptr;
-            releaseSubLayers();
-        }
+        restoreLayer(layer);
+
+        // Note: restore edit targets after the layers are restored so that the backup
+        //       edit targets are now valid.
+        restoreEditTargets();
+
+        releaseSubLayers();
+
         return true;
     }
+
+private:
+    // Backup and restore dirty layers to support undo and redo.
+    void backupLayer(SdfLayerHandle layer)
+    {
+        if (!layer)
+            return;
+
+        if (layer->IsDirty()) {
+            _backupLayer = SdfLayer::CreateAnonymous();
+            _backupLayer->TransferContent(layer);
+        }
+    }
+
+    void restoreLayer(SdfLayerHandle layer)
+    {
+        if (!layer)
+            return;
+
+        if (_backupLayer) {
+            layer->TransferContent(_backupLayer);
+            _backupLayer = nullptr;
+        } else {
+            layer->Reload();
+        }
+    }
+
+    // Backup and restore edit targets of stages that were targeting the sub-layers
+    // of the cleared layer to support undo and redo.
+    void backupEditTargets(SdfLayerHandle layer)
+    {
+        _editTargetBackups.clear();
+
+        if (!layer)
+            return;
+
+        const UsdMayaStageCache::Caches& caches = UsdMayaStageCache::GetAllCaches();
+        for (const PXR_NS::UsdStageCache& cache : caches) {
+            const std::vector<UsdStageRefPtr> stages = cache.GetAllStages();
+            for (const PXR_NS::UsdStageRefPtr& stage : stages) {
+                if (!stage)
+                    continue;
+                const PXR_NS::UsdEditTarget target = stage->GetEditTarget();
+                // Note: this is the check that UsdStage::SetTargetLayer would do
+                //       which is how we would detect that the edit target is now
+                //       invalid. Unfortunately, there is no USD function to check
+                //       if an edit target is valid outside of trying to set it as
+                //       the edit target, but we would not want to set it. (Also,
+                //       knowing if the stage checks that the edit target is already
+                //       set to the same target before validating it is an implementation
+                //       detail that we would raher not rely on.)
+                if (stage->HasLocalLayer(target.GetLayer()))
+                    continue;
+                _editTargetBackups[stage] = target;
+
+                // Set a valid target. The only layer we can count on is the root
+                // layer, so set the target to that.
+                stage->SetEditTarget(stage->GetRootLayer());
+            }
+        }
+    }
+
+    void restoreEditTargets()
+    {
+        for (const auto& weakStageAndTarget : _editTargetBackups) {
+            const PXR_NS::UsdStageRefPtr stage = weakStageAndTarget.first;
+            if (!stage)
+                continue;
+
+            PXR_NS::UsdEditTarget target = weakStageAndTarget.second;
+            stage->SetEditTarget(target);
+        }
+    }
+
+    // Edit targets that were made invalid after the layer was cleared.
+    // The stages are kept with weak pointer to avoid forcing to stay valid.
+    using EditTargetBackups = std::map<PXR_NS::UsdStagePtr, PXR_NS::UsdEditTarget>;
+    EditTargetBackups _editTargetBackups;
 
     // we need to hold onto the layer if we dirty it
     PXR_NS::SdfLayerRefPtr _backupLayer;
@@ -554,10 +703,10 @@ public:
             restoreSelection();
         }
 
-        // we perfer not holding to pointers needlessly, but we need to hold on to the layer if we
-        // mute it otherwise usd will let go of it and its modifications, and any dirty children
-        // will also be lost
-        _mutedLayer = layer;
+        // We prefer not holding to pointers needlessly, but we need to hold on
+        // to the muted layer. OpenUSD let go of muted layers, so anonymous
+        // layers and any dirty children would be lost if not explicitly held on.
+        addMutedLayer(layer);
         return true;
     }
 
@@ -575,8 +724,9 @@ public:
             saveSelection();
             stage->MuteLayer(layer->GetIdentifier());
         }
-        // we can release the pointer
-        _mutedLayer = nullptr;
+
+        // We can release the now unmuted layers.
+        removeMutedLayer(layer);
         return true;
     }
 
@@ -593,7 +743,6 @@ private:
 
     void saveSelection()
     {
-#if defined(WANT_UFE_BUILD)
         // Make a copy of the global selection, to restore it on unmute.
         auto globalSn = Ufe::GlobalSelection::get();
         _savedSn.replaceWith(*globalSn);
@@ -604,13 +753,11 @@ private:
         // detail.
         Ufe::Path path(
             Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
-        globalSn->replaceWith(MayaUsd::ufe::removeDescendants(_savedSn, path));
-#endif
+        globalSn->replaceWith(UsdUfe::removeDescendants(_savedSn, path));
     }
 
     void restoreSelection()
     {
-#if defined(WANT_UFE_BUILD)
         // Restore the saved selection to the global selection.  If a saved
         // selection item started with the proxy shape path, re-create it.
         // We know the path to the proxy shape has a single segment.  Not
@@ -620,14 +767,10 @@ private:
         Ufe::Path path(
             Ufe::PathSegment("world" + _proxyShapePath, MayaUsd::ufe::getMayaRunTimeId(), '|'));
         auto globalSn = Ufe::GlobalSelection::get();
-        globalSn->replaceWith(MayaUsd::ufe::recreateDescendants(_savedSn, path));
-#endif
+        globalSn->replaceWith(UsdUfe::recreateDescendants(_savedSn, path));
     }
 
-#if defined(WANT_UFE_BUILD)
     Ufe::Selection _savedSn;
-#endif
-    PXR_NS::SdfLayerRefPtr _mutedLayer;
 };
 
 // We assume the indexes given to the command are the original indexes

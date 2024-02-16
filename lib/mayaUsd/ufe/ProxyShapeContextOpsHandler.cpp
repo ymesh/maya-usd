@@ -15,9 +15,10 @@
 //
 #include "ProxyShapeContextOpsHandler.h"
 
-#include <mayaUsd/ufe/UsdContextOpsHandler.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
+#include <mayaUsd/ufe/MayaUsdContextOpsHandler.h>
 #include <mayaUsd/ufe/Utils.h>
+
+#include <usdUfe/ufe/UsdSceneItem.h>
 
 #include <pxr/usd/usd/stage.h>
 
@@ -52,7 +53,7 @@ Ufe::ContextOps::Ptr ProxyShapeContextOpsHandler::contextOps(const Ufe::SceneIte
         PXR_NS::UsdStageWeakPtr stage = getStage(item->path());
         if (stage) {
             auto               usdItem = UsdSceneItem::create(item->path(), stage->GetPseudoRoot());
-            auto               usdContextOpsHandler = UsdContextOpsHandler::create();
+            auto               usdContextOpsHandler = MayaUsdContextOpsHandler::create();
             auto               cOps = usdContextOpsHandler->contextOps(usdItem);
             UsdContextOps::Ptr usdCOps = std::dynamic_pointer_cast<UsdContextOps>(cOps);
 

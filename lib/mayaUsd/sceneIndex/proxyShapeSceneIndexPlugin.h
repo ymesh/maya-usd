@@ -31,6 +31,9 @@
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usdImaging/usdImaging/stageSceneIndex.h>
 
+#include <maya/MMessage.h>
+#include <ufe/path.h>
+
 #include <memory>
 
 //////////////////////////////////////////////////////////////// MayaUsdProxyShapeSceneIndexPlugin
@@ -70,11 +73,13 @@ class MayaUsdProxyShapeSceneIndex : public HdSingleInputFilteringSceneIndexBase
 public:
     using ParentClass = HdSingleInputFilteringSceneIndexBase;
 
-    static MayaUsdProxyShapeSceneIndexRefPtr New(MayaUsdProxyShapeBase* proxyShape)
-    {
-        return TfCreateRefPtr(
-            new MayaUsdProxyShapeSceneIndex(UsdImagingStageSceneIndex::New(), proxyShape));
-    }
+    static MayaUsdProxyShapeSceneIndexRefPtr
+    New(MayaUsdProxyShapeBase*                 proxyShape,
+        const HdSceneIndexBaseRefPtr&          sceneIndexChainLastElement,
+        const UsdImagingStageSceneIndexRefPtr& usdImagingStageSceneIndex);
+
+    static Ufe::Path
+    InterpretRprimPath(const HdSceneIndexBaseRefPtr& sceneIndex, const SdfPath& path);
 
     // satisfying HdSceneIndexBase
     HdSceneIndexPrim GetPrim(const SdfPath& primPath) const override;
@@ -82,15 +87,20 @@ public:
     SdfPathVector GetChildPrimPaths(const SdfPath& primPath) const override;
 
     MayaUsdProxyShapeSceneIndex(
-        UsdImagingStageSceneIndexRefPtr inputSceneIndex,
+        HdSceneIndexBaseRefPtr          inputSceneIndex,
+        UsdImagingStageSceneIndexRefPtr usdImagingStageSceneIndex,
         MayaUsdProxyShapeBase*          proxyShape);
 
     virtual ~MayaUsdProxyShapeSceneIndex();
+
+    void UpdateTime();
 
 private:
     void ObjectsChanged(const MayaUsdProxyStageObjectsChangedNotice& notice);
 
     void StageSet(const MayaUsdProxyStageSetNotice& notice);
+
+    bool isProxyShapeValid();
 
     void Populate();
 
@@ -108,9 +118,12 @@ protected:
         const HdSceneIndexObserver::DirtiedPrimEntries& entries) override final;
 
 private:
+    static void onTimeChanged(void* data);
+
     UsdImagingStageSceneIndexRefPtr _usdImagingStageSceneIndex;
     MayaUsdProxyShapeBase*          _proxyShape { nullptr };
     std::atomic_bool                _populated { false };
+    MCallbackId                     _timeChangeCallbackId;
 };
 } // namespace MAYAUSD_NS_DEF
 

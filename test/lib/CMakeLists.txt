@@ -2,20 +2,15 @@
 set(TEST_SCRIPT_FILES
     testMayaUsdConverter.py
     testMayaUsdCreateStageCommands.py
-    testMayaUsdPythonImport.py
+    testMayaUsdDirtyScene.py
     testMayaUsdLayerEditorCommands.py
+    testMayaUsdProxyAccessor.py
     testMayaUsdCacheId.py
 )
 
-if (UFE_FOUND AND MAYA_APP_VERSION VERSION_GREATER 2020)
-    list(APPEND TEST_SCRIPT_FILES
-        testMayaUsdDirtyScene.py
-        testMayaUsdProxyAccessor.py
-    )
-endif()
-
 # Interactive Unit test scripts.
 set(INTERACTIVE_TEST_SCRIPT_FILES
+    testAttributeEditorTemplate.py
     testMayaUsdInteractiveLayerEditorCommands.py
 )
 
@@ -31,6 +26,21 @@ foreach(script ${TEST_SCRIPT_FILES})
     # Add a ctest label to these tests for easy filtering.
     set_property(TEST ${target} APPEND PROPERTY LABELS MayaUsd)
 endforeach()
+
+# The testMayaUsdPythonImport now checks that we can import both the USD Python bindings
+# and the MayaUSD Python bindings in a script node context. For this to be tested, we
+# need to point to the updated module file and explicitly ask Maya to block execution of
+# insecure scripts.
+mayaUsd_get_unittest_target(target testMayaUsdPythonImport.py)
+mayaUsd_add_test(${target}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    PYTHON_MODULE ${target}
+    MODULE_PATH ${CMAKE_INSTALL_PREFIX}
+    ENV
+        "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
+        "MAYA_SECURE_BATCH_ENABLE=1"
+)
+set_property(TEST ${target} APPEND PROPERTY LABELS MayaUsd)
 
 foreach(script ${INTERACTIVE_TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})
@@ -86,9 +96,6 @@ foreach(script ${TEST_PLUG_FILES})
 endforeach()
 
 # -----------------------------------------------------------------------------
-if (UFE_FOUND)
-    add_subdirectory(ufe)
-    add_subdirectory(mayaUsd)
-endif()
-
+add_subdirectory(ufe)
+add_subdirectory(mayaUsd)
 add_subdirectory(usd)

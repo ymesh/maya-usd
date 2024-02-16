@@ -16,12 +16,10 @@
 #pragma once
 
 #include <mayaUsd/base/api.h>
-#include <mayaUsd/ufe/UfeVersionCompat.h>
-#include <mayaUsd/ufe/UsdSceneItem.h>
 
-#ifdef UFE_V2_FEATURES_AVAILABLE
-#include <mayaUsd/undo/UsdUndoableItem.h>
-#endif
+#include <usdUfe/ufe/UfeVersionCompat.h>
+#include <usdUfe/ufe/UsdSceneItem.h>
+#include <usdUfe/undo/UsdUndoableItem.h>
 
 #include <pxr/usd/sdf/path.h>
 
@@ -32,7 +30,18 @@ namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
 //! \brief UsdUndoDuplicateCommand
-#if (UFE_PREVIEW_VERSION_NUM >= 4041)
+//!
+//! \details The USD duplicate command copies all opinions related the the USD prim
+//!          that are in the local layer stack of where the prim is first defined into
+//!          a single target layer, flattened.
+//!
+//!          This means that over opinions in the session layer and any layers in the
+//!          same local layer stack anchored at the root layer are duplicated.
+//!
+//!          It also means that opinion found in references and payloads are *not*
+//!          copied, but the references and payloads arcs are, so their opinions
+//!          are still taken into account.
+#ifdef UFE_V4_FEATURES_AVAILABLE
 class MAYAUSD_CORE_PUBLIC UsdUndoDuplicateCommand : public Ufe::SceneItemResultUndoableCommand
 #else
 class MAYAUSD_CORE_PUBLIC UsdUndoDuplicateCommand : public Ufe::UndoableCommand
@@ -54,22 +63,14 @@ public:
     static UsdUndoDuplicateCommand::Ptr create(const UsdSceneItem::Ptr& srcItem);
 
     UsdSceneItem::Ptr duplicatedItem() const;
-#if (UFE_PREVIEW_VERSION_NUM >= 4041)
-    Ufe::SceneItem::Ptr sceneItem() const override { return duplicatedItem(); }
-#endif
+    UFE_V4(Ufe::SceneItem::Ptr sceneItem() const override { return duplicatedItem(); })
 
-    UFE_V2(void execute() override;)
+    void execute() override;
     void undo() override;
     void redo() override;
 
 private:
-    UFE_V2(UsdUndoableItem _undoableItem;)
-
-#ifndef UFE_V2_FEATURES_AVAILABLE
-    bool duplicateUndo();
-    bool duplicateRedo();
-#endif
-
+    UsdUndoableItem _undoableItem;
     Ufe::Path       _ufeSrcPath;
     PXR_NS::SdfPath _usdDstPath;
 

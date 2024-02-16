@@ -20,45 +20,11 @@
 #include <mayaUsd/nodes/proxyShapeBase.h>
 
 #include <pxr/usd/usd/stage.h>
-#include <pxr/usd/usd/stageLoadRules.h>
 
 #include <maya/MApiNamespace.h>
+#include <maya/MObject.h>
 
 namespace MAYAUSD_NS_DEF {
-
-/*! \brief modify the stage load rules so that the rules governing fromPath are replicated for
- * destPath.
- */
-MAYAUSD_CORE_PUBLIC
-void duplicateLoadRules(
-    PXR_NS::UsdStage&      stage,
-    const PXR_NS::SdfPath& fromPath,
-    const PXR_NS::SdfPath& destPath);
-
-/*! \brief modify the stage load rules so that all rules governing the path are removed.
- */
-MAYAUSD_CORE_PUBLIC
-void removeRulesForPath(PXR_NS::UsdStage& stage, const PXR_NS::SdfPath& path);
-
-/*! \brief convert the stage load rules to a text format.
- */
-MAYAUSD_CORE_PUBLIC
-MString convertLoadRulesToText(const PXR_NS::UsdStage& stage);
-
-/*! \brief set the stage load rules from a text format.
- */
-MAYAUSD_CORE_PUBLIC
-void setLoadRulesFromText(PXR_NS::UsdStage& stage, const MString& text);
-
-/*! \brief convert the load rules to a text format.
- */
-MAYAUSD_CORE_PUBLIC
-MString convertLoadRulesToText(const PXR_NS::UsdStageLoadRules& rules);
-
-/*! \brief create load rules from a text format.
- */
-MAYAUSD_CORE_PUBLIC
-PXR_NS::UsdStageLoadRules createLoadRulesFromText(const MString& text);
 
 /*! \brief verify if there is a dynamic attribute on the object for load rules.
  */
@@ -77,6 +43,21 @@ MAYAUSD_CORE_PUBLIC
 MStatus copyLoadRulesFromAttribute(
     const PXR_NS::MayaUsdProxyShapeBase& proxyShape,
     PXR_NS::UsdStage&                    stage);
+
+/*! \brief get the load rules from data in a dynamic attribute on the object.
+ */
+MAYAUSD_CORE_PUBLIC
+MStatus getLoadRulesFromAttribute(const MObject& proxyObj, PXR_NS::UsdStageLoadRules& rules);
+
+/*! \brief set the load rules to load-all or unload-all in a dynamic attribute on the object.
+           Used to set the initial load rules when creating a proxy shape.
+ */
+MAYAUSD_CORE_PUBLIC
+MStatus
+setLoadRulesAttribute(const PXR_NS::MayaUsdProxyShapeBase& proxyShape, bool loadAllPayloads);
+
+MAYAUSD_CORE_PUBLIC
+MStatus setLoadRulesAttribute(const MObject& proxyObj, bool loadAllPayloads);
 
 } // namespace MAYAUSD_NS_DEF
 

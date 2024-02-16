@@ -38,7 +38,11 @@ class UsdMayaPrimWriterArgs
 {
 public:
     MAYAUSD_CORE_PUBLIC
-    UsdMayaPrimWriterArgs(const MDagPath& dagPath, const bool exportRefsAsInstanceable);
+    UsdMayaPrimWriterArgs(
+        const MDagPath&     dagPath,
+        const bool          exportRefsAsInstanceable,
+        const TfToken::Set& excludeExportTypes,
+        const std::string&  defaultPrim);
 
     /// \brief returns the MObject that should be exported.
     MAYAUSD_CORE_PUBLIC
@@ -64,8 +68,10 @@ public:
     /// \}
 
 private:
-    MDagPath _dagPath;
-    bool     _exportRefsAsInstanceable;
+    MDagPath     _dagPath;
+    bool         _exportRefsAsInstanceable;
+    TfToken::Set _excludeExportTypes;
+    std::string  _defaultPrim;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

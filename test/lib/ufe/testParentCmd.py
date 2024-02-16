@@ -21,10 +21,11 @@ import mayaUtils
 import testUtils
 from testUtils import assertVectorAlmostEqual, assertVectorNotAlmostEqual
 import usdUtils
+from usdUtils import filterUsdStr
 
 import mayaUsd.ufe
 
-from pxr import UsdGeom, Vt, Gf, Sdf
+from pxr import UsdGeom, Vt, Gf, Sdf, Usd
 
 from maya import cmds
 from maya import standalone
@@ -33,12 +34,6 @@ import ufe
 
 import os
 import unittest
-
-def filterUsdStr(usdSceneStr):
-    '''Remove empty lines and lines starting with pound character.'''
-    nonBlankLines = filter(None, [l.rstrip() for l in usdSceneStr.splitlines()])
-    finalLines = [l for l in nonBlankLines if not l.startswith('#')]
-    return '\n'.join(finalLines)
 
 def childrenNames(children):
     return [str(child.path().back()) for child in children]
@@ -279,6 +274,19 @@ class ParentCmdTestCase(unittest.TestCase):
 
         cylChildren = cylHier.children()
         self.assertEqual(len(cylChildren), 1)
+
+    def testParentRelativeLayer(self):
+        '''
+        Test that parenting in sub-layer that are loaded in relative mode works.
+        '''
+        usdFileName = testUtils.getTestScene('relativeSubLayer', 'root.usda')
+        shapeNode, stage = mayaUtils.createProxyFromFile(usdFileName)
+        self.assertEqual(len(stage.GetRootLayer().subLayerPaths), 1)
+        sublayer = Sdf.Layer.FindRelativeToLayer(stage.GetRootLayer(), stage.GetRootLayer().subLayerPaths[0])
+        with Usd.EditContext(stage, sublayer):
+            cmds.parent(shapeNode + ',/group/geo', shapeNode + ',/group/other')
+        movedCube = stage.GetPrimAtPath('/group/other/geo/cube')
+        self.assertTrue(movedCube)
 
     @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentAbsoluteSingleMatrixOp(self):
@@ -803,6 +811,51 @@ class ParentCmdTestCase(unittest.TestCase):
 
         checkParentDone()
 
+    @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 8, 'Requires parent command fix in Maya.')
+    def testParentToSelection(self):
+        '''
+        Test that the parent command with a single argument will parent to the selection.
+        '''
+        # Create scene items for the cube and the cylinder.
+        shapeSegment = mayaUtils.createUfePathSegment(
+            "|mayaUsdProxy1|mayaUsdProxyShape1")
+        
+        cylinderPath = ufe.Path(
+            [shapeSegment, usdUtils.createUfePathSegment("/cylinderXform")])
+        cylinderItem = ufe.Hierarchy.createItem(cylinderPath)
+
+        def verifyInitialSetup():
+            '''Verify that the cube is not a child of the cylinder.'''
+            cylHier = ufe.Hierarchy.hierarchy(cylinderItem)
+            cylChildren = cylHier.children()
+            self.assertEqual(len(cylChildren), 1)
+            self.assertNotIn("cubeXform", childrenNames(cylChildren))
+
+        verifyInitialSetup()
+
+        # Parent cube to cylinder by passing the cube but not the cylinder
+        # while the cylinder is selected.
+        cmds.select("|mayaUsdProxy1|mayaUsdProxyShape1,/cylinderXform")
+        cmds.parent("|mayaUsdProxy1|mayaUsdProxyShape1,/cubeXform")
+
+        def verifyCubeUnderCylinder():
+            '''Verify that the cube is under the cylinder.'''
+            cylHier = ufe.Hierarchy.hierarchy(cylinderItem)
+            cylChildren = cylHier.children()
+            self.assertEqual(len(cylChildren), 2)
+            self.assertIn("cubeXform", childrenNames(cylChildren))
+
+        # Confirm that the cube is now a child of the cylinder.
+        verifyCubeUnderCylinder()
+
+        # Undo: the cube is no longer a child of the cylinder.
+        cmds.undo()
+        verifyInitialSetup()
+
+        # Redo: the cube is again a child of the cylinder.
+        cmds.redo()
+        verifyCubeUnderCylinder()
+
     def testParentToProxyShape(self):
 
         # Load a file with a USD hierarchy at least 2-levels deep.
@@ -1048,6 +1101,60 @@ class ParentCmdTestCase(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             cmds.parent("|Tree_usd|Tree_usdShape,/TreeBase/trunk",
                         "|Tree_usd|Tree_usdShape,/TreeBase/leavesXform/leaves")
+
+    def testParentRestrictionDefaultPrim(self):
+        '''
+        Verify that a prim that is the default prim prevent
+        parenting that prim when not targeting the root layer.
+        '''
+        cmds.file(new=True, force=True)
+        testFile = testUtils.getTestScene('defaultPrimInSub', 'root.usda')
+        shapeNode, stage = mayaUtils.createProxyFromFile(testFile)
+
+        capsulePathStr = '|stage|stageShape,/Capsule1'
+
+        layer = Sdf.Layer.FindRelativeToLayer(stage.GetRootLayer(), stage.GetRootLayer().subLayerPaths[0])
+        self.assertIsNotNone(layer)
+        stage.SetEditTarget(layer)
+        self.assertEqual(stage.GetEditTarget().GetLayer(), layer)
+
+        x1 = stage.DefinePrim('/Xform1', 'Xform')
+        self.assertIsNotNone(x1)
+        x1PathStr = '|stage|stageShape,/Xform1'
+        
+        with self.assertRaises(RuntimeError):
+            cmds.parent(capsulePathStr, x1PathStr)
+
+    def testParentToStrongerLayer(self):
+        '''
+        Verify that parenting a prim to a prim defined in a lower layer
+        is permitted.
+        '''
+        cmds.file(new=True, force=True)
+
+        # Create an empty stage with a sub-layer
+        import mayaUsd_createStageWithNewLayer
+        proxyShapePathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(proxyShapePathStr).GetStage()
+        subLayer = usdUtils.addNewLayerToStage(stage)
+
+        # Create a xform in the sub-layer and a capsule in the root layer.
+        with Usd.EditContext(stage, subLayer):
+            subXFormName = '/SubXForm'
+            subXFormPrim = stage.DefinePrim(subXFormName, 'Xform')
+            self.assertTrue(subXFormPrim)
+
+        rootCapsuleName = '/RootCapsule'
+        rootCapsulePrim = stage.DefinePrim(rootCapsuleName, 'Capsule')
+        self.assertTrue(rootCapsulePrim)
+
+        subXFormUFEPath = proxyShapePathStr + "," + subXFormName
+        rootCapsuleUFEPath = proxyShapePathStr + "," + rootCapsuleName
+        
+        cmds.parent(rootCapsuleUFEPath, subXFormUFEPath)
+
+        newRootCapsuleUSDPath = subXFormName + rootCapsuleName
+        self.assertTrue(stage.GetPrimAtPath(newRootCapsuleUSDPath))
 
     @unittest.skipUnless(mayaUtils.mayaMajorVersion() >= 2023, 'Requires Maya fixes only available in Maya 2023 or greater.')
     def testParentShader(self):
@@ -1359,43 +1466,40 @@ class ParentCmdTestCase(unittest.TestCase):
             self.assertFalse(len(prim.GetStage().GetRootLayer().subLayerPaths)==0)
             layerId = prim.GetStage().GetRootLayer().subLayerPaths[0]
             layer = Sdf.Layer.Find(layerId)
-            # Make sure the destination exists in the target layer, otherwise
-            # SdfCopySpec will error.
-            Sdf.JustCreatePrimInLayer(layer, prim.GetPath())
             routingData['layer'] = layerId
 
         # Register our edit router which directs the parent edit to
         # higher-priority layer B, which is not the edit target.
         mayaUsd.lib.registerEditRouter('parent', firstSubLayer)
+        try:
+            # Check that layer B is empty.
+            bSubLayer = Sdf.Layer.Find(bSubLayerId)
+            self.assertEqual(filterUsdStr(bSubLayer.ExportToString()), '')
 
-        # Check that layer B is empty.
-        bSubLayer = Sdf.Layer.Find(bSubLayerId)
-        self.assertEqual(filterUsdStr(bSubLayer.ExportToString()), '')
+            # We select B and C, in order, and parent.  This parents B to C.
+            sn = ufe.GlobalSelection.get()
+            sn.clear()
+            b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A/B'))
+            c = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C'))
+            sn.append(b)
+            sn.append(c)
 
-        # We select B and C, in order, and parent.  This parents B to C.
-        sn = ufe.GlobalSelection.get()
-        sn.clear()
-        b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A/B'))
-        c = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C'))
-        sn.append(b)
-        sn.append(c)
+            a = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A'))
+            self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), a)
 
-        a = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/A'))
-        self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), a)
+            cmds.parent()
 
-        cmds.parent()
+            # Check that prim B is now a child of prim C.  Re-create its scene
+            # item, as its path has changed.
+            b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C/B'))
+            self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), c)
 
-        # Check that prim B is now a child of prim C.  Re-create its scene
-        # item, as its path has changed.
-        b = ufe.Hierarchy.createItem(ufe.PathString.path(psPathStr+',/C/B'))
-        self.assertEqual(ufe.Hierarchy.hierarchy(b).parent(), c)
-
-        # Check that layer B now has the parent overs.
-        self.assertEqual(filterUsdStr(bSubLayer.ExportToString()),
-                         'over "C"\n{\n    def Xform "B"\n    {\n    }\n}')
-
-        # Restore default edit router.
-        mayaUsd.lib.restoreDefaultEditRouter('parent')
+            # Check that layer B now has the parent overs.
+            self.assertEqual(filterUsdStr(bSubLayer.ExportToString()),
+                            filterUsdStr('over "C"\n{\n    def Xform "B"\n    {\n    }\n}'))
+        finally:
+            # Restore default edit router.
+            mayaUsd.lib.restoreDefaultEditRouter('parent')
 
     @unittest.skipUnless(mayaUtils.ufeSupportFixLevel() >= 7, 'Require parent command fix from Maya')
     def testParentAbsoluteUnderScope(self):

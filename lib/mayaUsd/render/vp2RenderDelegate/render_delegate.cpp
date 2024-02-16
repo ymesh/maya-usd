@@ -565,14 +565,8 @@ const HdVP2BBoxGeom* sSharedBBoxGeom
 
 } // namespace
 
-const int HdVP2RenderDelegate::sProfilerCategory = MProfiler::addCategory(
-#if MAYA_API_VERSION >= 20190000
-    "HdVP2RenderDelegate",
-    "HdVP2RenderDelegate"
-#else
-    "HdVP2RenderDelegate"
-#endif
-);
+const int HdVP2RenderDelegate::sProfilerCategory
+    = MProfiler::addCategory("HdVP2RenderDelegate", "HdVP2RenderDelegate");
 
 std::mutex                  HdVP2RenderDelegate::_renderDelegateMutex;
 std::atomic_int             HdVP2RenderDelegate::_renderDelegateCounter;
@@ -948,25 +942,6 @@ TfTokenVector HdVP2RenderDelegate::GetShaderSourceTypes() const
 #endif
 }
 
-#if PXR_VERSION < 2105
-
-TfToken HdVP2RenderDelegate::GetMaterialNetworkSelector() const
-{
-#ifdef WANT_MATERIALX_BUILD
-    MHWRender::MRenderer* theRenderer = MHWRender::MRenderer::theRenderer();
-    if (theRenderer && theRenderer->drawAPI() == MHWRender::kOpenGLCoreProfile
-        && !TfGetEnvSetting(MAYAUSD_VP2_USE_ONLY_PREVIEWSURFACE)) {
-        return HdVP2Tokens->mtlx;
-    } else {
-        return HdVP2Tokens->glslfx;
-    }
-#else
-    return HdVP2Tokens->glslfx;
-#endif
-}
-
-#else // PXR_VERSION < 2105
-
 TfTokenVector HdVP2RenderDelegate::GetMaterialRenderContexts() const
 {
 #ifdef WANT_MATERIALX_BUILD
@@ -981,7 +956,6 @@ TfTokenVector HdVP2RenderDelegate::GetMaterialRenderContexts() const
     return { HdVP2Tokens->glslfx };
 #endif
 }
-#endif // PXR_VERSION < 2105
 
 /*! \brief  Returns a node name made as a child of delegate's id.
  */

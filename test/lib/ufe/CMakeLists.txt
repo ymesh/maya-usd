@@ -1,53 +1,62 @@
 # unit test scripts.  Note that testTRSBase.py is not a test case, but rather
 # a module providing a base class for other tests.
 set(TEST_SCRIPT_FILES
+    testAttribute.py
+    testAttributeBlock.py
+    testAttributes.py
+    testBlockedLayerEdit.py
+    testChildFilter.py
+    testComboCmd.py
+    testContextOps.py
+    testDefaultPrimCmds.py
+    testDuplicateCmd.py
+    testDuplicateProxyShape.py
+    testEditRouting.py
+    testGroupCmd.py
     testMatrices.py
     testMayaPickwalk.py
+    testMoveCmd.py
+    testObject3d.py
+    testObservableScene.py
+    testParentCmd.py
+    testPayloadCommands.py
+    testPointInstances.py
     testPythonWrappers.py
+    testReferenceCommands.py
+    testRename.py
+    testReorderCmd.py
+    testRotateCmd.py
+    testRotateCmdUndoRedo.py
+    testRotatePivot.py
+    testScaleCmd.py
+    testSceneItem.py
     testSelection.py
+    testSelectionNotification.py
     testSelectionByArray.py
+    testToggleCommands.py
+    testTransform3dChainOfResponsibility.py
+    testTransform3dTranslate.py
+    testUIInfoHandler.py
     testUfePythonImport.py
-    testAttributeBlock.py
-    testBlockedLayerEdit.py
+    testVariant.py
+    testVisibilityCmd.py
 )
 
 set(TEST_SUPPORT_FILES
     testTRSBase.py
 )
 
-set(INTERACTIVE_TEST_SCRIPT_FILES "")
+set(INTERACTIVE_TEST_SCRIPT_FILES
+    testPixelMoveCmd.py
+    testUIIcons.py
+)
 
-if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
+if(MAYA_APP_VERSION VERSION_GREATER_EQUAL 2023)
     list(APPEND TEST_SCRIPT_FILES
-        testAttribute.py
-        testAttributes.py
-        testChildFilter.py
-        testComboCmd.py
-        testContextOps.py
-        testDuplicateCmd.py
-        testGroupCmd.py
-        testMoveCmd.py
-        testObject3d.py
-        testRename.py
-        testParentCmd.py
-        testPointInstances.py
-        testReorderCmd.py
-        testRotateCmd.py
-        testRotatePivot.py
-        testScaleCmd.py
-        testSceneItem.py
-        testTransform3dChainOfResponsibility.py
-        testTransform3dTranslate.py
-        testUIInfoHandler.py
-        testVisibilityCmd.py
-        testObservableScene.py
-    )
-
-    list(APPEND INTERACTIVE_TEST_SCRIPT_FILES
-        testPixelMoveCmd.py
-        testUIIcons.py
+        testCenterPivot.py
     )
 endif()
+
 
 if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
     list(APPEND TEST_SCRIPT_FILES
@@ -68,18 +77,11 @@ if (v4_BatchOps IN_LIST UFE_PREVIEW_FEATURES)
 endif()
 
 if(CMAKE_UFE_V4_FEATURES_AVAILABLE)
-    if (${UFE_PREVIEW_VERSION_NUM} GREATER_EQUAL 4020)
-        list(APPEND TEST_SCRIPT_FILES
-            testAttributeInfo.py
-            testConnections.py
-        )
-    endif()
-
-    if (${UFE_PREVIEW_VERSION_NUM} GREATER_EQUAL 4023)
-        list(APPEND TEST_SCRIPT_FILES
-            testUINodeGraphNode.py
-        )
-    endif()
+    list(APPEND TEST_SCRIPT_FILES
+        testAttributeInfo.py
+        testConnections.py
+        testUINodeGraphNode.py
+    )
 
     if(CMAKE_WANT_MATERIALX_BUILD)
         list(APPEND TEST_SCRIPT_FILES
@@ -127,6 +129,11 @@ if (MAYA_HAS_DISPLAY_LAYER_API)
         )
 endif()
 
+if(CodeWrapperHandler IN_LIST UFE_PREVIEW_FEATURES)
+    set(UFE_HAS_CODE_WRAPPER "1")
+else()
+    set(UFE_HAS_CODE_WRAPPER "0")
+endif()
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})
@@ -137,8 +144,10 @@ foreach(script ${TEST_SCRIPT_FILES})
             "MAYA_PLUG_IN_PATH=${CMAKE_CURRENT_SOURCE_DIR}/ufeTestPlugins"
             "UFE_PREVIEW_VERSION_NUM=${UFE_PREVIEW_VERSION_NUM}"
             "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
+            "UFE_HAS_CODE_WRAPPER=${UFE_HAS_CODE_WRAPPER}"
             "USD_HAS_COLOR4_SDR_SUPPORT=${USD_HAS_COLOR4_SDR_SUPPORT}"
             "USD_HAS_MX_METADATA_SUPPORT=${USD_HAS_MX_METADATA_SUPPORT}"
+            "UFE_ATTRIBUTES_GET_ENUMS=${UFE_ATTRIBUTES_GET_ENUMS}"
     )
 
     # Add a ctest label to these tests for easy filtering.

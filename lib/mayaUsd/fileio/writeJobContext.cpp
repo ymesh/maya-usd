@@ -195,7 +195,8 @@ SdfPath UsdMayaWriteJobContext::ConvertDagToUsdPath(const MDagPath& dagPath) con
     // write to the parent (transform) path instead.
     MDagPath parentDag(dagPath);
     parentDag.pop();
-    if (IsMergedTransform(parentDag)) {
+
+    if (IsMergedTransform(parentDag) && UsdMayaUtil::isShape(dagPath)) {
         path = path.GetParentPath();
     }
 
@@ -387,6 +388,40 @@ bool UsdMayaWriteJobContext::_NeedToTraverse(const MDagPath& curDag) const
         return false;
     }
 
+    // In addition to check for primless, we check for user selection of export types
+    if (!mArgs.excludeExportTypes.empty()) {
+        MDagPath shapeDagPath = curDag;
+        if (mArgs.mergeTransformAndShape) {
+            // if we're merging transforms, then we need to look at the shape.
+            shapeDagPath.extendToShape();
+        }
+
+        MStatus                 status;
+        MObject                 obj = shapeDagPath.node();
+        const MFnDependencyNode depFn(obj, &status);
+        if (!status) {
+            return false;
+        }
+
+        const std::string mayaTypeName(depFn.typeName().asChar());
+
+        if ((mArgs.excludeExportTypes.count(TfToken("Meshes")) != 0)
+            || (mArgs.excludeExportTypes.count(TfToken("meshes")) != 0)) {
+            if (mayaTypeName == "mesh")
+                return false;
+        }
+        if ((mArgs.excludeExportTypes.count(TfToken("Cameras")) != 0)
+            || (mArgs.excludeExportTypes.count(TfToken("camera")) != 0)) {
+            if (mayaTypeName.find("camera") != std::string::npos)
+                return false;
+        }
+        if ((mArgs.excludeExportTypes.count(TfToken("Lights")) != 0)
+            || (mArgs.excludeExportTypes.count(TfToken("light")) != 0)) {
+            if (mayaTypeName.find("Light") != std::string::npos)
+                return false;
+        }
+    }
+
     return true;
 }
 
@@ -416,11 +451,7 @@ bool UsdMayaWriteJobContext::_OpenFile(const std::string& filename, bool append)
         } else {
             SdfLayer::FileFormatArguments args;
             args[UsdUsdFileFormatTokens->FormatArg] = mArgs.defaultUSDFormat.GetString();
-#if PXR_VERSION > 2008
             layer = SdfLayer::CreateNew(filename, args);
-#else
-            layer = SdfLayer::CreateNew(filename, "", args);
-#endif
         }
         if (!layer) {
             TF_RUNTIME_ERROR("Failed to create layer '%s'", filename.c_str());
@@ -541,8 +572,7 @@ UsdMayaPrimWriterSharedPtr UsdMayaWriteJobContext::CreatePrimWriter(
     // This is either a DG node or a non-instanced DAG node, so try to look up
     // a writer plugin. We search through the node's type ancestors, working
     // backwards until we find a prim writer plugin.
-    const std::string mayaTypeName(depNodeFn.typeName().asChar());
-    if (UsdMayaPrimWriterRegistry::WriterFactoryFn primWriterFactory = _FindWriter(mayaTypeName)) {
+    if (UsdMayaPrimWriterRegistry::WriterFactoryFn primWriterFactory = _FindWriter(depNodeFn)) {
         if (UsdMayaPrimWriterSharedPtr primPtr = primWriterFactory(depNodeFn, writePath, *this)) {
             // We found a registered user prim writer that handles this node
             // type, so return now.
@@ -555,8 +585,10 @@ UsdMayaPrimWriterSharedPtr UsdMayaWriteJobContext::CreatePrimWriter(
 }
 
 UsdMayaPrimWriterRegistry::WriterFactoryFn
-UsdMayaWriteJobContext::_FindWriter(const std::string& mayaNodeType)
+UsdMayaWriteJobContext::_FindWriter(const MFnDependencyNode& mayaNode)
 {
+    const std::string mayaNodeType(mayaNode.typeName().asChar());
+
     // Check if type is already cached locally.
     auto iter = mWriterFactoryCache.find(mayaNodeType);
     if (iter != mWriterFactoryCache.end()) {
@@ -568,7 +600,7 @@ UsdMayaWriteJobContext::_FindWriter(const std::string& mayaNodeType)
         = UsdMayaUtil::GetAllAncestorMayaNodeTypes(mayaNodeType);
     for (auto i = ancestorTypes.rbegin(); i != ancestorTypes.rend(); ++i) {
         if (UsdMayaPrimWriterRegistry::WriterFactoryFn primWriterFactory
-            = UsdMayaPrimWriterRegistry::Find(*i)) {
+            = UsdMayaPrimWriterRegistry::Find(*i, mArgs, mayaNode.object())) {
             mWriterFactoryCache[mayaNodeType] = primWriterFactory;
             return primWriterFactory;
         }

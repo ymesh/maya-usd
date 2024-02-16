@@ -1,5 +1,5 @@
 #
-# Copyright 2020 Autodesk
+# Copyright 2023 Autodesk
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ target_compile_definitions(${PROJECT_NAME}
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:TBB_USE_DEBUG>
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_DEBUG_PYTHON>
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_LINKING_PYTHON>
-        $<$<BOOL:${UFE_FOUND}>:WANT_UFE_BUILD>
+        $<$<BOOL:${CMAKE_WANT_VALIDATE_UNDO_ITEM}>:WANT_VALIDATE_UNDO_ITEM>
         $<$<BOOL:${MAYA_ENABLE_NEW_PRIM_DELETE}>:MAYA_ENABLE_NEW_PRIM_DELETE>
     PRIVATE
         MAYAUSD_MACROS_EXPORT
@@ -49,7 +49,7 @@ target_compile_definitions(${PROJECT_NAME}
         $<$<BOOL:${IS_LINUX}>:GL_GLEXT_PROTOTYPES>
         $<$<BOOL:${IS_LINUX}>:GLX_GLXEXT_PROTOTYPES>
         $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:WANT_MATERIALX_BUILD>
-        $<$<BOOL:${Qt5_FOUND}>:WANT_QT_BUILD>
+		$<$<BOOL:${Qt_FOUND}>:WANT_QT_BUILD>
         $<$<BOOL:${BUILD_HDMAYA}>:BUILD_HDMAYA>
 
         # this flag is needed when building maya-usd in Maya
@@ -63,11 +63,26 @@ if(DEFINED UFE_PREVIEW_VERSION_NUM)
     )
 endif()
 
+if (UFE_HAS_DISPLAY_NAME)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_HAS_DISPLAY_NAME=1
+    )
+endif()
+
 message(STATUS "MAYA_HAS_DEFAULT_MATERIAL_API is ${MAYA_HAS_DEFAULT_MATERIAL_API}")
 if (MAYA_HAS_DEFAULT_MATERIAL_API)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
             HAS_DEFAULT_MATERIAL_SUPPORT_API=1
+    )
+endif()
+
+message(STATUS "MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API is ${MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API}")
+if (MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+        HAS_COLOR_MANAGEMENT_SUPPORT_API=1
     )
 endif()
 
@@ -175,7 +190,7 @@ if (MAYA_LIGHTAPI_VERSION GREATER_EQUAL 2)
 endif()
 
 # Some of the UFE classes are exporting STL classes which causes this warning.
-if(UFE_FOUND AND MSVC)
+if(MSVC)
     target_compile_options(${PROJECT_NAME}
         PUBLIC
             /wd4251
@@ -207,8 +222,13 @@ target_include_directories(${PROJECT_NAME}
     PUBLIC
         ${MAYA_INCLUDE_DIRS}
         ${PXR_INCLUDE_DIRS}
-        $<$<BOOL:${UFE_FOUND}>:${UFE_INCLUDE_DIR}>
+        ${UFE_INCLUDE_DIR}
         ${CMAKE_BINARY_DIR}/include
+
+    PRIVATE
+        # TEMP (UsdUfe) - this one is temporary during the transition to UsdUfe.
+        # See lib\usdUfe\ufe\private\CMakeLists.txt
+        ${CMAKE_BINARY_DIR}/include/usdUfe/mayaUsd
 )
 
 # -----------------------------------------------------------------------------
@@ -238,9 +258,10 @@ target_link_libraries(${PROJECT_NAME}
         usdUtils
         $<$<BOOL:$<VERSION_GREATER_EQUAL:${UFE_PREVIEW_VERSION_NUM},4023>>:usdUI>
         vt
-        $<$<BOOL:${UFE_FOUND}>:${UFE_LIBRARY}>
+        ${UFE_LIBRARY}
         ${MAYA_LIBRARIES}
         mayaUsdUtils
+        usdUfe
     PRIVATE
         ghc_filesystem
         $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:hdMtlx>
@@ -310,9 +331,7 @@ add_subdirectory(resources)
 if( PXR_VERSION GREATER_EQUAL 2211 )
     add_subdirectory(sceneIndex)
 endif()
-if(UFE_FOUND)
-    add_subdirectory(ufe)
-endif()
+add_subdirectory(ufe)
 add_subdirectory(undo)
 add_subdirectory(utils)
 

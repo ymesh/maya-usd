@@ -22,13 +22,12 @@
 #include "render_delegate.h"
 #include "tokens.h"
 
+#include <mayaUsd/base/tokens.h>
 #include <mayaUsd/render/vp2RenderDelegate/proxyRenderDelegate.h>
 #include <mayaUsd/utils/colorSpace.h>
 
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/tf/getenv.h>
-#include <pxr/imaging/hd/extCompCpuComputation.h>
-#include <pxr/imaging/hd/extCompPrimvarBufferSource.h>
 #include <pxr/imaging/hd/extComputation.h>
 #include <pxr/imaging/hd/meshUtil.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
@@ -39,6 +38,11 @@
 #include <pxr/usdImaging/usdImaging/version.h>
 #if !defined(USD_IMAGING_API_VERSION) || USD_IMAGING_API_VERSION < 18
 #include <pxr/usdImaging/usdImaging/delegate.h>
+#endif
+#if !defined(HD_API_VERSION) || HD_API_VERSION < 49
+#include <pxr/imaging/hd/extCompCpuComputation.h>
+#else
+#include <pxr/imaging/hdSt/extCompCpuComputation.h>
 #endif
 
 #include <maya/MFrameContext.h>
@@ -56,6 +60,14 @@ namespace {
 //! Required primvars when there is no material binding.
 const TfTokenVector sFallbackShaderPrimvars
     = { HdTokens->displayColor, HdTokens->displayOpacity, HdTokens->normals };
+
+// Proper support for selection highlighting on/off switch in
+// MRenderItem starts only beyond Maya 2024.1
+#if MAYA_API_VERSION > 20240100
+constexpr int sDrawModeSelectionHighlighting = MHWRender::MGeometry::kSelectionHighlighting;
+#else
+constexpr int sDrawModeSelectionHighlighting = 0;
+#endif
 
 //! Helper utility function to fill primvar data to vertex buffer.
 template <class DEST_TYPE, class SRC_TYPE>
@@ -426,18 +438,15 @@ void HdVP2Mesh::_PrepareSharedVertexBuffers(
                 // note: normals gets dirty when points are marked as dirty,
                 // at change tracker.
                 if (!_meshSharedData->_adjacency) {
-                    _meshSharedData->_adjacency.reset(new Hd_VertexAdjacency());
-
-                    HdBufferSourceSharedPtr adjacencyComputation
-                        = _meshSharedData->_adjacency->GetSharedAdjacencyBuilderComputation(
-                            &_meshSharedData->_topology);
                     MProfilingScope profilingScope(
                         HdVP2RenderDelegate::sProfilerCategory,
                         MProfiler::kColorC_L2,
                         _rprimId.asChar(),
                         "HdVP2Mesh::computeAdjacency");
 
-                    adjacencyComputation->Resolve();
+                    _meshSharedData->_adjacency.reset(new Hd_VertexAdjacency());
+
+                    _meshSharedData->_adjacency->BuildAdjacencyTable(&_meshSharedData->_topology);
                 }
 
                 // Only the points referenced by the topology are used to compute
@@ -883,7 +892,13 @@ void HdVP2Mesh::Sync(
 
         auto addRequiredPrimvars = [&](const SdfPath& materialId) {
             TfTokenVector requiredPrimvars;
-            if (!_GetMaterialPrimvars(renderIndex, materialId, requiredPrimvars)) {
+            if (!_GetMaterialPrimvars(renderIndex, materialId, requiredPrimvars)
+                || ((reprToken == HdVP2ReprTokens->smoothHullUntextured)
+                    && (MGlobal::optionVarIntValue(
+                            MayaUsdOptionVars->ShowDisplayColorTextureOff.GetText())
+                        != 0))) {
+                // if user selected present display color in untextured mode, use fallback shader as
+                // well
                 requiredPrimvars = sFallbackShaderPrimvars;
             }
 
@@ -1738,15 +1753,27 @@ void HdVP2Mesh::_UpdateDrawItem(
                 renderIndex.GetSprim(HdPrimTypeTokens->material, materialId));
 
             if (material) {
-                MHWRender::MShaderInstance* shader
-                    = material->GetSurfaceShader(_GetMaterialNetworkToken(reprToken));
-                if (shader != nullptr
-                    && (shader != drawItemData._shader || shader != stateToCommit._shader)) {
-                    drawItemData._shader = shader;
-                    drawItemData._shaderIsFallback = false;
-                    stateToCommit._shader = shader;
-                    stateToCommit._isTransparent
-                        = shader->isTransparent() || renderItemData._transparent;
+                const MString optionVarName(
+                    MayaUsdOptionVars->ShowDisplayColorTextureOff.GetText());
+
+                // if untextured mode with show display color specified, use fallback shader
+                if ((reprToken == HdVP2ReprTokens->smoothHullUntextured)
+                    && (MGlobal::optionVarIntValue(
+                            MayaUsdOptionVars->ShowDisplayColorTextureOff.GetText())
+                        != 0)) {
+                    drawItemData._shaderIsFallback = true;
+                } else {
+                    const HdCullStyle           cullStyle = GetCullStyle(sceneDelegate);
+                    MHWRender::MShaderInstance* shader = material->GetSurfaceShader(
+                        _GetMaterialNetworkToken(reprToken), cullStyle == HdCullStyleBack);
+                    if (shader != nullptr
+                        && (shader != drawItemData._shader || shader != stateToCommit._shader)) {
+                        drawItemData._shader = shader;
+                        drawItemData._shaderIsFallback = false;
+                        stateToCommit._shader = shader;
+                        stateToCommit._isTransparent
+                            = shader->isTransparent() || renderItemData._transparent;
+                    }
                 }
             } else {
                 drawItemData._shaderIsFallback = true;
@@ -2215,27 +2242,35 @@ void HdVP2Mesh::_UpdateDrawItem(
                 MHWRender::MVertexBufferArray vertexBuffers;
 
                 std::set<TfToken> addedPrimvars;
-                auto              addPrimvar =
-                    [primvarInfo, &vertexBuffers, &addedPrimvars, isBBoxItem, &sharedBBoxGeom](
-                        const TfToken& p) {
-                        auto entry = primvarInfo->find(p);
-                        if (entry == primvarInfo->cend()) {
-                            // No primvar by that name.
-                            return;
+                auto              addPrimvar = [primvarInfo,
+                                   &vertexBuffers,
+                                   &addedPrimvars,
+                                   isBBoxItem,
+                                   &sharedBBoxGeom,
+                                   &renderItem](const TfToken& p) {
+                    auto entry = primvarInfo->find(p);
+                    if (entry == primvarInfo->cend()) {
+                        // No primvar by that name.
+                        return;
+                    }
+                    MHWRender::MVertexBuffer* primvarBuffer = nullptr;
+                    if (isBBoxItem && p == HdTokens->points) {
+                        primvarBuffer = const_cast<MHWRender::MVertexBuffer*>(
+                            sharedBBoxGeom.GetPositionBuffer());
+                    } else {
+                        primvarBuffer = entry->second->_buffer.get();
+                    }
+                    if (primvarBuffer) { // this filters out the separate color & alpha entries
+                        MStatus result = vertexBuffers.addBuffer(p.GetText(), primvarBuffer);
+                        if (result != MStatus::kSuccess) {
+                            TF_WARN(
+                                "Could not create primvar [%s] buffer for [%s].",
+                                p.GetText(),
+                                renderItem->name().asChar());
                         }
-                        MHWRender::MVertexBuffer* primvarBuffer = nullptr;
-                        if (isBBoxItem && p == HdTokens->points) {
-                            primvarBuffer = const_cast<MHWRender::MVertexBuffer*>(
-                                sharedBBoxGeom.GetPositionBuffer());
-                        } else {
-                            primvarBuffer = entry->second->_buffer.get();
-                        }
-                        if (primvarBuffer) { // this filters out the separate color & alpha entries
-                            MStatus result = vertexBuffers.addBuffer(p.GetText(), primvarBuffer);
-                            TF_VERIFY(result == MStatus::kSuccess);
-                        }
-                        addedPrimvars.insert(p);
-                    };
+                    }
+                    addedPrimvars.insert(p);
+                };
 
                 // Points and normals always are at the beginning of vertex requirements:
                 addPrimvar(HdTokens->points);
@@ -2261,7 +2296,11 @@ void HdVP2Mesh::_UpdateDrawItem(
                 // - Trigger consolidation/instancing update.
                 result = drawScene.setGeometryForRenderItem(
                     *renderItem, vertexBuffers, *indexBuffer, stateToCommit._boundingBox);
-                TF_VERIFY(result == MStatus::kSuccess);
+                if (result != MStatus::kSuccess) {
+                    TF_WARN(
+                        "Could not create OGS geometry for [%s], maybe it has no geometry?",
+                        renderItem->name().asChar());
+                }
             }
 
             // Important, update instance transforms after setting geometry on render items!
@@ -2279,12 +2318,20 @@ void HdVP2Mesh::_UpdateDrawItem(
                             // VP2 defines instance ID of the first instance to be 1.
                             result = drawScene.updateInstanceTransform(
                                 *renderItem, i + 1, (*stateToCommit._instanceTransforms)[i]);
-                            TF_VERIFY(result == MStatus::kSuccess);
+                            if (result != MStatus::kSuccess) {
+                                TF_WARN(
+                                    "Could not update the instance transform for [%s].",
+                                    renderItem->name().asChar());
+                            }
                         }
                     } else {
                         result = drawScene.setInstanceTransformArray(
                             *renderItem, *stateToCommit._instanceTransforms);
-                        TF_VERIFY(result == MStatus::kSuccess);
+                        if (result != MStatus::kSuccess) {
+                            TF_WARN(
+                                "Could not update the instance transform for [%s].",
+                                renderItem->name().asChar());
+                        }
                     }
                 }
 
@@ -2296,27 +2343,21 @@ void HdVP2Mesh::_UpdateDrawItem(
                         *renderItem,
                         stateToCommit._instanceColorParam,
                         *stateToCommit._instanceColors);
-                    TF_VERIFY(result == MStatus::kSuccess);
+                    if (result != MStatus::kSuccess) {
+                        TF_WARN(
+                            "Could not set the instance color for [%s].",
+                            renderItem->name().asChar());
+                    }
                 }
-            }
-#if MAYA_API_VERSION >= 20210000
-            else if (newInstanceCount >= 1) {
-#else
-            // In Maya 2020 and before, GPU instancing and consolidation are two separate
-            // systems that cannot be used by a render item at the same time. In case of single
-            // instance, we keep the original render item to allow consolidation with other
-            // prims. In case of multiple instances, we need to disable consolidation to allow
-            // GPU instancing to be used.
-            else if (newInstanceCount == 1) {
-                bool success = renderItem->setMatrix(&(*stateToCommit._instanceTransforms)[0]);
-                TF_VERIFY(success);
-            } else if (newInstanceCount > 1) {
-                _SetWantConsolidation(*renderItem, false);
-#endif
+            } else if (newInstanceCount >= 1) {
                 if (stateToCommit._instanceTransforms) {
                     result = drawScene.setInstanceTransformArray(
                         *renderItem, *stateToCommit._instanceTransforms);
-                    TF_VERIFY(result == MStatus::kSuccess);
+                    if (result != MStatus::kSuccess) {
+                        TF_WARN(
+                            "Could not update the instance transform for [%s].",
+                            renderItem->name().asChar());
+                    }
                 }
 
                 if (stateToCommit._instanceColors && stateToCommit._instanceColors->length() > 0) {
@@ -2327,7 +2368,11 @@ void HdVP2Mesh::_UpdateDrawItem(
                         *renderItem,
                         stateToCommit._instanceColorParam,
                         *stateToCommit._instanceColors);
-                    TF_VERIFY(result == MStatus::kSuccess);
+                    if (result != MStatus::kSuccess) {
+                        TF_WARN(
+                            "Could not set the instance color for [%s].",
+                            renderItem->name().asChar());
+                    }
                 }
 
                 stateToCommit._renderItemData._usingInstancedDraw = true;
@@ -2556,6 +2601,11 @@ void HdVP2Mesh::_UpdatePrimvarSources(
     const HdRenderIndex& renderIndex = sceneDelegate->GetRenderIndex();
     bool                 pointsAreComputed = false;
     for (const auto& primvarName : requiredPrimvars) {
+#if !defined(HD_API_VERSION) || HD_API_VERSION < 49
+        using HdStExtCompCpuComputation = HdExtCompCpuComputation;
+        using HdStExtCompCpuComputationSharedPtr = HdExtCompCpuComputationSharedPtr;
+#endif
+
         // The compPrimvars are a description of the link between the compute system and
         // what we need to draw.
         auto result
@@ -2566,7 +2616,7 @@ void HdVP2Mesh::_UpdatePrimvarSources(
         if (result == compPrimvars.end())
             continue;
         HdExtComputationPrimvarDescriptor compPrimvar = *result;
-        // Create the HdExtCompCpuComputation objects necessary to resolve the computation
+        // Create the HdStExtCompCpuComputation objects necessary to resolve the computation
         HdExtComputation const* sourceComp
             = static_cast<HdExtComputation const*>(renderIndex.GetSprim(
                 HdPrimTypeTokens->extComputation, compPrimvar.sourceComputationId));
@@ -2576,12 +2626,12 @@ void HdVP2Mesh::_UpdatePrimvarSources(
         // This compPrimvar is telling me that the primvar with "name" comes from compute.
         // The compPrimvar has the Id of the compute the data comes from, and the output
         // of the compute which contains the data
-        HdExtCompCpuComputationSharedPtr cpuComputation;
-        HdBufferSourceSharedPtrVector    sources;
+        HdStExtCompCpuComputationSharedPtr cpuComputation;
+        HdBufferSourceSharedPtrVector      sources;
         // There is a possible data race calling CreateComputation, see
         // https://github.com/PixarAnimationStudios/USD/issues/1742
         cpuComputation
-            = HdExtCompCpuComputation::CreateComputation(sceneDelegate, *sourceComp, &sources);
+            = HdStExtCompCpuComputation::CreateComputation(sceneDelegate, *sourceComp, &sources);
 
         // Immediately resolve the computation so we can fill _meshSharedData._primvarInfo
         for (HdBufferSourceSharedPtr& source : sources) {
@@ -2671,9 +2721,7 @@ HdVP2DrawItem::RenderItemData& HdVP2Mesh::_CreateSmoothHullRenderItem(
     renderItem->setSelectionMask(MSelectionMask::kSelectMeshes);
 #endif
 
-#if MAYA_API_VERSION >= 20220000
     renderItem->setObjectTypeExclusionFlag(MHWRender::MFrameContext::kExcludeMeshes);
-#endif
 
 #ifdef HAS_DEFAULT_MATERIAL_SUPPORT_API
     renderItem->setDefaultMaterialHandling(MRenderItem::SkipWhenDefaultMaterialActive);
@@ -2690,7 +2738,8 @@ MHWRender::MRenderItem* HdVP2Mesh::_CreateSelectionHighlightRenderItem(const MSt
         name, MHWRender::MRenderItem::DecorationItem, MHWRender::MGeometry::kLines);
 
     constexpr MHWRender::MGeometry::DrawMode drawMode = static_cast<MHWRender::MGeometry::DrawMode>(
-        MHWRender::MGeometry::kShaded | MHWRender::MGeometry::kTextured);
+        MHWRender::MGeometry::kShaded | MHWRender::MGeometry::kTextured
+        | sDrawModeSelectionHighlighting);
     renderItem->setDrawMode(drawMode);
     renderItem->depthPriority(MHWRender::MRenderItem::sActiveWireDepthPriority);
     renderItem->castsShadows(false);
@@ -2699,9 +2748,7 @@ MHWRender::MRenderItem* HdVP2Mesh::_CreateSelectionHighlightRenderItem(const MSt
     renderItem->setSelectionMask(MSelectionMask());
     _InitRenderItemCommon(renderItem);
 
-#if MAYA_API_VERSION >= 20220000
     renderItem->setObjectTypeExclusionFlag(MHWRender::MFrameContext::kExcludeMeshes);
-#endif
 
     return renderItem;
 }

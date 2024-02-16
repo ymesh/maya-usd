@@ -52,7 +52,9 @@ UsdShaderAttributeHolder::UsdShaderAttributeHolder(
 
     // sdrProp must be valid at creation and will stay valid.
     PXR_NAMESPACE_USING_DIRECTIVE
-    TF_AXIOM(sdrProp && sdrType != PXR_NS::UsdShadeAttributeType::Invalid);
+    if (!TF_VERIFY(sdrProp && sdrType != PXR_NS::UsdShadeAttributeType::Invalid)) {
+        throw std::runtime_error("Invalid shader attribute holder");
+    }
 }
 
 UsdAttributeHolder::UPtr UsdShaderAttributeHolder::create(
@@ -76,9 +78,16 @@ std::string UsdShaderAttributeHolder::isEditAllowedMsg() const
 
 std::string UsdShaderAttributeHolder::defaultValue() const
 {
+    // TODO: Add a PXR_VERSION if a fix is introduced in OpenUSD.
     if (_sdrProp->GetType() == PXR_NS::SdfValueTypeNames->Matrix3d.GetAsToken()) {
-        // There is no Matrix3d type in Sdr, so the MaterialX default value is not kept
-        return "0,0,0,0,0,0,0,0,0";
+        const std::string val = UsdShaderAttributeDef(_sdrProp).defaultValue();
+        if (val.empty()) {
+            // There is no Matrix3d type in Sdr, so the MaterialX default value is not kept
+            return "0,0,0,0,0,0,0,0,0";
+        }
+        // But if https://github.com/PixarAnimationStudios/OpenUSD/issues/2523 gets fixed
+        // then return that value:
+        return val;
     }
 #if PXR_VERSION < 2205
     if (_sdrProp->GetType() == PXR_NS::SdfValueTypeNames->Bool.GetAsToken()) {
@@ -149,6 +158,17 @@ std::string UsdShaderAttributeHolder::name() const
     return PXR_NS::UsdShadeUtils::GetFullName(_sdrProp->GetName(), _sdrType);
 }
 
+std::string UsdShaderAttributeHolder::displayName() const
+{
+    Ufe::Value retVal
+        = UsdShaderAttributeDef(_sdrProp).getMetadata(PXR_NS::MayaUsdMetadata->UIName);
+    std::string name = retVal.safeGet<std::string>({});
+    if (!name.empty()) {
+        return name;
+    }
+    return _Base::displayName();
+}
+
 std::string UsdShaderAttributeHolder::documentation() const { return _sdrProp->GetHelp(); }
 
 #ifdef UFE_V3_FEATURES_AVAILABLE
@@ -204,9 +224,18 @@ PXR_NS::SdfValueTypeName UsdShaderAttributeHolder::usdAttributeType() const
 
 Ufe::AttributeEnumString::EnumValues UsdShaderAttributeHolder::getEnumValues() const
 {
-    Ufe::AttributeEnumString::EnumValues retVal = _Base::getEnumValues();
-    for (auto const& option : _sdrProp->GetOptions()) {
+    Ufe::AttributeEnumString::EnumValues retVal;
+    for (auto const& option : getEnums()) {
         retVal.push_back(option.first);
+    }
+    return retVal;
+}
+
+UsdAttributeHolder::EnumOptions UsdShaderAttributeHolder::getEnums() const
+{
+    auto retVal = _Base::getEnums();
+    for (auto const& option : _sdrProp->GetOptions()) {
+        retVal.emplace_back(option.first, option.second);
     }
     return retVal;
 }

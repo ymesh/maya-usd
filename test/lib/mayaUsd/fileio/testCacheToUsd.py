@@ -55,7 +55,12 @@ def createMayaRefPrimSiblingCache(testCase, cacheParent, cacheParentPathStr):
 
     # The sibling cache is a new child of its parent, thus the parent has no
     # variant data.
-    return (mayaRefPrim, None, None, None, None)
+    return [mayaRefPrim, None, None, None, None, False]
+
+def createMayaRefPrimSiblingCacheWithRelativePath(testCase, cacheParent, cacheParentPathStr):
+    options = createMayaRefPrimSiblingCache(testCase, cacheParent, cacheParentPathStr)
+    options[-1] = True
+    return options
 
 def checkSiblingCacheParent(testCase, cacheParentChildren, vs, vn):
     '''Verify the cache parent after caching in the sibling cache test case.'''
@@ -80,7 +85,12 @@ def createMayaRefPrimVariantCache(testCase, cacheParent, cacheParentPathStr):
     vs = refParent.GetVariantSets()
     variantSet = vs.GetVariantSet(variantSetName)
 
-    return (mayaRefPrim, variantSetName, variantSet, variantName, 'Cache')
+    return [mayaRefPrim, variantSetName, variantSet, variantName, 'Cache', False]
+
+def createMayaRefPrimVariantCacheWithRelativePath(testCase, cacheParent, cacheParentPathStr):
+    options = createMayaRefPrimVariantCache(testCase, cacheParent, cacheParentPathStr)
+    options[-1] = True
+    return options
 
 def checkVariantCacheParent(testCase, cacheParentChildren, variantSet, cacheVariantName):
     '''Verify the cache parent after caching in the variant cache test case.'''
@@ -107,7 +117,7 @@ class CacheToUsdTestCase(unittest.TestCase):
         standalone.uninitialize()
 
     def getCacheFileName(self):
-        return 'testCacheToUsd.usda'
+        return os.path.abspath('testCacheToUsd.usda')
 
     def removeCacheFile(self):
         '''
@@ -115,20 +125,38 @@ class CacheToUsdTestCase(unittest.TestCase):
         '''
         try:
             os.remove(self.getCacheFileName())
-        except:
+        except Exception:
+            pass
+
+    def getRootLayerFileName(self):
+        return os.path.abspath('testCacheToUsdRootLayer.usda')
+
+    def removeRootLayerFile(self):
+        '''
+        Remove the root layer file if it exists. Ignore error if it does not exists.
+        '''
+        try:
+            os.remove(self.getRootLayerFileName())
+        except Exception:
             pass
 
     def setUp(self):
         # Start each test with a new scene with empty stage.
         cmds.file(new=True, force=True)
+
+        # Make sure the cache file is removed in case a previous test failed mid-way.
+        self.removeCacheFile()
+        self.removeRootLayerFile()
+
         import mayaUsd_createStageWithNewLayer
         self.proxyShapePathStr = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
         self.stage = mayaUsd.lib.GetPrim(self.proxyShapePathStr).GetStage()
-        # Make sure the cache file is removed in case a previous test failed mid-way.
-        self.removeCacheFile()
 
     def tearDown(self):
         self.removeCacheFile()
+
+    def makeRootLayerNotAnonymous(self):
+        self.stage.GetRootLayer().identifier = self.getRootLayerFileName()
 
     def verifyCacheFileDefaultPrim(self, cacheFilename, defaultPrimName):
         layer = Sdf.Layer.FindOrOpen(cacheFilename)
@@ -147,7 +175,7 @@ class CacheToUsdTestCase(unittest.TestCase):
         cacheParentPathStr = self.proxyShapePathStr + ',/CacheParent'
         self.assertFalse(cacheParent.HasVariantSets())
 
-        (mayaRefPrim, variantSetName, variantSet, refVariantName, cacheVariantName) = \
+        (mayaRefPrim, variantSetName, variantSet, refVariantName, cacheVariantName, relativePath) = \
             createMayaRefPrimFn(self, cacheParent, cacheParentPathStr)
 
         # The Maya reference prim is a child of the cache parent.
@@ -214,7 +242,7 @@ class CacheToUsdTestCase(unittest.TestCase):
         # None.
         cacheOptions = cacheToUsd.createCacheCreationOptions(
             defaultExportOptions, cacheFile, cachePrimName,
-            payloadOrReference, listEditType, variantSetName, cacheVariantName)
+            payloadOrReference, listEditType, variantSetName, cacheVariantName, relativePath)
 
         # Before caching, the cache file does not exist.
         self.assertFalse(os.path.exists(cacheFile))
@@ -265,20 +293,59 @@ class CacheToUsdTestCase(unittest.TestCase):
                 break
 
         self.assertTrue(foundPayload)
+        self.assertTrue(cachePrim.HasAuthoredPayloads())
+
+        # If using relative path, verify the payload source is using
+        # a relative file path.
+        #
+        # Note: the reason we need to look at the raw contents of the
+        #       root layer is that no OpenUSD API allows us to peek
+        #       at the raw payload file path:
+        #
+        #       - UsdPayloads as returned by UsdPrim::GetPayloads() do not
+        #         allow to retrieve the individual payloads. The docs even
+        #         says so and advise to use UsdPrimCompositionQuery.
+        #       - UsdPrimCompositionQuery returns UsdPrimCompositionQueryArc
+        #         which don't give access to the file path, only to the
+        #         resolved SdfLayer.
+        #       - Due to the way layer caching works in OpenUSD, asking for
+        #         the layer identifier returns the absolute path.
+        if relativePath:
+            if self.stage.GetRootLayer().anonymous:
+                self.assertNotIn('payload = @testCacheToUsd.usda', self.stage.GetRootLayer().ExportToString())
+                self.assertRegexpMatches(self.stage.GetRootLayer().ExportToString(), 'payload = @.*testCacheToUsd.usda')
+                self.makeRootLayerNotAnonymous()
+                mayaUsd.lib.Util.updatePostponedRelativePaths(self.stage.GetRootLayer())
+                
+            self.assertIn('payload = @testCacheToUsd.usda', self.stage.GetRootLayer().ExportToString())
 
         self.verifyCacheFileDefaultPrim(cacheFile, cachePrimName)
 
     def testCacheToUsdSibling(self):
+        self.makeRootLayerNotAnonymous()
         self.runTestCacheToUsd(createMayaRefPrimSiblingCache, checkSiblingCacheParent)
 
+    def testCacheToUsdSiblingWithRelativePath(self):
+        self.makeRootLayerNotAnonymous()
+        self.runTestCacheToUsd(createMayaRefPrimSiblingCacheWithRelativePath, checkSiblingCacheParent)
+
     def testCacheToUsdVariant(self):
+        self.makeRootLayerNotAnonymous()
         self.runTestCacheToUsd(createMayaRefPrimVariantCache, checkVariantCacheParent)
+
+    def testCacheToUsdVariantWithRelativePath(self):
+        self.makeRootLayerNotAnonymous()
+        self.runTestCacheToUsd(createMayaRefPrimVariantCacheWithRelativePath, checkVariantCacheParent)
+
+    def testCacheToUsdVariantWithRelativePathInAnonLayer(self):
+        self.runTestCacheToUsd(createMayaRefPrimVariantCacheWithRelativePath, checkVariantCacheParent)
 
     def testAutoEditAndCache(self):
         '''Test editing then caching a Maya Reference.
 
         Add a Maya Reference using auto-edit, then cache the edits.
         '''
+        self.makeRootLayerNotAnonymous()
         kDefaultPrimName = mayaRefUtils.defaultMayaReferencePrimName()
 
         # Since this is a brand new prim, it should not have variant sets.
@@ -341,6 +408,7 @@ class CacheToUsdTestCase(unittest.TestCase):
         In particular, the rig generates multiple translation xform on some
         prim, verify that we do get these multiple translations.
         '''
+        self.makeRootLayerNotAnonymous()
         kDefaultPrimName = mayaRefUtils.defaultMayaReferencePrimName()
 
         # Since this is a brand new prim, it should not have variant sets.
@@ -420,8 +488,6 @@ class CacheToUsdTestCase(unittest.TestCase):
         value = xformOp.Get()
         self.assertIn("xformOp:translate", value)
         self.assertIn("xformOp:rotateXYZ", value)
-        self.assertIn("xformOp:translate:channel1", value)
-        self.assertIn("xformOp:rotateXYZ:channel1", value)
         
     def runTestMayaRefPrimTransform(self, createMayaRefPrimFn, checkCacheParentFn):
         '''
@@ -435,11 +501,12 @@ class CacheToUsdTestCase(unittest.TestCase):
 
         # Create a Maya reference prim using the defaults, under a
         # newly-created parent.
+        self.makeRootLayerNotAnonymous()
         cacheParent = self.stage.DefinePrim('/CacheParent', 'Xform')
         cacheParentPathStr = self.proxyShapePathStr + ',/CacheParent'
         self.assertFalse(cacheParent.HasVariantSets())
 
-        (mayaRefPrim, variantSetName, variantSet, refVariantName, cacheVariantName) = \
+        (mayaRefPrim, variantSetName, variantSet, refVariantName, cacheVariantName, relativePath) = \
             createMayaRefPrimFn(self, cacheParent, cacheParentPathStr)
 
         # Set an initial translation.
@@ -498,7 +565,7 @@ class CacheToUsdTestCase(unittest.TestCase):
 
         cacheOptions = cacheToUsd.createCacheCreationOptions(
             defaultExportOptions, cacheFile, cachePrimName,
-            payloadOrReference, listEditType, variantSetName, cacheVariantName)
+            payloadOrReference, listEditType, variantSetName, cacheVariantName, relativePath)
 
         # Before caching, the cache file does not exist.
         self.assertFalse(os.path.exists(cacheFile))
@@ -513,10 +580,8 @@ class CacheToUsdTestCase(unittest.TestCase):
         checkCacheParentFn(self, cacheParentChildren, variantSet, cacheVariantName)
 
         # Maya reference prim should now have the updated transformation.
-        editTarget = self.stage.GetEditTarget()
-        if variantSet:
-            variantSet.SetVariantSelection('Rig')
-            editTarget = variantSet.GetVariantEditTarget(editTarget.GetLayer())
+        if variantSetName:
+            cacheParent.GetVariantSet(variantSetName).SetVariantSelection('Rig')
 
         with Usd.EditContext(self.stage, editTarget):
             xformable = UsdGeom.Xformable(mayaRefPrim)
@@ -531,10 +596,12 @@ class CacheToUsdTestCase(unittest.TestCase):
 
     def testMayaRefPrimTransform(self):
         '''Test transforming the Maya Reference prim, editing it in Maya, then merging back the result.'''
+        self.makeRootLayerNotAnonymous()
         self.runTestMayaRefPrimTransform(createMayaRefPrimSiblingCache, checkSiblingCacheParent)
 
     def testMayaRefPrimTransformToVariant(self):
         '''Test transforming the Maya Reference prim, editing it in Maya, then merging back the result.'''
+        self.makeRootLayerNotAnonymous()
         self.runTestMayaRefPrimTransform(createMayaRefPrimVariantCache, checkVariantCacheParent)
 
 if __name__ == '__main__':

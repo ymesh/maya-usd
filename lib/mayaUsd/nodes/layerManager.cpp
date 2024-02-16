@@ -15,6 +15,7 @@
 //
 #include "layerManager.h"
 
+#include <mayaUsd/commands/abstractLayerEditorWindow.h>
 #include <mayaUsd/listeners/notice.h>
 #include <mayaUsd/listeners/proxyShapeNotice.h>
 #include <mayaUsd/nodes/proxyShapeBase.h>
@@ -25,6 +26,7 @@
 #include <mayaUsd/utils/utilFileSystem.h>
 #include <mayaUsd/utils/utilSerialization.h>
 
+#include <pxr/base/arch/env.h>
 #include <pxr/base/tf/instantiateType.h>
 #include <pxr/base/tf/weakBase.h>
 #include <pxr/usd/ar/resolver.h>
@@ -59,8 +61,6 @@
 #include <iostream>
 #include <set>
 
-using namespace MAYAUSD_NS_DEF;
-
 namespace {
 static std::recursive_mutex findNodeMutex;
 static MObjectHandle        layerManagerHandle;
@@ -75,7 +75,7 @@ MStatus disconnectCompoundArrayPlug(MPlug arrayPlug)
     MPlug        elemPlug;
     MPlug        srcPlug;
     MPlugArray   destPlugs;
-    MDGModifier& dgmod = MDGModifierUndoItem::create("Compound array plug disconnection");
+    MDGModifier& dgmod = MayaUsd::MDGModifierUndoItem::create("Compound array plug disconnection");
 
     auto disconnectPlug = [&](MPlug plug) -> MStatus {
         MStatus status;
@@ -140,7 +140,7 @@ MayaUsd::LayerManager* findOrCreateNode()
 {
     MayaUsd::LayerManager* lm = findNode();
     if (!lm) {
-        MDGModifier& modifier = MDGModifierUndoItem::create("Node find or creation");
+        MDGModifier& modifier = MayaUsd::MDGModifierUndoItem::create("Node find or creation");
         MObject      manager = modifier.createNode(MayaUsd::LayerManager::typeId);
         modifier.doIt();
 
@@ -163,10 +163,10 @@ void convertAnonymousLayersRecursive(
         parentPtr._proxyPath = basename;
     } else if (stage->GetSessionLayer() == layer) {
         parentPtr._layerParent = nullptr;
-        parentPtr._proxyPath.clear();
+        parentPtr._proxyPath = basename;
     } else {
         parentPtr._layerParent = layer;
-        parentPtr._proxyPath.clear();
+        parentPtr._proxyPath = basename;
     }
 
     std::vector<std::string> sublayers = layer->GetSubLayerPaths();
@@ -193,6 +193,14 @@ bool isCrashing()
 #else
     return false;
 #endif
+}
+
+bool isCopyingSceneNodes()
+{
+    // When Maya is copy nodes, it exports them and sets this environment
+    // variable during the export to let exporters know it is cutting or
+    // copying nodes in a temporary Maya scene file.
+    return PXR_NS::ArchHasEnv("MAYA_CUT_COPY_EXPORT");
 }
 
 constexpr auto kSaveOptionUICmd = "usdFileSaveOptions(true);";
@@ -230,6 +238,12 @@ public:
     bool removeLayer(SdfLayerRefPtr layer);
     void removeAllLayers();
 
+    void        setSelectedStage(const std::string& stage);
+    std::string getSelectedStage() const;
+
+    bool saveLayerManagerSelectedStage();
+    bool loadLayerManagerSelectedStage();
+
     SdfLayerHandle findLayer(std::string identifier) const;
 
 private:
@@ -250,12 +264,14 @@ private:
     void clearProxies();
     bool hasDirtyLayer() const;
     void refreshProxiesToSave();
+    void updateLayerManagers();
 
     std::map<std::string, SdfLayerRefPtr> _idToLayer;
     TfNotice::Key                         _onStageSetKey;
     std::set<unsigned int>                _supportedTypes;
     std::vector<StageSavingInfo>          _proxiesToSave;
     std::vector<StageSavingInfo>          _internalProxiesToSave;
+    std::string                           _selectedStage;
     static MCallbackId                    preSaveCallbackId;
     static MCallbackId                    postSaveCallbackId;
     static MCallbackId                    preExportCallbackId;
@@ -399,13 +415,17 @@ void LayerDatabase::prepareForWriteCheck(bool* retCode, bool isExport)
     _isSavingMayaFile = true;
     cleanUpNewScene(nullptr);
 
+    LayerDatabase::instance().saveLayerManagerSelectedStage();
+
     if (LayerDatabase::instance().getProxiesToSave(isExport)) {
 
         int dialogResult = true;
 
-        if (MGlobal::kInteractive == MGlobal::mayaState() && !isCrashing()
-            && LayerDatabase::instance().saveInteractionRequired()) {
-            MGlobal::executeCommand(kSaveOptionUICmd, dialogResult);
+        if (!isCopyingSceneNodes()) {
+            if (MGlobal::kInteractive == MGlobal::mayaState() && !isCrashing()
+                && LayerDatabase::instance().saveInteractionRequired()) {
+                MGlobal::executeCommand(kSaveOptionUICmd, dialogResult);
+            }
         }
 
         if (dialogResult) {
@@ -432,6 +452,21 @@ void LayerDatabase::clearProxies()
     _internalProxiesToSave.clear();
 }
 
+void LayerDatabase::updateLayerManagers()
+{
+    auto creator = MayaUsd::AbstractLayerEditorCreator::instance();
+    if (!creator)
+        return;
+
+    for (const std::string& panelName : creator->getAllPanelNames()) {
+        AbstractLayerEditorWindow* window = creator->getWindow(panelName.c_str());
+        if (!window)
+            continue;
+
+        window->updateLayerModel();
+    }
+}
+
 bool LayerDatabase::hasDirtyLayer() const
 {
     for (const auto& info : _proxiesToSave) {
@@ -456,7 +491,7 @@ bool LayerDatabase::hasDirtyLayer() const
 bool LayerDatabase::getProxiesToSave(bool isExport)
 {
     bool checkSelection = isExport && (MFileIO::kExportTypeSelected == MFileIO::exportType());
-    const UFE_NS::GlobalSelection::Ptr& ufeSelection = UFE_NS::GlobalSelection::get();
+    const Ufe::GlobalSelection::Ptr& ufeSelection = Ufe::GlobalSelection::get();
 
     clearProxies();
 
@@ -543,6 +578,51 @@ void LayerDatabase::refreshProxiesToSave()
     }
 }
 
+void LayerDatabase::setSelectedStage(const std::string& stage)
+{
+    if (_selectedStage == stage)
+        return;
+
+    _selectedStage = stage;
+    // Mark the scene as modified.
+    MGlobal::executeCommand("file -modified 1");
+}
+
+std::string LayerDatabase::getSelectedStage() const { return _selectedStage; }
+
+bool LayerDatabase::saveLayerManagerSelectedStage()
+{
+    MayaUsd::LayerManager* lm = findOrCreateNode();
+    if (!lm)
+        return false;
+
+    MStatus     status;
+    MDataBlock  dataBlock = lm->_forceCache();
+    MDataHandle selectedStageHandle = dataBlock.outputValue(lm->selectedStage, &status);
+    if (!status)
+        return false;
+
+    selectedStageHandle.setString(getSelectedStage().c_str());
+
+    selectedStageHandle.setClean();
+    dataBlock.setClean(lm->selectedStage);
+
+    return true;
+}
+
+bool LayerDatabase::loadLayerManagerSelectedStage()
+{
+    MayaUsd::LayerManager* lm = findNode();
+    if (!lm)
+        return false;
+
+    MStatus status;
+    MPlug   selectedStagePlug(lm->thisMObject(), lm->selectedStage);
+    setSelectedStage(selectedStagePlug.asString(MDGContext::fsNormal, &status).asChar());
+
+    return status;
+}
+
 bool LayerDatabase::saveUsd(bool isExport)
 {
     BatchSaveResult result = MayaUsd::kNotHandled;
@@ -550,10 +630,10 @@ bool LayerDatabase::saveUsd(bool isExport)
     auto opt = MayaUsd::utils::serializeUsdEditsLocationOption();
 
     if (MayaUsd::utils::kIgnoreUSDEdits != opt) {
-        // When Maya is crashing, we don't want to save the the USD file to avoid
-        // overwriting them with possibly unwanted data. Instead, we will save the
-        // USD data inside the temporary crash recovery Maya file.
-        if (isCrashing()) {
+        // When Maya is crashing or copying/cutting scene nodes, we don't want to
+        // save the the USD file to avoid overwriting them with possibly unwanted
+        // data. Instead, we will save the USD data inside the temporary crash recovery Maya file.
+        if (isCrashing() || isCopyingSceneNodes()) {
             result = kPartiallyCompleted;
             opt = MayaUsd::utils::kSaveToMayaSceneFile;
         } else if (_batchSaveDelegate && _proxiesToSave.size() > 0) {
@@ -594,6 +674,7 @@ bool LayerDatabase::saveUsd(bool isExport)
     }
 
     clearProxies();
+    updateLayerManagers();
     return (MayaUsd::kCompleted == result);
 }
 
@@ -788,7 +869,12 @@ BatchSaveResult LayerDatabase::saveUsdToUsdFiles()
                 SdfLayerHandleVector allLayers = info.stage->GetLayerStack(false);
                 for (auto layer : allLayers) {
                     if (layer->PermissionToSave()) {
-                        MayaUsd::utils::saveLayerWithFormat(layer);
+                        if (!MayaUsd::utils::saveLayerWithFormat(layer)) {
+                            MString errMsg;
+                            MString layerName(layer->GetDisplayName().c_str());
+                            errMsg.format("Could not save layer ^1s.", layerName);
+                            MGlobal::displayError(errMsg);
+                        }
                     }
                 }
             }
@@ -814,14 +900,22 @@ void LayerDatabase::convertAnonymousLayers(
     //       to convertAnonymousLayersRecursive
     root = stage->GetRootLayer();
     if (root->IsAnonymous()) {
+        const bool wasTargetLayer = (stage->GetEditTarget().GetLayer() == root);
         PXR_NS::SdfFileFormat::FileFormatArguments args;
         std::string newFileName = MayaUsd::utils::generateUniqueFileName(proxyName);
         if (UsdMayaUtilFileSystem::requireUsdPathsRelativeToMayaSceneFile()) {
             newFileName = UsdMayaUtilFileSystem::getPathRelativeToMayaSceneFile(newFileName);
         }
-        MayaUsd::utils::saveLayerWithFormat(root, newFileName);
+        if (!MayaUsd::utils::saveLayerWithFormat(root, newFileName)) {
+            MString errMsg;
+            MString layerName(root->GetDisplayName().c_str());
+            errMsg.format("Could not save layer ^1s.", layerName);
+            MGlobal::displayError(errMsg);
+        }
 
-        MayaUsd::utils::setNewProxyPath(pShape->name(), UsdMayaUtil::convert(newFileName));
+        SdfLayerRefPtr newLayer = SdfLayer::FindOrOpen(newFileName);
+        MayaUsd::utils::setNewProxyPath(
+            pShape->name(), UsdMayaUtil::convert(newFileName), newLayer, wasTargetLayer);
     }
 
     SdfLayerHandle session = stage->GetSessionLayer();
@@ -830,6 +924,7 @@ void LayerDatabase::convertAnonymousLayers(
 
         saveUsdLayerToMayaFile(session, true);
 
+        // TODO: should update the target layer of the proxy shape if the session was the target.
         setValueForAttr(
             proxyNode,
             MayaUsdProxyShapeBase::sessionLayerNameAttr,
@@ -971,6 +1066,8 @@ void LayerDatabase::loadLayersPostRead(void*)
         }
     }
 
+    LayerDatabase::instance().loadLayerManagerSelectedStage();
+
     if (!_isSavingMayaFile)
         removeManagerNode(lm);
 
@@ -982,8 +1079,6 @@ void LayerDatabase::loadLayersPostRead(void*)
 
 void LayerDatabase::cleanUpNewScene(void*)
 {
-    // This is called during a Maya notification callback, so no undo supported.
-    OpUndoItemMuting muting;
     LayerDatabase::instance().removeAllLayers();
     LayerDatabase::removeManagerNode();
 }
@@ -1090,6 +1185,9 @@ void LayerDatabase::removeManagerNode(MayaUsd::LayerManager* lm)
         return;
     }
 
+    // This is called during a Maya notification callback, so no undo supported.
+    OpUndoItemMuting muting;
+
     clearManagerNode(lm);
 
     MDGModifier& modifier = MDGModifierUndoItem::create("Manager node removal");
@@ -1107,6 +1205,7 @@ MObject LayerManager::identifier = MObject::kNullObj;
 MObject LayerManager::fileFormatId = MObject::kNullObj;
 MObject LayerManager::serialized = MObject::kNullObj;
 MObject LayerManager::anonymous = MObject::kNullObj;
+MObject LayerManager::selectedStage = MObject::kNullObj;
 
 struct _OnSceneResetListener : public TfWeakBase
 {
@@ -1138,6 +1237,16 @@ MStatus LayerManager::initialize()
         MStatus           stat;
         MFnTypedAttribute fn_str;
         MFnStringData     stringData;
+
+        selectedStage
+            = fn_str.create("selectedStage", "sst", MFnData::kString, MObject::kNullObj, &stat);
+        CHECK_MSTATUS_AND_RETURN_IT(stat);
+        fn_str.setCached(true);
+        fn_str.setReadable(true);
+        fn_str.setStorable(true);
+        fn_str.setHidden(true);
+        stat = addAttribute(selectedStage);
+        CHECK_MSTATUS_AND_RETURN_IT(stat);
 
         identifier = fn_str.create("identifier", "id", MFnData::kString, MObject::kNullObj, &stat);
         CHECK_MSTATUS_AND_RETURN_IT(stat);
@@ -1244,6 +1353,19 @@ void LayerManager::removeSupportForNodeType(MTypeId type)
 bool LayerManager::supportedNodeType(MTypeId nodeId)
 {
     return LayerDatabase::instance().supportedNodeType(nodeId);
+}
+
+/* static */
+void LayerManager::setSelectedStage(const std::string& stage)
+{
+    return LayerDatabase::instance().setSelectedStage(stage);
+}
+
+/* static */
+std::string LayerManager::getSelectedStage()
+{
+    LayerDatabase::loadLayersPostRead(nullptr);
+    return LayerDatabase::instance().getSelectedStage();
 }
 
 } // namespace MAYAUSD_NS_DEF

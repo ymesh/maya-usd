@@ -17,6 +17,7 @@
 
 target_sources(${PROJECT_NAME}
     PRIVATE
+        batchSaveLayersUIDelegate.cpp
         dirtyLayersCountBadge.cpp
         generatedIconButton.cpp
         layerEditorWidget.cpp
@@ -56,30 +57,31 @@ target_sources(${PROJECT_NAME}
         warningDialogs.h
 )
 
-if (UFE_FOUND)
-    target_sources(${PROJECT_NAME}
-        PRIVATE
-            batchSaveLayersUIDelegate.cpp
-    )
+# -----------------------------------------------------------------------------
+# link libraries
+# -----------------------------------------------------------------------------
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        ghc_filesystem
+)
 
-    # -----------------------------------------------------------------------------
-    # promoted headers
-    # -----------------------------------------------------------------------------
-    set(HEADERS
-        batchSaveLayersUIDelegate.h
-    )
+# -----------------------------------------------------------------------------
+# promoted headers
+# -----------------------------------------------------------------------------
+set(HEADERS
+    batchSaveLayersUIDelegate.h
+)
 
-    mayaUsd_promoteHeaderList( 
-        HEADERS
-            ${HEADERS}
-        BASEDIR
-            ${PROJECT_NAME}/ui
-    )
+mayaUsd_promoteHeaderList( 
+    HEADERS
+        ${HEADERS}
+    BASEDIR
+        ${PROJECT_NAME}/ui
+)
 
-    # -----------------------------------------------------------------------------
-    # install
-    # -----------------------------------------------------------------------------
-    install(FILES ${HEADERS}
-        DESTINATION ${CMAKE_INSTALL_PREFIX}/include/${PROJECT_NAME}/ui
-    )
-endif()
+# -----------------------------------------------------------------------------
+# install
+# -----------------------------------------------------------------------------
+install(FILES ${HEADERS}
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/include/${PROJECT_NAME}/ui
+)

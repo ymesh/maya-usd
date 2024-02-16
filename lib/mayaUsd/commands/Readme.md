@@ -32,7 +32,10 @@ Each base command class is documented in the following sections.
 | `-apiSchema`                  | `-api`     | string (multi) | none                              | Imports the given API schemas' attributes as Maya custom attributes. This only recognizes API schemas that have been applied to prims on the stage. The attributes will properly round-trip if you re-export back to USD. |
 | `-chaser`                     | `-chr`     | string(multi)  | none                              | Specify the import chasers to execute as part of the import. See "Import Chasers" below. |
 | `-chaserArgs`                 | `-cha`     | string[3] multi| none                              | Pass argument names and values to import chasers. Each argument to `-chaserArgs` should be a triple of the form: (`<chaser name>`, `<argument name>`, `<argument value>`). See "Import Chasers" below. |
+| `-defaultPrim`                | `-dp`      | string         | none                              | Set the default prim on export. |
 | `-excludePrimvar`             | `-epv`     | string (multi) | none                              | Excludes the named primvar(s) from being imported as color sets or UV sets. The primvar name should be the full name without the `primvars:` namespace prefix. |
+| `-excludePrimvarNamespace`    | `-epv`     | string (multi) | none                              | Excludes the named primvar namespace(s) from being imported as color sets or UV sets. The namespance should be the name without the `primvars:` namespace prefix. Ex: `primvars:excludeNamespace:excludeMe:excludeMetoo` can be excluded by specifying `excludeNamespace` or `excludeNamespace:excludeMe`|
+| `-excludeExportTypes`         | `-eet`     | string (multi) | none                              | Excludes the selected types of prims from being exported. The options are: Meshes, Cameras and Lights.|
 | `-file`                       | `-f`       | string         | none                              | Name of the USD being loaded |
 | `-frameRange`                 | `-fr`      | float float    | none                              | The frame range of animations to import |
 | `-importInstances`            | `-ii`      | bool           | true                              | Import USD instanced geometries as Maya instanced shapes. Will flatten the scene otherwise. |
@@ -41,13 +44,15 @@ Each base command class is documented in the following sections.
 | `-parent`                     | `-p`       | string         | none                              | Name of the Maya scope that will be the parent of the imported data. |
 | `-primPath`                   | `-pp`      | string         | none (defaultPrim)                | Name of the USD scope where traversing will being. The prim at the specified primPath (including the prim) will be imported. Specifying the pseudo-root (`/`) means you want to import everything in the file. If the passed prim path is empty, it will first try to import the defaultPrim for the rootLayer if it exists. Otherwise, it will behave as if the pseudo-root was passed in. |
 | `-preferredMaterial`          | `-prm`     | string         | `lambert`                         | Indicate a preference towards a Maya native surface material for importers that can resolve to multiple Maya materials. Allowed values are `none` (prefer plugin nodes like pxrUsdPreviewSurface and aiStandardSurface) or one of `lambert`, `standardSurface`, `blinn`, `phong`. In displayColor shading mode, a value of `none` will default to `lambert`.
+| `-primVariant`                   | `-pv`      | string (multi)        | none                           | Specifies variant choices to be imported on a prim. The variant specified will be the one to be imported, otherwise, the default variant will be imported. This flag is repeatable. Repeating the flag allows for extra prims and variant choices to be imported.| 
 | `-readAnimData`               | `-ani`     | bool           | false                             | Read animation data from prims while importing the specified USD file. If the USD file being imported specifies `startTimeCode` and/or `endTimeCode`, Maya's MinTime and/or MaxTime will be expanded if necessary to include that frame range. **Note**: Only some types of animation are currently supported, for example: animated visibility, animated transforms, animated cameras, mesh and NURBS surface animation via blend shape deformers. Other types are not yet supported, for example: time-varying curve points, time-varying mesh points/normals, time-varying NURBS surface points |
 | `-shadingMode`                | `-shd`     | string[2] multi| `useRegistry` `UsdPreviewSurface` | Ordered list of shading mode importers to try when importing materials. The search stops as soon as one valid material is found. Allowed values for the first parameter are: `none` (stop search immediately, must be used to signal no material import), `displayColor` (if there are bound materials in the USD, create corresponding Lambertian shaders and bind them to the appropriate Maya geometry nodes), `pxrRis` (attempt to reconstruct a Maya shading network from (presumed) Renderman RIS shading networks in the USD), `useRegistry` (attempt to reconstruct a Maya shading network from (presumed) UsdShade shading networks in the USD) the second item in the parameter pair is a convertMaterialFrom flag which allows specifying which one of the registered USD material sources to explore. The full list of registered USD material sources can be found via the `mayaUSDListShadingModesCommand` command. |
 | `-useAsAnimationCache`        | `-uac`     | bool           | false                             | Imports geometry prims with time-sampled point data using a point-based deformer node that references the imported USD file. When this parameter is enabled, `MayaUSDImportCommand` will create a `pxrUsdStageNode` for the USD file that is being imported. Then for each geometry prim being imported that has time-sampled points, a `pxrUsdPointBasedDeformerNode` will be created that reads the points for that prim from USD and uses them to deform the imported Maya geometry. This provides better import and playback performance when importing time-sampled geometry from USD, and it should reduce the weight of the resulting Maya scene since it will bypass creating blend shape deformers with per-object, per-time sample geometry. Only point data from the geometry prim will be computed by the deformer from the referenced USD. Transform data from the geometry prim will still be imported into native Maya form on the Maya shape's transform node. **Note**: This means that a link is created between the resulting Maya scene and the USD file that was imported. With this parameter off (as is the default), the USD file that was imported can be freely changed or deleted post-import. With the parameter on, however, the Maya scene will have a dependency on that USD file, as well as other layers that it may reference. Currently, this functionality is only implemented for Mesh prims/Maya mesh nodes. |
 | `-verbose`                    | `-v`       | noarg          | false                             | Make the command output more verbose. |
 | `-variant`                    | `-var`     | string[2]      | none                              | Set variant key value pairs |
 | `-importUSDZTextures`         | `-itx`     | bool           | false                             | Imports textures from USDZ archives during import to disk. Can be used in conjuction with `-importUSDZTexturesFilePath` to specify an explicit directory to write imported textures to. If not specified, requires a Maya project to be set in the current context.  |
-| `-importUSDZTexturesFilePath` | `-itf`     | string         | none                              | Specifies an explicit directory to write imported textures to from a USDZ archive. Has no effect if `-importUSDZTextures` is not specified.
+| `-importUSDZTexturesFilePath` | `-itf`     | string         | none                              | Specifies an explicit directory to write imported textures to from a USDZ archive. Has no effect if `-importUSDZTextures` is not specified. |
+| `-importRelativeTextures`     | `-rtx`     | string         | none                              | Selects how textures filenames are generated: absolute, relative, automatic or none. When automatic, the filename is relative if the source filename of the texture being imported is relative. When none, the file path is left alone, for backward compatible behavior. |
 
 ### Return Value
 
@@ -55,6 +60,17 @@ Each base command class is documented in the following sections.
 of the highest prim(s) imported. This is generally the fullDagPath
 that corresponds to the imported primPath but could be multiple
 paths if primPath="/".
+
+### Repeatable flags
+The `-primVar` flag can be used multiple times when used to import specific variants. In MEL, this simply means using the flag repeatedly for each prim that contains the chosen variants. In Python, the flag requires a string array to import. Importing multiple variant choices using python would for example use:
+
+```python
+cmds.mayaUSDImport(
+    file='/tmp/test.usda',
+    primVariant= [
+("/primPath/prim_1", "VariantGroup", "Variant_1"),
+("/primPath/prim_2", "VariantGroup", "Variant_2")])
+```
 
 #### Import behaviours
 
@@ -104,6 +120,14 @@ recommended that you be very mindful of the edits you are making to the scene
 graph, and how multiple import chasers might work together in unexpected ways or
 have inter-dependencies.
 
+PostImport function provides access to the SDF paths of USD objects and the DAG paths
+of imported Maya objects. Input parameter `dagPaths` and `sdfPaths` represent the corresponding 
+DAG and SDF paths for the top primitives. To access the mapping between SDF and DAG paths of 
+all primitives, you can use the `GetSdfToDagMap()` function, which returns a 
+`MSdfToDagMap` object with SDF path as the key and DAG path as the value. Input parameter `stage`
+contains information of all primitives in the current stage. Use `TraverseAll()` to traverse the
+primitives.
+
 Import chasers may also be written to parse an array of 3 string arguments for
 their own purposes, similar to the Alembic export chaser example.
 
@@ -137,6 +161,7 @@ their own purposes, similar to the Alembic export chaser example.
 | `-exportSkels`                   | `-skl`     | string           | none                | Determines how to export skeletons. Valid values are: `none` - No skeleton are exported, `auto` - All skeletons will be exported, SkelRoots may be created, `explicit` - only those under SkelRoots                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `-exportSkin`                    | `-skn`     | string           | none                | Determines how to export skinClusters via the UsdSkel schema. On any mesh where skin bindings are exported, the geometry data is the pre-deformation data. On any mesh where skin bindings are not exported, the geometry data is the final (post-deformation) data. Valid values are: `none` - No skinClusters are exported, `auto` - All skinClusters will be exported for non-root prims. The exporter errors on skinClusters on any root prims. The rootmost prim containing any skinned mesh will automatically be promoted into a SkelRoot, e.g. if `</Model/Mesh>` has skinning, then `</Model>` will be promoted to a SkelRoot, `explicit` - Only skinClusters under explicitly-tagged SkelRoot prims will be exported. The exporter errors if there are nested SkelRoots. To explicitly tag a prim as a SkelRoot, specify a `USD_typeName`attribute on a Maya node.                                                                                                    |
 | `-exportUVs`                     | `-uvs`     | bool             | true                | Enable or disable the export of UV sets                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `-exportRelativeTextures`        | `-rtx`     | string           | automatic           | Selects how textures filenames are generated: absolute, relative or automatic. When automatic, the filename is relative if the source filename of the texture being exported is relative                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `-exportVisibility`              | `-vis`     | bool             | true                | Export any state and animation on Maya `visibility` attributes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `-exportComponentTags`           | `-tag`     | bool             | true                | Export component tags                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `-exportMaterialCollections`     | `-mcs`     | bool             | false               | Create collections representing sets of Maya geometry with the same material binding. These collections are created in the `material:` namespace on the prim at the specified `materialCollectionsPath` (see export option `-mcp`). These collections are encoded using the UsdCollectionAPI schema and are authored compactly using the API `UsdUtilsCreateCollections()`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -154,6 +179,7 @@ their own purposes, similar to the Alembic export chaser example.
 | `-melPostCallback`               | `-mpc`     | string           | none                | Mel function called when the export is done                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `-materialsScopeName`            | `-msn`     | string           | `Looks`             | Materials Scope Name                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `-mergeTransformAndShape`        | `-mt`      | bool             | true                | Combine Maya transform and shape into a single USD prim that has transform and geometry, for all "geometric primitives" (gprims). This results in smaller and faster scenes. Gprims will be "unpacked" back into transform and shape nodes when imported into Maya from USD.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `-writeDefaults`                 | `-wd`      | bool             | false               | Write default attribute values at the default USD time.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `-normalizeNurbs`                | `-nnu`     | bool             | false               | When setm the UV coordinates of nurbs are normalized to be between zero and one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `-preserveUVSetNames`            | `-puv`     | bool             | false               | Refrain from renaming UV sets additional to "map1" to "st1", "st2", etc. This option is overridden for any UV set specified in `-remapUVSetsTo`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `-pythonPerFrameCallback`        | `-pfc`     | string           | none                | Python function called after each frame is exported                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -169,6 +195,7 @@ their own purposes, similar to the Alembic export chaser example.
 | `-geomSidedness`                 | `-gs`      | string           | derived             | Determines how geometry sidedness is defined. Valid values are: `derived` - Value is taken from the shapes doubleSided attribute, `single` - Export single sided, `double` - Export double sided                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `-verbose`                       | `-v`       | noarg            | false               | Make the command output more verbose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `-customLayerData`               | `-cld`     | string[3](multi) | none                | Set the layers customLayerData metadata. Values are a list of three strings for key, value and data type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `-metersPerUnit`                 | `-mpu`     | double           | 0.0                 | (Evolving) Exports with the given metersPerUnit. Use with care, as only certain attributes have their dimensions converted.<br/><br/> The default value of 0 will continue to use the Maya internal units (cm) and a value of -1 will use the display units. Any other positive value will be taken as an explicit metersPerUnit value to be used.<br/><br/> Currently, the following prim types are supported: <br/><ul><li>Meshes</li><li>Transforms</li></ul>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 #### Frame Samples
 
@@ -188,7 +215,7 @@ Examples:
 | [1, 3]       | 1.0         | -0.1, 0.0, 0.2 | 0.9, 1.0, 1.2, 1.9, 2.0, 2.2, 2.9, 3.0, 3.2      |
 | [1, 3]       | 2.0         | -0.1, 0.2      | 0.9, 1.2, 2.9, 3.2                               |
 | [1, 3]       | 0.5         | -0.1, 0.2      | 0.9, 1.2, 1.4, 1.7, 1.9, 2.2, 2.4, 2.7, 2.9, 3.2 |
-| [1, 3]       | 2.0         | -3.0, 3.0      | -2.0, -1.0, 4.0, 5.0                             |
+| [1, 3]       | 2.0         | -3.0, 3.0      | -2.0, 0.0, 4.0, 6.0                             |
 
 The last example is quite strange, and a warning will be issued.
 This is how it will be processed:
@@ -197,9 +224,9 @@ This is how it will be processed:
   giving us time samples -2.0 and 4.0.
 * Then we advance the current time by the stride (2.0),
   making the new current time 3.0. We evaluate frame samples,
-  giving us time samples -1.0 and 5.0.
+  giving us time samples 0.0 and 6.0.
 * The time samples are sorted before exporting, so they are
-  evaluated in the order -2.0, -1.0, 4.0, 5.0.
+  evaluated in the order -2.0, 0.0, 4.0, 6.0.
 
 
 ### Export Behaviors
@@ -303,10 +330,45 @@ using the Python "adaptor" helper; see the section on
 | `USD_ATTR_purpose`                        | string | `default`, `render`, `proxy`, `guide` | Directly corresponds to UsdGeomImageable's purpose attribute for specifying context-sensitive and selectable scenegraph visibility. This attribute will be populated from an imported USD scene wherever it is explicitly authored, and wherever authored on a Maya dag node, will be exported to USD. |
 | **Mesh nodes (internal for UsdMaya)**: Internal to Maya; cannot be set using adaptors. |
 | `USD_EmitNormals`                         | bool   | true/false      | UsdMaya uses this attribute to determine if mesh normals should be emitted; by default, without the tag, UsdMaya will export mesh normals to USD. **Note**: Currently Maya reads/writes face varying normals. This is only valid when the mesh's subdivision scheme is `none` (regular poly mesh), and is ignored otherwise. |
+| `USD_GeomSubsetInfo`                      | string   | JSON  | UsdMaya uses this attribute to provide roundtripping information for UsdGeomSubset data. |
 | **Mesh nodes (UsdGeomMesh attributes)**: These attributes get converted into attributes of the UsdGeomMesh schema. You can use UsdMaya adaptors to author them. Note that these are only the common mesh attributes; you can export any known schema attribute using UsdMaya adaptors. |
 | `USD_ATTR_faceVaryingLinearInterpolation` | string | `none`, `cornersOnly`, `cornersPlus1`, `cornersPlus2`, `boundaries`, `all` | Determines the Face-Varying Interpolation rule. Used for texture mapping/shading purpose. Defaults to `cornersPlus1`. See the [OpenSubdiv documentation](http://graphics.pixar.com/opensubdiv/docs/subdivision_surfaces.html#face-varying-interpolation-rules) for more detail. |
 | `USD_ATTR_interpolateBoundary`            | string | `none`, `edgeAndCorner`, `edgeOnly` | Determines the Boundary Interpolation rule. Valid for Catmull-Clark and Loop subdivision surfaces. Defaults to `edgeAndCorner`. |
 | `USD_ATTR_subdivisionScheme`              | string | `none`, `bilinear`, `catmullClark`, `loop` | Determines the Mesh subdivision scheme. Default can be configured using the `-defaultMeshScheme` export option for meshes without `USD_ATTR_subdivisionScheme` manually specified; we currently default to `catmullClark`. |
+
+
+### Specifying Arbitrary Attributes for Export 
+
+Attributes on a Maya DAG node that are not part of an existing schema or are otherwise unknown to USD can still be tagged for export.
+
+Attributes of a node can be added to Maya attribute USD_UserExportedAttributesJson as a JSON dictionary. During export, this attribute is used to find the names of additional Maya attributes to export as USD attributes, as well as any additional metadata about how the attribute should be exported. Here is example of what the JSON in this attribute might look like after tagging:
+
+```javascript 
+{ "myMayaAttributeOne":
+{ }, "myMayaAttributeTwo":
+
+{ "usdAttrName": "my:namespace:attributeTwo" }
+
+, "attributeAsPrimvar":
+
+{ "usdAttrType": "primvar" }
+
+, "attributeAsVertexInterpPrimvar":
+
+{ "usdAttrType": "primvar", "interpolation": "vertex" }
+
+, "attributeAsRibAttribute":
+
+{ "usdAttrType": "usdRi" }
+
+"doubleAttributeAsFloatAttribute":
+
+{ "translateMayaDoubleToUsdSinglePrecision": true }
+```
+
+If the attribute metadata contains a value for usdAttrName, the attribute will be given that name in USD. Otherwise, the Maya attribute name will be used, and for regular USD attributes, that name will be prepended with the userProperties: namespace. Note that other types of attributes such as primvars and UsdRi attributes have specific namespacing schemes, so attributes of those types will follow those namespacing conventions. Maya attributes in the JSON will be processed in sorted order. Any USD attribute name collisions will be resolved by using the first attribute visited, and a warning will be issued about subsequent attribute tags for the same USD attribute. The attribute metadata can also contain a value for usdAttrType which can be set to primvar to create the attribute as a UsdGeomPrimvar, or to usdRi to create the attribute using UsdRiStatements::CreateRiAttribute(). Any other value for usdAttrType will result in a regular USD attribute. Attributes to be exported as primvars can also have their interpolation specified by providing a value for the interpolation key in the attribute metadata.
+
+There is not always a direct mapping between Maya-native types and USD/Sdf types, and often it's desirable to intentionally use a single precision type when the extra precision is not needed to reduce size, I/O bandwidth, etc. For example, there is no native Maya attribute type to represent an array of float triples. To get an attribute with a VtVec3fArray type in USD, you can create a vectorArray data-typed attribute in Maya (which stores an array of MVectors, which contain doubles) and set the attribute metadata translateMayaDoubleToUsdSinglePrecision to true so that the data is cast to single precision on export. It will be up-cast back to double precision on re-import.
 
 
 #### Export Chasers (Advanced)
@@ -494,6 +556,53 @@ The purpose of this command is to find the names and annotations for registered 
 | `-importArguments`     | `-ig`      | string         | Retrieve the import arguments affected by the import job context nice name passed as parameter |
 | `-jobContext`          | `-jc`      | string         | Retrieve the job context name associated with a nice name. |
 
+## `mayaUsdGetMaterialsFromRenderers`
+
+The purpose of this command is to return the names of USD-compatible materials associated with the currently loaded renderers.  
+As of this writing, the returned names are largely hard-coded, as is the selection of renderers: 
+
+*  MaterialX
+*  USDPreviewSurface
+*  Arnold (if installed and loaded)
+
+### Return Value
+
+The command returns an array of strings in the format `Renderer Name/Material Label|MaterialIdentifier`, where the `MaterialIdentifier` is the internal name that may be used to instantiate the given material. 
+
+## `mayaUsdGetMaterialsInStage`
+
+The purpose of this command is to get a list of all materials contained in the USD stage of the given object.
+
+### Arguments
+
+Pass the path of the USD object to query for materials as an argument.
+
+### Return Value
+
+Returns an array of strings containing paths pointing to the materials in the given object's USD stage.
+
+## `mayaUsdMaterialBindings`
+
+The purpose of this command is to determine various material-related attributes of a given USD object. This includes:
+
+*  Determining whether an object has a material assigned.
+*  Determining whether an object is of a type where allowing material assignment would be sensible in a GUI context.  
+Technically, USD allows binding of materials to any object type. This function however contains hard-coded filters intended to prevent material assignments in cases where it does not make sense from a usability perspective: For example, the function will return `false` for objects such as `UsdMediaSpatialAudio` or `UsdPhysicsScene`, as it may be reasonably assumed that the user does not intend to assign a material to these object types.
+
+### Arguments
+
+Pass the path of the USD object to query for materials as an argument.
+
+### Command Flags
+
+| Long flag      | Short flag | Type            | Default | Description |
+| -------------- | ---------- | --------------- | --------| ----------- |
+| `-canAssignMaterialToNodeType`  | `-ca` | bool | false | Determines whether the given object is of a type that accepts material assignments in a GUI context. |
+| `-hasMaterialBinding `  | `-mb` | bool | false | Determines whether the given object is bound to a material. |
+
+### Return Value
+
+Returns `true` or `false` in response to the given query.
 
 ## `EditTargetCommand`
 

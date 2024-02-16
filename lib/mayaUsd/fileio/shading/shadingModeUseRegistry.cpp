@@ -175,7 +175,37 @@ private:
         // parameter, so we have to make a copy of rootPlug here.
         MPlug rootPlugCopy(rootPlug);
 
-        MStatus            status;
+        MStatus status;
+
+        // This is to perform an initial traversal to find the used nodes
+        // connected to the material to avoid generating unnecessary plugs.
+        MItDependencyGraph iterDepGraphNodeLevel(
+            rootPlugCopy,
+            MFn::kInvalid,
+            MItDependencyGraph::Direction::kUpstream,
+            MItDependencyGraph::Traversal::kDepthFirst,
+            MItDependencyGraph::Level::kNodeLevel,
+            &status);
+        if (status != MS::kSuccess) {
+            return UsdShadeShader();
+        }
+
+        UsdMayaUtil::MObjectHandleUnorderedSet allowedNodes;
+
+        for (; !iterDepGraphNodeLevel.isDone(); iterDepGraphNodeLevel.next()) {
+            MObject currentNode = iterDepGraphNodeLevel.currentItem(&status);
+            if (status != MS::kSuccess) {
+                continue;
+            }
+            const MFnDependencyNode currentDepNode(currentNode, &status);
+            if (status != MS::kSuccess) {
+                continue;
+            }
+
+            MObjectHandle nodeHandle(currentNode);
+            allowedNodes.insert(nodeHandle);
+        }
+
         MItDependencyGraph iterDepGraph(
             rootPlugCopy,
             MFn::kInvalid,
@@ -251,6 +281,10 @@ private:
             for (unsigned int i = 0u; i < dstPlugs.length(); ++i) {
                 const MPlug dstPlug = dstPlugs[i];
                 if (dstPlug.isNull()) {
+                    continue;
+                }
+
+                if (!allowedNodes.count(dstPlug.node())) {
                     continue;
                 }
 
@@ -446,11 +480,7 @@ public:
         // renderContext is not found. Therefore we need to test first that the
         // render context output we are looking for really exists:
         if (shadeMaterial.GetSurfaceOutput(renderContext)) {
-#if PXR_VERSION > 2105
             UsdShadeShader surfaceShader = shadeMaterial.ComputeSurfaceSource({ renderContext });
-#else
-            UsdShadeShader surfaceShader = shadeMaterial.ComputeSurfaceSource(renderContext);
-#endif
             if (surfaceShader) {
                 const TfToken surfaceShaderPlugName = _context->GetSurfaceShaderPlugName();
                 if (!surfaceShaderPlugName.IsEmpty()) {
@@ -460,11 +490,7 @@ public:
         }
 
         if (shadeMaterial.GetVolumeOutput(renderContext)) {
-#if PXR_VERSION > 2105
             UsdShadeShader volumeShader = shadeMaterial.ComputeVolumeSource({ renderContext });
-#else
-            UsdShadeShader volumeShader = shadeMaterial.ComputeVolumeSource(renderContext);
-#endif
             if (volumeShader) {
                 const TfToken volumeShaderPlugName = _context->GetVolumeShaderPlugName();
                 if (!volumeShaderPlugName.IsEmpty()) {
@@ -474,13 +500,8 @@ public:
         }
 
         if (shadeMaterial.GetDisplacementOutput(renderContext)) {
-#if PXR_VERSION > 2105
             UsdShadeShader displacementShader
                 = shadeMaterial.ComputeDisplacementSource({ renderContext });
-#else
-            UsdShadeShader displacementShader
-                = shadeMaterial.ComputeDisplacementSource(renderContext);
-#endif
             if (displacementShader) {
                 const TfToken displacementShaderPlugName
                     = _context->GetDisplacementShaderPlugName();

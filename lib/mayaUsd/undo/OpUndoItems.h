@@ -18,7 +18,7 @@
 
 #include "OpUndoItemList.h"
 
-#include <mayaUsd/undo/UsdUndoableItem.h>
+#include <usdUfe/undo/UsdUndoableItem.h>
 
 #include <maya/MDGModifier.h>
 #include <maya/MDagModifier.h>
@@ -26,10 +26,8 @@
 #include <maya/MFnSet.h>
 #include <maya/MGlobal.h>
 #include <maya/MSelectionList.h>
-#ifdef WANT_UFE_BUILD
 #include <ufe/selection.h>
 #include <ufe/undoableCommand.h>
-#endif
 
 #include <memory>
 #include <vector>
@@ -183,11 +181,11 @@ class UsdUndoableItemUndoItem : public OpUndoItem
 public:
     /// \brief create a USD undo item recorder and keep track of it.
     MAYAUSD_CORE_PUBLIC
-    static MAYAUSD_NS::UsdUndoableItem& create(const std::string name, OpUndoItemList& undoInfo);
+    static UsdUfe::UsdUndoableItem& create(const std::string name, OpUndoItemList& undoInfo);
 
     /// \brief create a USD undo item recorder and keep track of it in the global undo item list.
     MAYAUSD_CORE_PUBLIC
-    static MAYAUSD_NS::UsdUndoableItem& create(const std::string name);
+    static UsdUfe::UsdUndoableItem& create(const std::string name);
 
     /// \brief construct a USD undo item recorder.
     MAYAUSD_CORE_PUBLIC
@@ -209,10 +207,10 @@ public:
 
     /// \brief gets the DG modifier.
     MAYAUSD_CORE_PUBLIC
-    MAYAUSD_NS::UsdUndoableItem& getUndoableItem() { return _item; }
+    UsdUfe::UsdUndoableItem& getUndoableItem() { return _item; }
 
 private:
-    MAYAUSD_NS::UsdUndoableItem _item;
+    UsdUfe::UsdUndoableItem _item;
 };
 
 //------------------------------------------------------------------------------
@@ -304,6 +302,10 @@ public:
 
     MAYAUSD_CORE_PUBLIC
     ~FunctionUndoItem() override;
+
+    /// \brief execute a single sub-operation. Calls redo.
+    MAYAUSD_CORE_PUBLIC
+    bool execute() override;
 
     /// \brief undo a single sub-operation.
     MAYAUSD_CORE_PUBLIC
@@ -406,8 +408,6 @@ private:
     MSelectionList          _previousSelection;
     MGlobal::ListAdjustment _selMode;
 };
-
-#ifdef WANT_UFE_BUILD
 
 //------------------------------------------------------------------------------
 // UfeSelectionUndoItem
@@ -524,8 +524,6 @@ public:
 private:
     std::shared_ptr<Ufe::UndoableCommand> _command;
 };
-
-#endif
 
 //------------------------------------------------------------------------------
 // LockNodesUndoItem

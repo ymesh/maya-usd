@@ -5,6 +5,7 @@
 set(TEST_SCRIPT_FILES
     testBlockSceneModificationContext.py
     testDiagnosticDelegate.py
+    testUtilsEditability.py
 )
 
 if(CMAKE_WANT_MATERIALX_BUILD AND CMAKE_UFE_V3_FEATURES_AVAILABLE)
@@ -13,20 +14,10 @@ if(CMAKE_WANT_MATERIALX_BUILD AND CMAKE_UFE_V3_FEATURES_AVAILABLE)
     )
 endif()
 
-if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
-    list(APPEND TEST_SCRIPT_FILES
-        testUtilsEditability.py
-    )
-endif()
-
-set(INTERACTIVE_TEST_SCRIPT_FILES "")
-
-if(CMAKE_UFE_V2_FEATURES_AVAILABLE)
-    list(APPEND INTERACTIVE_TEST_SCRIPT_FILES
-        testUtilsSelectability.py
-        testUtilsSelectabilityPointInstanceSelection.py
-    )
-endif()
+set(INTERACTIVE_TEST_SCRIPT_FILES
+    testUtilsSelectability.py
+    testUtilsSelectabilityPointInstanceSelection.py
+)
 
 foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_get_unittest_target(target ${script})
@@ -109,6 +100,10 @@ if(IS_WINDOWS)
         testLoadRules.cpp
     )
     add_mayaUsdLibUtils_test(
+        testUtilsFileSystem
+        testUtilsFileSystem.cpp
+    )
+    add_mayaUsdLibUtils_test(
         testTargetLayer
         testTargetLayer.cpp
     )
@@ -116,4 +111,25 @@ if(IS_WINDOWS)
         testSplitString
         testSplitString.cpp
     )
+
+    if(CMAKE_WANT_MATERIALX_BUILD AND PXR_VERSION GREATER_EQUAL 2211)
+        add_mayaUsdLibUtils_test(
+            test_ShaderGenUtils
+            test_ShaderGenUtils.cpp
+        )
+
+        target_compile_definitions(test_ShaderGenUtils
+        PRIVATE
+            MATERIALX_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/materialx_test_data"
+            MATERIALX_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test/Temporary/test_ShaderGenUtils"
+        )
+
+        target_link_libraries(test_ShaderGenUtils
+        PRIVATE
+            usdMtlx
+            MaterialXCore
+            MaterialXFormat
+        )
+
+    endif()    
 endif()

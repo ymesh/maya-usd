@@ -57,8 +57,6 @@
 
 #include <regex>
 
-using namespace MAYAUSD_NS_DEF;
-
 PXR_NAMESPACE_OPEN_SCOPE
 
 class MtlxUsd_FileWriter : public MtlxUsd_BaseWriter
@@ -142,7 +140,10 @@ MtlxUsd_FileWriter::MtlxUsd_FileWriter(
 
     // Not resolving UDIM tags. We want to actually open one of these files:
     UsdMayaShadingUtil::ResolveUsdTextureFileName(
-        filename, _GetExportArgs().GetResolvedFileName(), false);
+        filename,
+        _GetExportArgs().GetResolvedFileName(),
+        _GetExportArgs().exportRelativeTextures,
+        false);
 
     _numChannels = UsdMayaShadingUtil::GetNumberOfChannels(filename);
     switch (_numChannels) {
@@ -195,7 +196,7 @@ MtlxUsd_FileWriter::MtlxUsd_FileWriter(
 
     fileTextureSchema.CreateInput(TrMayaTokens->inColor, _outputDataType)
         .ConnectToSource(colorOutput);
-    fileTextureSchema.CreateInput(TrMayaTokens->uvCoord, _outputDataType);
+    fileTextureSchema.CreateInput(TrMayaTokens->uvCoord, SdfValueTypeNames->Float2);
     fileTextureSchema.CreateOutput(TrMayaTokens->outColor, _outputDataType);
 
     const MPlug uvCoordPlug = depNodeFn.findPlug(
@@ -299,7 +300,10 @@ void MtlxUsd_FileWriter::Write(const UsdTimeCode& usdTime)
     const bool isUDIM = (status == MS::kSuccess && tilingAttr.asInt() == 3);
 
     UsdMayaShadingUtil::ResolveUsdTextureFileName(
-        fileTextureName, _GetExportArgs().GetResolvedFileName(), isUDIM);
+        fileTextureName,
+        _GetExportArgs().GetResolvedFileName(),
+        _GetExportArgs().exportRelativeTextures,
+        isUDIM);
 
     UsdShadeInput fileInput
         = shaderSchema.CreateInput(TrMtlxTokens->file, SdfValueTypeNames->Asset);

@@ -4,6 +4,8 @@
 /// @file
 /// OGS fragment wrapper.
 
+#include <mayaUsd/base/api.h>
+
 #include <MaterialXCore/Document.h>
 #include <MaterialXGenShader/Shader.h>
 #include <MaterialXRender/ImageHandler.h>
@@ -16,7 +18,7 @@ namespace MaterialXMaya {
 /// and outputs and embedding source code in one or potentially multiple target
 /// shading languages (GLSL is the only such language currently supported).
 ///
-class OgsFragment
+class MAYAUSD_CORE_PUBLIC OgsFragment
 {
 public:
     /// Creates a local GLSL fragment generator
@@ -87,6 +89,12 @@ public:
 
     /// Get a string that is unique for each environment settings possible:
     static std::string getSpecularEnvKey();
+
+    /// Prepare all data structures to handle an internal Maya OCIO fragment:
+    static std::string registerOCIOFragment(const std::string& fragName);
+
+    /// Get a library with all known internal Maya OCIO fragment:
+    static mx::DocumentPtr getOCIOLibrary();
 
 private:
     /// The constructor implementation that public constructors delegate to.

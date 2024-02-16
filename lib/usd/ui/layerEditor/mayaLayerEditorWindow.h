@@ -26,7 +26,6 @@
 #include <QtCore/QPointer>
 #include <QtWidgets/QMainWindow>
 
-using namespace MAYAUSD_NS_DEF;
 namespace UsdLayerEditor {
 
 class LayerEditorWidget;
@@ -71,6 +70,7 @@ public:
     void printLayer() override;
     void clearLayer() override;
     void selectPrimsWithSpec() override;
+    void updateLayerModel() override;
 
     void selectProxyShape(const char* shapePath) override;
 
