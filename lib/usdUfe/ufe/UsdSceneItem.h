@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef USD_SCENE_ITEM_H
+#define USD_SCENE_ITEM_H
 
 #include <usdUfe/base/api.h>
 
@@ -23,6 +24,10 @@
 
 #include <ufe/path.h>
 #include <ufe/sceneItem.h>
+
+#ifdef UFE_SCENEITEM_HAS_METADATA
+#include <ufe/value.h>
+#endif // UFE_SCENEITEM_HAS_METADATA
 
 namespace USDUFE_NS_DEF {
 
@@ -85,13 +90,8 @@ public:
         const Ufe::Path&       path,
         const PXR_NS::UsdPrim& prim,
         int                    instanceIndex = PXR_NS::UsdImagingDelegate::ALL_INSTANCES);
-    ~UsdSceneItem() override = default;
 
-    // Delete the copy/move constructors assignment operators.
-    UsdSceneItem(const UsdSceneItem&) = delete;
-    UsdSceneItem& operator=(const UsdSceneItem&) = delete;
-    UsdSceneItem(UsdSceneItem&&) = delete;
-    UsdSceneItem& operator=(UsdSceneItem&&) = delete;
+    USDUFE_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(UsdSceneItem);
 
     //! Create a UsdSceneItem from a UFE path and a USD prim.
     //
@@ -102,7 +102,7 @@ public:
         const PXR_NS::UsdPrim& prim,
         int                    instanceIndex = PXR_NS::UsdImagingDelegate::ALL_INSTANCES);
 
-    const PXR_NS::UsdPrim& prim() const { return fPrim; }
+    const PXR_NS::UsdPrim& prim() const { return _prim; }
 
     int instanceIndex() const { return _instanceIndex; }
 
@@ -112,16 +112,71 @@ public:
     // PointInstancer and its instanceIndex is non-negative.
     bool isPointInstance() const
     {
-        return (fPrim && fPrim.IsA<PXR_NS::UsdGeomPointInstancer>() && _instanceIndex >= 0);
+        return (_prim && _prim.IsA<PXR_NS::UsdGeomPointInstancer>() && _instanceIndex >= 0);
     }
 
     // Ufe::SceneItem overrides
     std::string              nodeType() const override;
     std::vector<std::string> ancestorNodeTypes() const override;
 
+#ifdef UFE_SCENEITEM_HAS_METADATA
+
+    //! Method to get a meta data when given a key
+    //! \param key The key to get the value for
+    //! \return Ufe::Value of the given key if key exists, Ufe::Value() otherwise
+    Ufe::Value getMetadata(const std::string& key) const override;
+
+    //! Method to set a meta data on a key
+    //! \param key The key to set the value on
+    //! \param value The value for the key
+    //! \return UndoableCommandPtr for the set action
+    Ufe::UndoableCommandPtr
+    setMetadataCmd(const std::string& key, const Ufe::Value& value) override;
+
+    //! Clears content of a meta data given a key.
+    //! \param key The key to clear
+    //! \return UndoableCommandPtr for the clear action
+    Ufe::UndoableCommandPtr clearMetadataCmd(const std::string& key) override;
+
+    //! Method to get a meta data when given a key inside a group
+    //! \param group The group the key is stored on
+    //! \param key The key to get the value for
+    //! \return Ufe::Value of the given key if key exists, Ufe::Value() otherwise
+    //! \note when the group name starts with "SessionLayer-", this get-metadata command
+    //!       strip that prefix. This is done so that UFE users can place metadata on the
+    //!       session layer.
+    Ufe::Value getGroupMetadata(const std::string& group, const std::string& key) const override;
+
+    //! Method to set a meta data on a key in a group
+    //! \param group The group the key is going to set on
+    //! \param key The key to set the value on
+    //! \param value The value for the key
+    //! \return UndoableCommandPtr for the set action
+    //! \note when the group name starts with "SessionLayer-", this set-metadata command
+    //!       strip that prefix and targets the session layer automatically. This is done
+    //!       so that UFE users can place metadata on the session layer.
+    Ufe::UndoableCommandPtr setGroupMetadataCmd(
+        const std::string& group,
+        const std::string& key,
+        const Ufe::Value&  value) override;
+
+    //! Clears content of a meta data. If no key is specified,
+    //! all keys in the given group are cleared.
+    //! \param group The group to clear
+    //! \param key The key to clear
+    //! \return UndoableCommandPtr for the clear action
+    //! \note when the group name starts with "SessionLayer-", the clear metadata command
+    //!       strip that prefix targets the session layer automatically. This is done so
+    //!       that UFE users can clear metadata from the session layer.
+    Ufe::UndoableCommandPtr
+    clearGroupMetadataCmd(const std::string& group, const std::string& key = "") override;
+
+#endif // UFE_SCENEITEM_HAS_METADATA
+
 private:
-    PXR_NS::UsdPrim fPrim;
+    PXR_NS::UsdPrim _prim;
     const int       _instanceIndex;
 }; // UsdSceneItem
 
 } // namespace USDUFE_NS_DEF
+#endif

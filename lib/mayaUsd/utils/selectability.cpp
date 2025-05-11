@@ -17,7 +17,11 @@
 
 #include <mayaUsd/base/tokens.h>
 
+#include <usdUfe/base/tokens.h>
+
 #include <pxr/base/tf/hashmap.h>
+
+#include <boost/functional/hash.hpp>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -89,11 +93,11 @@ Selectability::State Selectability::getLocalState(const UsdPrim& prim)
     if (!prim.GetMetadata(MayaUsdMetadata->Selectability, &selectability))
         return kInherit;
 
-    if (selectability == MayaUsdTokens->Off) {
+    if (selectability == UsdUfe::GenericTokens->Off) {
         return kOff;
-    } else if (selectability == MayaUsdTokens->On) {
+    } else if (selectability == UsdUfe::GenericTokens->On) {
         return kOn;
-    } else if (selectability == MayaUsdTokens->Inherit) {
+    } else if (selectability == UsdUfe::GenericTokens->Inherit) {
         return kInherit;
     } else {
         TF_WARN(

@@ -15,15 +15,27 @@
 //
 #include "Global.h"
 
+#include <usdUfe/ufe/UsdAttributesHandler.h>
 #include <usdUfe/ufe/UsdCameraHandler.h>
 #include <usdUfe/ufe/UsdContextOpsHandler.h>
 #include <usdUfe/ufe/UsdHierarchyHandler.h>
 #include <usdUfe/ufe/UsdObject3dHandler.h>
 #include <usdUfe/ufe/UsdUIInfoHandler.h>
+#include <usdUfe/ufe/trf/UsdTransform3dCommonAPI.h>
+#include <usdUfe/ufe/trf/UsdTransform3dMatrixOp.h>
+#include <usdUfe/ufe/trf/UsdTransform3dPointInstance.h>
 
 #include <pxr/base/tf/diagnostic.h>
 
 #include <ufe/runTimeMgr.h>
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#include <usdUfe/ufe/trf/UsdTransform3dRead.h>
+#endif
+
+#if UFE_CLIPBOARD_SUPPORT
+#include <usdUfe/ufe/UsdClipboardHandler.h>
+#endif
 
 #ifndef UFE_V2_FEATURES_AVAILABLE
 #error "Compiling usdUfe library with Ufe v1 is no longer supported."
@@ -69,6 +81,7 @@ Ufe::Rtid initialize(
     UsdUfe::setStagePathAccessorFn(dccFunctions.stagePathAccessorFn);
     UsdUfe::setUfePathToPrimFn(dccFunctions.ufePathToPrimFn);
     UsdUfe::setTimeAccessorFn(dccFunctions.timeAccessorFn);
+    UsdUfe::setWaitCursorFns(dccFunctions.startWaitCursorFn, dccFunctions.stopWaitCursorFn);
 
     // Optional DCC specific functions.
     if (dccFunctions.isAttributeLockedFn)
@@ -79,6 +92,13 @@ Ufe::Rtid initialize(
         UsdUfe::setIsRootChildFn(dccFunctions.isRootChildFn);
     if (dccFunctions.uniqueChildNameFn)
         UsdUfe::setUniqueChildNameFn(dccFunctions.uniqueChildNameFn);
+    if (dccFunctions.defaultMaterialScopeNameFn)
+        UsdUfe::setDefaultMaterialScopeNameFn(dccFunctions.defaultMaterialScopeNameFn);
+    UsdUfe::setDisplayMessageFn(dccFunctions.displayMessageFn);
+    if (dccFunctions.extractTRSFn)
+        UsdUfe::setExtractTRSFn(dccFunctions.extractTRSFn);
+    if (dccFunctions.transform3dMatrixOpNameFn)
+        UsdUfe::setTransform3dMatrixOpNameFn(dccFunctions.transform3dMatrixOpNameFn);
 
     // Create a default stages subject if none is provided.
     if (nullptr == ss) {
@@ -88,6 +108,8 @@ Ufe::Rtid initialize(
     // Copy all the input handlers into the Ufe handler struct and
     // create any default ones which are null.
     Ufe::RunTimeMgr::Handlers rtHandlers;
+    rtHandlers.attributesHandler
+        = handlers.attributesHandler ? handlers.attributesHandler : UsdAttributesHandler::create();
     rtHandlers.hierarchyHandler
         = handlers.hierarchyHandler ? handlers.hierarchyHandler : UsdHierarchyHandler::create();
     rtHandlers.object3dHandler
@@ -99,8 +121,42 @@ Ufe::Rtid initialize(
     rtHandlers.cameraHandler
         = handlers.cameraHandler ? handlers.cameraHandler : UsdCameraHandler::create();
 
+    if (handlers.transform3dHandler) {
+        rtHandlers.transform3dHandler = handlers.transform3dHandler;
+    } else {
+        // USD has a very flexible data model to support 3d transformations --- see
+        // https://graphics.pixar.com/usd/docs/api/class_usd_geom_xformable.html
+        //
+        // To map this flexibility into a UFE Transform3d handler, we set up a
+        // chain of responsibility
+        // https://en.wikipedia.org/wiki/Chain-of-responsibility_pattern
+        // for Transform3d interface creation, from least important to most
+        // important:
+        // - Perform operations on a 4x4 matrix transform op.
+        // - Perform operations using the USD common transform API.
+        // - If the object is a point instance, use the point instance handler.
+        Ufe::Transform3dHandler::Ptr lastHandler = UsdTransform3dMatrixOpHandler::create(nullptr);
+        lastHandler = UsdTransform3dCommonAPIHandler::create(lastHandler);
+        lastHandler = UsdTransform3dPointInstanceHandler::create(lastHandler);
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        lastHandler = UsdTransform3dReadHandler::create(lastHandler);
+#endif
+
+        // Finally set the last transform handler we created into Ufe.
+        rtHandlers.transform3dHandler = lastHandler;
+    }
+
     g_USDRtid = Ufe::RunTimeMgr::instance().register_(kUSDRunTimeName, rtHandlers);
     TF_VERIFY(g_USDRtid != 0);
+
+    // Handlers to register separately since they may or may not be contained within
+    // the Ufe Handlers struct. But they are always guaranteed to have a set method.
+#if UFE_CLIPBOARD_SUPPORT
+    auto cbhndlr
+        = handlers.clipboardHandler ? handlers.clipboardHandler : UsdClipboardHandler::create();
+    Ufe::RunTimeMgr::instance().setClipboardHandler(g_USDRtid, cbhndlr);
+#endif
+
     return g_USDRtid;
 }
 
@@ -122,5 +178,12 @@ bool finalize(bool exiting)
 std::string getUsdRunTimeName() { return kUSDRunTimeName; }
 
 Ufe::Rtid getUsdRunTimeId() { return g_USDRtid; }
+
+//! Connect a stage to USD notifications.
+USDUFE_PUBLIC
+TfNotice::Key registerStage(const PXR_NS::UsdStageRefPtr& stage)
+{
+    return g_DefaultStagesSubject->registerStage(stage);
+}
 
 } // namespace USDUFE_NS_DEF

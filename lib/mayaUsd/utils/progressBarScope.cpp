@@ -24,6 +24,8 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace MAYAUSD_NS_DEF {
 
+MAYAUSD_VERIFY_CLASS_NOT_MOVE_OR_COPY(ProgressBarScope);
+
 std::unique_ptr<MComputation> ProgressBarScope::progBar;
 int                           ProgressBarScope::totalStepsAdded = 0;
 
@@ -76,7 +78,14 @@ ProgressBarScope::~ProgressBarScope()
     // If we created the MComputation we end and delete it.
     if (_created) {
         // Verify that we advances the number of steps added.
-        if (progBar->progress() != totalStepsAdded) {
+        const int progress = progBar->progress();
+
+        // `progress == -1` means the query failed.
+        //
+        // The "did not advance" warning below is not necessarily relevant -- we
+        // may have advanced the correct number of steps, but the `progBar`
+        // failed for other reasons, for example, running without the UI.
+        if (progress != -1 && progress != totalStepsAdded) {
             TF_WARN("ProgressBarScope: did not advance progress bar correct number of steps.");
         }
         totalStepsAdded = 0;
@@ -123,6 +132,8 @@ bool ProgressBarScope::isInterruptRequested() const
     }
     return false;
 }
+
+MAYAUSD_VERIFY_CLASS_NOT_MOVE_OR_COPY(ProgressBarLoopScope);
 
 ProgressBarLoopScope::ProgressBarLoopScope(int nbLoopSteps)
     : ProgressBarScope(0) // Start with adding 0 steps

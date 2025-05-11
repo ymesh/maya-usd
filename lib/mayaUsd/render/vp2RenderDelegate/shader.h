@@ -28,16 +28,36 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-/*! \brief  A deleter for MShaderInstance, for use with smart pointers.
- */
-struct HdVP2ShaderDeleter
+struct HdVP2ShaderUniquePtr
 {
-    void operator()(MHWRender::MShaderInstance*);
-};
+    HdVP2ShaderUniquePtr();
+    explicit HdVP2ShaderUniquePtr(MHWRender::MShaderInstance*);
+    HdVP2ShaderUniquePtr(const HdVP2ShaderUniquePtr&);
+    HdVP2ShaderUniquePtr(HdVP2ShaderUniquePtr&&);
 
-/*! \brief  A MShaderInstance owned by a std::unique_ptr.
- */
-using HdVP2ShaderUniquePtr = std::unique_ptr<MHWRender::MShaderInstance, HdVP2ShaderDeleter>;
+    ~HdVP2ShaderUniquePtr();
+
+    HdVP2ShaderUniquePtr& operator=(const HdVP2ShaderUniquePtr&);
+    HdVP2ShaderUniquePtr& operator=(HdVP2ShaderUniquePtr&&);
+
+    MHWRender::MShaderInstance* operator->() const;
+    MHWRender::MShaderInstance* get() const;
+    explicit                    operator bool() const;
+
+    void reset(MHWRender::MShaderInstance* shader);
+    void clear();
+
+    static void cleanupDeadShaders();
+
+private:
+    struct Data
+    {
+        std::atomic<int>            _count { 0 };
+        MHWRender::MShaderInstance* _shader { nullptr };
+    };
+
+    Data* _data { nullptr };
+};
 
 /*! \brief  Thread-safe cache of named shaders.
  */
@@ -49,6 +69,11 @@ struct HdVP2ShaderCache
 #ifdef WANT_MATERIALX_BUILD
     //! Primvars registry
     std::unordered_map<TfToken, TfTokenVector, TfToken::HashFunctor> _primvars;
+
+    //! Map of renamed parameters. Happens if the parameter name is a forbidden keyword in the
+    //! shading language.
+    using StringMap = std::unordered_map<std::string, MString>;
+    std::unordered_map<TfToken, StringMap, TfToken::HashFunctor> _renamedParameters;
 #endif
 
     //! Synchronization used to protect concurrent read from serial writes

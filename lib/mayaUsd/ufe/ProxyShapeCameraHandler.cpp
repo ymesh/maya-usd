@@ -31,19 +31,24 @@ PXR_NAMESPACE_USING_DIRECTIVE
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
-ProxyShapeCameraHandler::ProxyShapeCameraHandler(const Ufe::CameraHandler::Ptr& mayaCameraHandler)
-    : Ufe::CameraHandler()
-    , fMayaCameraHandler(mayaCameraHandler)
+#if UFE_MAJOR_VERSION == 3 && UFE_CAMERAHANDLER_HAS_FINDALL
+MAYAUSD_VERIFY_CLASS_SETUP(Ufe::CameraHandler_v3_4, ProxyShapeCameraHandler);
+#else
+MAYAUSD_VERIFY_CLASS_SETUP(Ufe::CameraHandler, ProxyShapeCameraHandler);
+#endif // UFE_CAMERAHANDLER_HAS_FINDALL
+
+ProxyShapeCameraHandler::ProxyShapeCameraHandler(const CAMERAHANDLERBASE::Ptr& mayaCameraHandler)
+    : CAMERAHANDLERBASE()
+    , _mayaCameraHandler(mayaCameraHandler)
 {
 }
-
-ProxyShapeCameraHandler::~ProxyShapeCameraHandler() { }
 
 /*static*/
 ProxyShapeCameraHandler::Ptr
 ProxyShapeCameraHandler::create(const Ufe::CameraHandler::Ptr& mayaCameraHandler)
 {
-    return std::make_shared<ProxyShapeCameraHandler>(mayaCameraHandler);
+    auto mayaCameraHandlerBase = std::static_pointer_cast<CAMERAHANDLERBASE>(mayaCameraHandler);
+    return std::make_shared<ProxyShapeCameraHandler>(mayaCameraHandlerBase);
 }
 
 //------------------------------------------------------------------------------
@@ -51,7 +56,7 @@ ProxyShapeCameraHandler::create(const Ufe::CameraHandler::Ptr& mayaCameraHandler
 //------------------------------------------------------------------------------
 Ufe::Camera::Ptr ProxyShapeCameraHandler::camera(const Ufe::SceneItem::Ptr& item) const
 {
-    return fMayaCameraHandler ? fMayaCameraHandler->camera(item) : nullptr;
+    return _mayaCameraHandler ? _mayaCameraHandler->camera(item) : nullptr;
 }
 
 Ufe::Selection ProxyShapeCameraHandler::find_(const Ufe::Path& path) const
@@ -61,10 +66,12 @@ Ufe::Selection ProxyShapeCameraHandler::find_(const Ufe::Path& path) const
         // path is a path to a proxyShape node.
         // Get the UsdStage for this proxy shape node and search it for cameras
         PXR_NS::UsdStageWeakPtr stage = getStage(path);
-        TF_VERIFY(stage);
-        return UsdCameraHandler::find(path, path, stage->GetPseudoRoot());
+        if (stage != nullptr) {
+            return UsdUfe::UsdCameraHandler::find(path, path, stage->GetPseudoRoot());
+        }
+        return Ufe::Selection();
     }
-    return fMayaCameraHandler ? fMayaCameraHandler->find(path) : Ufe::Selection();
+    return _mayaCameraHandler ? _mayaCameraHandler->find(path) : Ufe::Selection();
 }
 
 } // namespace ufe

@@ -10,7 +10,9 @@ set(TEST_SCRIPT_FILES
     testContextOps.py
     testDefaultPrimCmds.py
     testDuplicateCmd.py
+    testDuplicateProxyShape.py
     testEditRouting.py
+    testPrimMetadataEditRouting.py
     testGroupCmd.py
     testMatrices.py
     testMayaPickwalk.py
@@ -27,16 +29,20 @@ set(TEST_SCRIPT_FILES
     testRotateCmd.py
     testRotateCmdUndoRedo.py
     testRotatePivot.py
+    testPivotConversion.py
     testScaleCmd.py
     testSceneItem.py
     testSelection.py
     testSelectionNotification.py
     testSelectionByArray.py
+    testSchemas.py
     testToggleCommands.py
     testTransform3dChainOfResponsibility.py
     testTransform3dTranslate.py
+    testTransform3dTranslateWithTimeSamples.py
     testUIInfoHandler.py
     testUfePythonImport.py
+    testVariant.py
     testVisibilityCmd.py
 )
 
@@ -59,6 +65,12 @@ endif()
 if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
     list(APPEND TEST_SCRIPT_FILES
         testUngroupCmd.py
+    )
+endif()
+
+if (UFE_SCENEITEM_HAS_METADATA)
+    list(APPEND TEST_SCRIPT_FILES
+        testSceneItemMetadata.py
     )
 endif()
 
@@ -99,6 +111,13 @@ if (UFE_MATERIALS_SUPPORT)
         testMaterial.py
     )
 endif()
+
+if (UFE_CLIPBOARD_SUPPORT)
+    list(APPEND TEST_SCRIPT_FILES
+        testClipboard.py
+    )
+endif()
+
 if (MAYA_API_VERSION VERSION_GREATER_EQUAL 20220100)
     list(APPEND TEST_SCRIPT_FILES
         testCamera.py
@@ -146,6 +165,15 @@ foreach(script ${TEST_SCRIPT_FILES})
             "USD_HAS_COLOR4_SDR_SUPPORT=${USD_HAS_COLOR4_SDR_SUPPORT}"
             "USD_HAS_MX_METADATA_SUPPORT=${USD_HAS_MX_METADATA_SUPPORT}"
             "UFE_ATTRIBUTES_GET_ENUMS=${UFE_ATTRIBUTES_GET_ENUMS}"
+            "UFE_HAS_NATIVE_TYPE_METADATA=${UFE_HAS_NATIVE_TYPE_METADATA}"
+            "UFE_UINODEGRAPHNODE_HAS_SIZE=${UFE_UINODEGRAPHNODE_HAS_SIZE}"
+            "UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR=${UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR}"
+            "UFE_MATERIAL_HAS_HASMATERIAL=${UFE_MATERIAL_HAS_HASMATERIAL}"
+            "UFE_CAMERA_HAS_RENDERABLE=${UFE_CAMERA_HAS_RENDERABLE}"
+            "UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH=${UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH}"
+            "UFE_VOLUME_LIGHTS_SUPPORT=${UFE_VOLUME_LIGHTS_SUPPORT}"
+            "UFE_SCENEITEM_HAS_METADATA=${UFE_SCENEITEM_HAS_METADATA}"
+            "HAS_LOOKDEVXUSD=${BUILD_LOOKDEVXUSD_LIBRARY}"
     )
 
     # Add a ctest label to these tests for easy filtering.
@@ -158,6 +186,8 @@ foreach(script ${INTERACTIVE_TEST_SCRIPT_FILES})
         INTERACTIVE
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         PYTHON_SCRIPT ${script}
+        ENV
+            "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
     )
 
     # Add a ctest label to these tests for easy filtering.

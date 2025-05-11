@@ -26,11 +26,17 @@ from mayaUsd import ufe as mayaUsdUfe
 
 from maya import cmds
 
+from pxr import Usd
+
 import ufe
 
 import os
 import unittest
 
+def getMaterialXVersion():
+    """Return as a tuple of int since we hit 1.38.10 and it
+       causes issues with string comparisons"""
+    return [int(i) for i in os.getenv('MATERIALX_VERSION', '1.38.0').split(".")]    
 
 class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
     """
@@ -95,7 +101,7 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
             suffix = "_ocio"
 
         # MaterialX 1.38.8 has a new triplanar node with superior blending
-        if os.getenv('MATERIALX_VERSION', '1.38.0') >= '1.38.8':
+        if getMaterialXVersion() >= [1, 38, 8]:
             suffix += "_blended"
 
         mayaUtils.loadPlugin("mayaUsdPlugin")
@@ -143,7 +149,7 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
             prim.RemoveProperty(attrName)
             self.assertSnapshotClose('delete_attr_test_%s.png' % attrName.split(":")[1])
 
-    @unittest.skipIf(os.getenv('MATERIALX_VERSION', '1.38.0') < '1.38.4', 'Test has a glTf PBR surface only found in MaterialX 1.38.4 and later.')
+    @unittest.skipIf(getMaterialXVersion() < [1, 38, 4], 'Test has a glTf PBR surface only found in MaterialX 1.38.4 and later.')
     def testTransparency(self):
         mayaUtils.loadPlugin("mayaUsdPlugin")
         panel = mayaUtils.activeModelPanel()
@@ -158,6 +164,7 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
         cmds.rotate(-90, 0, 0, 'persp')
         self.assertSnapshotClose('transparencyScene.png', 960, 960)
 
+    @unittest.skipIf(Usd.GetVersion() == (0, 24, 8), 'Issue with the custom OpenEXR code in USD v0.24.08')
     def testDemoQuads(self):
         cmds.file(force=True, new=True)
 
@@ -173,6 +180,64 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
         cmds.modelEditor(panel, edit=True, lights=True, displayLights="all", displayTextures=True)
 
         self._StartTest('DemoQuads')
+
+    @unittest.skipIf(os.getenv("USD_HAS_MX_OPENPBR_SURFACE", 'FALSE') != 'TRUE', 'Requires OpenPBR in MaterialX')
+    def testOpenPBRSupport(self):
+        """Test that OpenPBR imports, exports, and renders"""
+        mayaUtils.loadPlugin("mayaUsdPlugin")
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, edit=True, displayTextures=True, displayLights = 'all')
+
+        # Too much differences between Linux and Windows otherwise
+        cmds.setAttr("hardwareRenderingGlobals.multiSampleEnable", True)
+
+        testFile = testUtils.getTestScene("MaterialX", "OpenPBRShowcase.ma")
+        cmds.file(testFile, force=True, open=True)
+        cmds.move(0, 7, -1.5, 'persp')
+        cmds.rotate(-90, 0, 0, 'persp')
+        usdFilePath = os.path.join(self._testDir, "OpenPBRShowcase_MTLX.usda")
+        cmds.mayaUSDExport(mergeTransformAndShape=True, file=usdFilePath,
+            shadingMode='useRegistry', convertMaterialsTo=['MaterialX'],
+            materialsScopeName='Materials', excludeExportTypes=['Cameras','Lights'])
+        xform, shape = mayaUtils.createProxyFromFile(usdFilePath)
+        cmds.move(0, 0, 1, xform)
+
+        # Re-import for a full roundtrip:
+        # Import back:
+        import_options = ("shadingMode=[[useRegistry,MaterialX]]",
+                          "primPath=/")
+        cmds.file(usdFilePath, i=True, type="USD Import",
+                  ignoreVersion=True, ra=True, mergeNamespacesOnClash=False,
+                  namespace="Test", pr=True, importTimeRange="combine",
+                  options=";".join(import_options))
+        cmds.move(0, 0, 2, "Test:locator1")
+
+        self.assertSnapshotClose('OpenPBRShowcase_MTLX_Import_render.png', 960, 960)
+
+        cmds.delete(xform)
+        cmds.delete("Test:locator1")
+
+        # Same test, but in UsdPreviewSurface land:
+        usdFilePath = os.path.join(self._testDir, "OpenPBRShowcase_UsdPS.usda")
+        cmds.mayaUSDExport(mergeTransformAndShape=True, file=usdFilePath,
+            shadingMode='useRegistry', convertMaterialsTo=['UsdPreviewSurface'],
+            materialsScopeName='Materials', excludeExportTypes=['Cameras','Lights'])
+        xform, shape = mayaUtils.createProxyFromFile(usdFilePath)
+        cmds.move(0, 0, 1, xform)
+
+        import_options = ("shadingMode=[[useRegistry,UsdPreviewSurface]]",
+                          "preferredMaterial=openPBRSurface",
+                          "primPath=/")
+        cmds.file(usdFilePath, i=True, type="USD Import",
+                  ignoreVersion=True, ra=True, mergeNamespacesOnClash=False,
+                  namespace="Test", pr=True, importTimeRange="combine",
+                  options=";".join(import_options))
+        cmds.move(0, 0, 2, "Test1:locator1")
+
+        self.assertSnapshotClose('OpenPBRShowcase_UsdPS_Import_render.png', 960, 960)
+
+        cmds.setAttr("hardwareRenderingGlobals.multiSampleEnable", True)
+
 
     def testWithEnabledMaterialX(self):
         """Make sure the absence of MAYAUSD_VP2_USE_ONLY_PREVIEWSURFACE env var has an effect."""
@@ -199,6 +264,30 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
         cmds.modelEditor(panel, edit=True, displayTextures=True)
 
         self._StartTest('grid_with_udims')
+
+    @unittest.skipIf(getMaterialXVersion() < [1, 38, 8], 'The workaround for UDIMs is only for 1.38.8 and later')
+    def testUDIMsOnCustomImageNodes(self):
+        cmds.file(force=True, new=True)
+
+        cmds.move(0, 6, 0, 'persp')
+        cmds.rotate(-90, 0, 0, 'persp')
+
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, edit=True, displayTextures=True)
+
+        self._StartTest('grids_with_udims')
+
+    @unittest.skipIf(getMaterialXVersion() < [1, 38, 8], 'The source code node fix backport is only for 1.38.8 and later')
+    def testSourceCodeNodeBackport(self):
+        cmds.file(force=True, new=True)
+
+        cmds.move(0, 6, 0, 'persp')
+        cmds.rotate(-90, 0, 0, 'persp')
+
+        panel = mayaUtils.activeModelPanel()
+        cmds.modelEditor(panel, edit=True, displayTextures=True)
+
+        self._StartTest('grid_with_smoothsteps')
 
     def testMayaPlace2dTexture(self):
         mayaUtils.loadPlugin("mayaUsdPlugin")
@@ -262,7 +351,11 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
         """Test that we can color manage using Maya OCIO fragments."""
         cmds.file(new=True, force=True)
         # This config has file rules for all the new textures:
-        configFile = testUtils.getTestScene("MaterialX", "studio-config-v1.0.0_aces-v1.3_ocio-v2.0.ocio")
+        if (Usd.GetVersion() >= (0, 23, 11)):
+            # USD starting at 23.11 we no longer requires file rules to get OCIO results. Metadata will be usable.
+            configFile = testUtils.getTestScene("MaterialX", "no-rule-studio-config-v1.0.0_aces-v1.3_ocio-v2.0.ocio")
+        else:
+            configFile = testUtils.getTestScene("MaterialX", "studio-config-v1.0.0_aces-v1.3_ocio-v2.0.ocio")
         cmds.colorManagementPrefs(edit=True, configFilePath=configFile)
 
         # Import the Maya data so we can compare:
@@ -403,6 +496,30 @@ class testVP2RenderDelegateMaterialX(imageUtils.ImageDiffingTestCase):
         cmds.move(0, 0, -1.01, xform)
 
         self.assertSnapshotClose('OCIO_Explicit.png')
+    
+    def testDoubleSided(self):
+        """
+        Test that backfaces get culled if the doubleSided attribute
+        is enabled on USD prims, and that they don't if it is not.
+        """
+        cmds.file(new=True, force=True)
+        mayaUtils.loadPlugin("mayaUsdPlugin")
+
+        testFile = testUtils.getTestScene("doubleSided", "MaterialX_StandardSurface.usda")
+        stageShapeNode, stage = mayaUtils.createProxyFromFile(testFile)
+
+        mayaUtils.setBasicCamera(20)
+        self.assertSnapshotClose('doubleSided_enabled_front.png')
+        mayaUtils.setBasicCamera(3)
+        self.assertSnapshotClose('doubleSided_enabled_back.png')
+
+        cubePrim = stage.GetPrimAtPath("/Cube1")
+        cubePrim.GetAttribute('doubleSided').Set(False)
+
+        mayaUtils.setBasicCamera(20)
+        self.assertSnapshotClose('doubleSided_disabled_front.png')
+        mayaUtils.setBasicCamera(3)
+        self.assertSnapshotClose('doubleSided_disabled_back.png')
 
 if __name__ == '__main__':
     fixturesUtils.runTests(globals())

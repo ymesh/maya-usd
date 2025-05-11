@@ -51,7 +51,8 @@ class testUsdExportUVTransforms(unittest.TestCase):
 
         usd_file_path = os.path.join(cls.temp_dir, "UsdExportUVTransforms.usda")
         cmds.mayaUSDExport(mergeTransformAndShape=True, file=usd_file_path,
-                           shadingMode='useRegistry')
+                           shadingMode='useRegistry', legacyMaterialScope=False,
+                           defaultPrim='None')
 
         cls.stage = Usd.Stage.Open(usd_file_path)
 
@@ -63,7 +64,7 @@ class testUsdExportUVTransforms(unittest.TestCase):
         """
         Tests that shaders without UV transforms do not get a resulting UsdTransform2D prim created
         """
-        root = self.stage.GetPrimAtPath("/PxrUsdTransform2dExportTest/Looks/pxrUsdPreviewSurface_DefaultSG")
+        root = self.stage.GetPrimAtPath("/Looks/pxrUsdPreviewSurface_DefaultSG")
         transform = findTransformPrim(root)
         self.assertFalse(transform, "Found a UsdTransform2D when there should be None")
 
@@ -73,7 +74,7 @@ class testUsdExportUVTransforms(unittest.TestCase):
         correct values
         """
 
-        root = self.stage.GetPrimAtPath("/PxrUsdTransform2dExportTest/Looks/pxrUsdPreviewSurface_TransformedSG")
+        root = self.stage.GetPrimAtPath("/Looks/pxrUsdPreviewSurface_TransformedSG")
         transform = findTransformPrim(root)
         self.assertTrue(transform, "Missing UsdTransform2D shader")
 

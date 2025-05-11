@@ -4,6 +4,8 @@
 /// @file
 /// OGS fragment wrapper.
 
+#include <mayaUsd/base/api.h>
+
 #include <MaterialXCore/Document.h>
 #include <MaterialXGenShader/Shader.h>
 #include <MaterialXRender/ImageHandler.h>
@@ -16,7 +18,7 @@ namespace MaterialXMaya {
 /// and outputs and embedding source code in one or potentially multiple target
 /// shading languages (GLSL is the only such language currently supported).
 ///
-class OgsFragment
+class MAYAUSD_CORE_PUBLIC OgsFragment
 {
 public:
     /// Creates a local GLSL fragment generator
@@ -69,6 +71,9 @@ public:
     /// Maps XML element paths of MaterialX inputs to their names in the generated shader.
     const mx::StringMap& getPathInputMap() const;
 
+    /// Maps a generated shader texture input to its library path.
+    const mx::StringMap& getEmbeddedTextureMap() const;
+
     /// Return whether the element to render represents a surface shader graph
     /// as opposed to a texture graph.
     bool isElementAShader() const;
@@ -80,6 +85,10 @@ public:
     /// Return whether the fragment represents a transparent surface, as
     /// determined by MaterialX at generation time.
     bool isTransparent() const;
+
+    /// Implements transparency detection for some known types and then
+    /// delegates to MaterialX for complex ones.
+    static bool isTransparentSurface(const mx::ElementPtr& element);
 
     /// Derive a matrix4 parameter name from a matrix3 parameter name.
     /// Required because OGS doesn't support matrix3 parameters.
@@ -99,13 +108,14 @@ private:
     template <typename GLSL_GENERATOR_WRAPPER>
     OgsFragment(mx::ElementPtr, GLSL_GENERATOR_WRAPPER&&);
 
-    mx::ElementPtr _element;        ///< The MaterialX element.
-    std::string    _fragmentName;   ///< An automatically generated fragment name.
-    std::string    _fragmentSource; ///< The generated fragment source.
-    std::string    _lightRigName;   ///< An automatically generated light rig name.
-    std::string    _lightRigSource; ///< The generated light rig for surface fragments.
-    mx::StringMap  _pathInputMap;   ///< Maps MaterialX element paths to fragment input names.
-    mx::ShaderPtr  _glslShader;     ///< The MaterialX-generated GLSL shader.
+    mx::ElementPtr _element;          ///< The MaterialX element.
+    std::string    _fragmentName;     ///< An automatically generated fragment name.
+    std::string    _fragmentSource;   ///< The generated fragment source.
+    std::string    _lightRigName;     ///< An automatically generated light rig name.
+    std::string    _lightRigSource;   ///< The generated light rig for surface fragments.
+    mx::StringMap  _pathInputMap;     ///< Maps MaterialX element paths to fragment input names.
+    mx::StringMap  _embeddedTextures; ///< Maps texture entry points to library paths.
+    mx::ShaderPtr  _glslShader;       ///< The MaterialX-generated GLSL shader.
 };
 
 } // namespace MaterialXMaya

@@ -17,6 +17,7 @@
 #define MAYA_USD_LAYER_MANAGER
 
 #include <mayaUsd/base/api.h>
+#include <mayaUsd/nodes/proxyShapeBase.h>
 
 #include <pxr/base/tf/notice.h>
 #include <pxr/pxr.h>
@@ -27,6 +28,7 @@
 
 #include <maya/MDagPath.h>
 #include <maya/MDagPathArray.h>
+#include <maya/MFnReference.h>
 #include <maya/MMessage.h>
 #include <maya/MObject.h>
 #include <maya/MPxNode.h>
@@ -55,17 +57,18 @@ enum BatchSaveResult
  */
 struct StageSavingInfo
 {
-    MDagPath    dagPath;
-    UsdStagePtr stage;
-    bool        shareable = true;
-    bool        isIncoming = false;
+    MDagPath       dagPath;
+    UsdStageRefPtr stage;
+    bool           shareable = true;
+    bool           isIncoming = false;
 };
 
 /*! \brief Callback function to handle saving of Usd edits.  In a default build of the
     plugin a delegate will be installed that posts a UI dialog that provides an opportunity
     to choose file names and locations of all anonymous layers that need to be saved to disk.
  */
-using BatchSaveDelegate = std::function<BatchSaveResult(const std::vector<StageSavingInfo>&)>;
+using BatchSaveDelegate
+    = std::function<BatchSaveResult(const std::vector<StageSavingInfo>&, bool isExporting)>;
 
 /*! \brief Maya dependency node responsible for serializing unsaved Usd edits.
 
@@ -120,14 +123,21 @@ public:
     //! \brief set the stage that is currently selected in the layer manager.
     static void setSelectedStage(const std::string& stage);
     //! \brief get the stage that should be selected in the layer manager.
-    static std::string getSelectedStage();
+    static std::string getSelectedStage(PXR_NS::MayaUsdProxyShapeBase* forProxyShape);
 
     /*! \brief  Supported Proxy Shapes should call this to possibly retrieve their Root and Session
        layers before calling Sdf::FindOrOpen.  If a handle is found and returned then it will be the
        recreated layer, and all sublayers, with edits from a previous Maya session and should be
        used to initialize the Proxy Shape in a call to UsdStage::Open().
     */
-    static SdfLayerHandle findLayer(std::string identifier);
+    static SdfLayerHandle
+    findLayer(std::string identifier, PXR_NS::MayaUsdProxyShapeBase* forProxyShape);
+
+    using LayerNameMap = std::map<std::string, std::string>;
+    static LayerNameMap getLayerNameMap(PXR_NS::MayaUsdProxyShapeBase* forProxyShape);
+
+    //! \brief returns true if the layer manager is currently saving files.
+    static bool isSaving();
 
     static const MString typeName;
     static const MTypeId typeId;

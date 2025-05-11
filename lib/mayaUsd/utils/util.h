@@ -122,28 +122,25 @@ private:
     ~MDataHandleHolder() override;
 };
 
-const double MillimetersPerInch = 25.4;
+const double kMillimetersPerInch = 25.4;
 
 /// Converts the given value \p mm in millimeters to the equivalent value
 /// in inches.
-inline double ConvertMMToInches(const double mm) { return mm / MillimetersPerInch; }
+inline double ConvertMMToInches(const double mm) { return mm / kMillimetersPerInch; }
 
 /// Converts the given value \p inches in inches to the equivalent value
 /// in millimeters.
-inline double ConvertInchesToMM(const double inches) { return inches * MillimetersPerInch; }
+inline double ConvertInchesToMM(const double inches) { return inches * kMillimetersPerInch; }
 
-const double MillimetersPerCentimeter = 10.0;
+const double kMillimetersPerCentimeter = 10.0;
 
 /// Converts the given value \p mm in millimeters to the equivalent value
 /// in centimeters.
-inline double ConvertMMToCM(const double mm) { return mm / MillimetersPerCentimeter; }
+inline double ConvertMMToCM(const double mm) { return mm / kMillimetersPerCentimeter; }
 
 /// Converts the given value \p cm in centimeters to the equivalent value
 /// in millimeters.
-inline double ConvertCMToMM(const double cm) { return cm * MillimetersPerCentimeter; }
-
-inline std::string SanitizeName(const std::string& name) { return UsdUfe::sanitizeName(name); }
-inline std::string prettifyName(const std::string& name) { return UsdUfe::prettifyName(name); }
+inline double ConvertCMToMM(const double cm) { return cm * kMillimetersPerCentimeter; }
 
 /// Converts the given value \p mdistance in Maya's MDistance units to the
 /// equivalent value in USD's metersPerUnit.
@@ -154,6 +151,11 @@ double ConvertMDistanceUnitToUsdGeomLinearUnit(const MDistance::Unit mdistanceUn
 /// equivalent value in Maya's MDistance units.
 MAYAUSD_CORE_PUBLIC
 MDistance::Unit ConvertUsdGeomLinearUnitToMDistanceUnit(const double linearUnit);
+
+/// Convert the given \p mdistanceUnit into its text representation suitable
+/// to be used with the currentUnit MEL command. Invalid units return "cm".
+MAYAUSD_CORE_PUBLIC
+MString ConvertMDistanceUnitToText(const MDistance::Unit mdistanceUnit);
 
 /// Returns a scaling value from Maya's internal units to the specified \p metersPerUnit
 MAYAUSD_CORE_PUBLIC
@@ -279,11 +281,11 @@ bool isWritable(const MObject& object);
 
 /// This is the delimiter that Maya uses to identify levels of hierarchy in the
 /// Maya DAG.
-const std::string MayaDagDelimiter("|");
+const std::string kMayaDagDelimiter("|");
 
 /// This is the delimiter that Maya uses to separate levels of namespace in
 /// Maya node names.
-const std::string MayaNamespaceDelimiter(":");
+const std::string kMayaNamespaceDelimiter(":");
 
 /// Strip \p nsDepth namespaces from \p nodeName.
 ///
@@ -407,6 +409,15 @@ MPlug FindChildPlugByName(const MPlug& plug, const MString& name);
 MAYAUSD_CORE_PUBLIC
 SdfPath MayaNodeNameToSdfPath(const std::string& nodeName, const bool stripNamespaces);
 
+/// Converts the given Maya node name or DAG path \p nodeName into a prim name.
+///
+/// This will strip any DAG path, so there is only the final part after the final '|'.
+/// Then it will be sanitized such that it is a valid USD prim name.
+/// This means it will replace Maya's namespace delimiter (':') with
+/// underscores ('_').
+MAYAUSD_CORE_PUBLIC
+std::string MayaNodeNameToPrimName(const std::string& nodeName, const bool stripNamespaces);
+
 /// Converts the given Maya MDagPath \p dagPath into an SdfPath.
 ///
 /// If \p mergeTransformAndShape and the dagPath is a shapeNode, it will return
@@ -527,8 +538,11 @@ GetDictionaryFromArgDatabase(const MArgDatabase& argData, const VtDictionary& gu
 /// strings. If you have an MArgList/MArgParser/MArgDatabase, it's going to be
 /// way simpler to use GetDictionaryFromArgDatabase() instead.
 MAYAUSD_CORE_PUBLIC
-VtValue
-ParseArgumentValue(const std::string& key, const std::string& value, const VtDictionary& guideDict);
+VtValue ParseArgumentValue(
+    const std::string&  key,
+    const std::string&  value,
+    const VtDictionary& guideDict,
+    bool                reportErrors = true);
 
 /// Converts a value into a string that can be parsed back using ParseArgumentValue.
 /// Should be used when generating argument strings that are to be used by translators.
@@ -689,6 +703,13 @@ void AddMayaExtents(
 /// Access to materials associated with available renderers
 MAYAUSD_CORE_PUBLIC
 SdrShaderNodePtrVec GetSurfaceShaderNodeDefs();
+
+MAYAUSD_CORE_PUBLIC
+bool isShape(const MDagPath& dagPath);
+
+/// Verify if the given Maya node is from the given Maya reference.
+MAYAUSD_CORE_PUBLIC
+bool isNodeInReference(const MObject& node, const MString& referenceFileName);
 
 } // namespace UsdMayaUtil
 

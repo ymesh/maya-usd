@@ -4,6 +4,7 @@
 target_sources(${PROJECT_NAME} 
     PRIVATE
         skelBindingsProcessor.cpp
+        translatorBlendShape.cpp
         translatorCamera.cpp
         translatorCurves.cpp
         translatorGprim.cpp
@@ -14,15 +15,16 @@ target_sources(${PROJECT_NAME}
         translatorNurbsPatch.cpp
         translatorPrim.cpp
         translatorRfMLight.cpp
-        translatorRfMLight_deprecated.cpp
+        translatorRfMLightDeprecated.cpp
         translatorSkel.cpp
         translatorUtil.cpp
         translatorXformable.cpp
-        translatorXformable_decompose.cpp
+        translatorXformableDecompose.cpp
 )
 
 set(HEADERS
     skelBindingsProcessor.h
+    translatorBlendShape.h
     translatorCamera.h
     translatorCurves.h
     translatorGprim.h

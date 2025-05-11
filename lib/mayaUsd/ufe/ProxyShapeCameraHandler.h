@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef MAYAUSD_PROXYSHAPECAMERAHANDLER_H
+#define MAYAUSD_PROXYSHAPECAMERAHANDLER_H
 
 #include <mayaUsd/base/api.h>
 
@@ -22,20 +23,21 @@
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
+#if UFE_MAJOR_VERSION == 3 && UFE_CAMERAHANDLER_HAS_FINDALL
+#define CAMERAHANDLERBASE Ufe::CameraHandler_v3_4
+#else
+#define CAMERAHANDLERBASE Ufe::CameraHandler
+#endif // UFE_CAMERAHANDLER_HAS_FINDALL
+
 //! \brief Interface to create a ProxyShapeCameraHandler interface object.
-class MAYAUSD_CORE_PUBLIC ProxyShapeCameraHandler : public Ufe::CameraHandler
+class MAYAUSD_CORE_PUBLIC ProxyShapeCameraHandler : public CAMERAHANDLERBASE
 {
 public:
     typedef std::shared_ptr<ProxyShapeCameraHandler> Ptr;
 
-    ProxyShapeCameraHandler(const Ufe::CameraHandler::Ptr&);
-    ~ProxyShapeCameraHandler();
+    ProxyShapeCameraHandler(const CAMERAHANDLERBASE::Ptr&);
 
-    // Delete the copy/move constructors assignment operators.
-    ProxyShapeCameraHandler(const ProxyShapeCameraHandler&) = delete;
-    ProxyShapeCameraHandler& operator=(const ProxyShapeCameraHandler&) = delete;
-    ProxyShapeCameraHandler(ProxyShapeCameraHandler&&) = delete;
-    ProxyShapeCameraHandler& operator=(ProxyShapeCameraHandler&&) = delete;
+    MAYAUSD_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(ProxyShapeCameraHandler);
 
     //! Create a ProxyShapeCameraHandler from a UFE camera handler.
     static ProxyShapeCameraHandler::Ptr create(const Ufe::CameraHandler::Ptr&);
@@ -46,9 +48,11 @@ public:
     Ufe::Selection find_(const Ufe::Path& path) const override;
 
 private:
-    Ufe::CameraHandler::Ptr fMayaCameraHandler;
+    CAMERAHANDLERBASE::Ptr _mayaCameraHandler;
 
 }; // ProxyShapeCameraHandler
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF
+
+#endif // MAYAUSD_PROXYSHAPECAMERAHANDLER_H

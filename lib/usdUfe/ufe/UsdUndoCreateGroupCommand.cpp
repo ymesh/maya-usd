@@ -17,6 +17,7 @@
 
 #include <usdUfe/ufe/UsdUndoAddNewPrimCommand.h>
 #include <usdUfe/ufe/UsdUndoSetKindCommand.h>
+#include <usdUfe/ufe/Utils.h>
 
 #include <pxr/usd/kind/registry.h>
 #include <pxr/usd/usd/modelAPI.h>
@@ -31,6 +32,8 @@
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace USDUFE_NS_DEF {
+
+USDUFE_VERIFY_CLASS_SETUP(Ufe::InsertChildCommand, UsdUndoCreateGroupCommand);
 
 UsdUndoCreateGroupCommand::UsdUndoCreateGroupCommand(
     const UsdSceneItem::Ptr& parentItem,
@@ -47,8 +50,6 @@ UsdUndoCreateGroupCommand::UsdUndoCreateGroupCommand(
     , _groupCompositeCmd(std::make_shared<Ufe::CompositeUndoableCommand>())
 {
 }
-
-UsdUndoCreateGroupCommand::~UsdUndoCreateGroupCommand() { }
 
 UsdUndoCreateGroupCommand::Ptr UsdUndoCreateGroupCommand::create(
     const UsdSceneItem::Ptr& parentItem,
@@ -72,7 +73,9 @@ Ufe::SceneItem::Ptr UsdUndoCreateGroupCommand::insertedChild() const { return _g
 
 void UsdUndoCreateGroupCommand::execute()
 {
-    auto addPrimCmd = UsdUndoAddNewPrimCommand::create(_parentItem, _name.string(), "Xform");
+    std::string newPrimName
+        = UsdUfe::relativelyUniqueName(_parentItem->prim(), _name.string() + '1');
+    auto addPrimCmd = UsdUndoAddNewPrimCommand::create(_parentItem, newPrimName, "Xform");
     _groupCompositeCmd->append(addPrimCmd);
     addPrimCmd->execute();
 

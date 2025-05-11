@@ -3,6 +3,7 @@ set(TEST_SCRIPT_FILES
     testLayerManagerSerialization.py
     testPointBasedDeformerNode.py
     testProxyShapeBase.py
+    testProxyShapeConversion.py
 )
 
 foreach(script ${TEST_SCRIPT_FILES})
@@ -10,6 +11,8 @@ foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_add_test(${target}
         PYTHON_MODULE ${target}
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        ENV
+            "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
     )
 
     # Add a ctest label to these tests for easy filtering.
@@ -23,5 +26,6 @@ mayaUsd_add_test(testHdImagingShape
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     ENV
         "MAYAUSD_DISABLE_VP2_RENDER_DELEGATE=1"
+        "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
 )
 set_property(TEST testHdImagingShape APPEND PROPERTY LABELS nodes)

@@ -49,11 +49,10 @@ StackedEditRouterContext::~StackedEditRouterContext()
 
 const PXR_NS::SdfLayerHandle& StackedEditRouterContext::getLayer() const
 {
-    if (_layer)
-        return _layer;
-
-    if (const StackedEditRouterContext* ctx = GetStackPrevious())
-        return ctx->getLayer();
+    // Use the layer of the top-most edit router context that contains a layer.
+    for (const StackedEditRouterContext* ctx : GetStack())
+        if (ctx->_layer)
+            return ctx->_layer;
 
     static const PXR_NS::SdfLayerHandle empty;
     return empty;
@@ -61,11 +60,13 @@ const PXR_NS::SdfLayerHandle& StackedEditRouterContext::getLayer() const
 
 PXR_NS::UsdStagePtr StackedEditRouterContext::getStage() const
 {
-    if (_stage)
-        return _stage;
-
-    if (const StackedEditRouterContext* ctx = GetStackPrevious())
-        return ctx->getStage();
+    // Use the stage of the top-most edit router context that contains a layer.
+    //
+    // Note: *yes* we check the layer for the stage, it is the layer that can be
+    //       null or not.
+    for (const StackedEditRouterContext* ctx : GetStack())
+        if (ctx->_layer)
+            return ctx->_stage;
 
     return {};
 }
@@ -130,4 +131,35 @@ AttributeEditRouterContext::AttributeEditRouterContext(
 {
 }
 
+PXR_NS::SdfLayerHandle PrimMetadataEditRouterContext::getPrimMetadataLayer(
+    const PXR_NS::UsdPrim&        prim,
+    const PXR_NS::TfToken&        metadataName,
+    const PXR_NS::TfToken&        metadataKeyPath,
+    const PXR_NS::SdfLayerHandle& fallbackLayer)
+{
+    if (isTargetAlreadySet())
+        return nullptr;
+
+    auto routerLayer = getPrimMetadataEditRouterLayer(prim, metadataName, metadataKeyPath);
+
+    return routerLayer ? routerLayer : fallbackLayer;
+}
+
+PrimMetadataEditRouterContext::PrimMetadataEditRouterContext(
+    const PXR_NS::UsdPrim&        prim,
+    const PXR_NS::TfToken&        metadataName,
+    const PXR_NS::TfToken&        metadataKeyPath,
+    const PXR_NS::SdfLayerHandle& fallbackLayer)
+    : StackedEditRouterContext(
+        prim.GetStage(),
+        getPrimMetadataLayer(prim, metadataName, metadataKeyPath, fallbackLayer))
+{
+}
+
+PrimMetadataEditRouterContext::PrimMetadataEditRouterContext(
+    const PXR_NS::UsdStagePtr&    stage,
+    const PXR_NS::SdfLayerHandle& layer)
+    : StackedEditRouterContext(stage, layer)
+{
+}
 } // namespace USDUFE_NS_DEF

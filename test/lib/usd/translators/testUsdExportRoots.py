@@ -22,11 +22,9 @@ from maya import cmds
 from maya import standalone
 
 from pxr import Usd
-from pxr import UsdGeom
-from pxr import Vt
-from pxr import Gf
 
 import fixturesUtils
+import transformUtils
 
 class testUsdExportRoot(unittest.TestCase):
 
@@ -64,6 +62,8 @@ class testUsdExportRoot(unittest.TestCase):
                 'file': usdFile,
                 'mergeTransformAndShape': True,
                 'shadingMode': 'useRegistry',
+                'legacyMaterialScope': False,
+                'defaultPrim': 'None',
             }
             if root:
                 kwargs['exportRoots'] = root
@@ -79,7 +79,7 @@ class testUsdExportRoot(unittest.TestCase):
                 'type': 'USD Export',
                 'f': 1,
             }
-            options = []
+            options = ['legacyMaterialScope=0', 'defaultPrim=None']
             if root:
                 options.append('exportRoots={}'.format(','.join(root)))
             if worldspace:
@@ -111,22 +111,6 @@ class testUsdExportRoot(unittest.TestCase):
         self.assertTrue(prim.IsValid(), "Expected to find %s" % path)
         self.assertEqual(prim.GetTypeName(), type, "Expected prim %s to have type %s" % (path, type))
 
-    def assertPrimXform(self, stage, path, xforms):
-        '''
-        Verify that the prim has the given xform in the roder given.
-        xforms should be a list of pairs, each containing the xform op name and its value.
-        '''
-        prim = stage.GetPrimAtPath(path)
-        xformOpOrder = prim.GetAttribute('xformOpOrder').Get()
-        self.assertEqual(len(xformOpOrder), len(xforms))
-        for name, value in xforms:
-            self.assertEqual(xformOpOrder[0], name)
-            attr = prim.GetAttribute(name)
-            self.assertIsNotNone(attr)
-            self.assertEqual(attr.Get(), value)
-            # Chop off the first xofrm op for the next loop.
-            xformOpOrder = xformOpOrder[1:]
-
     def assertNotPrim(self, stage, path):
         self.assertFalse(stage.GetPrimAtPath(path).IsValid(), "Did not expect to find %s" % path)
 
@@ -140,17 +124,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootTop_selNone(self):
         def validator(stage):
             self.assertPrim(stage, '/Top/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Top/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertPrim(stage, '/Top/OtherMid', 'Xform')
             self.assertPrim(stage, '/Top/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Top', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.))])
-            self.assertPrimXform(stage, '/Top/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Top/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Top')
@@ -158,17 +142,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootTop_selNone_worldspace(self):
         def validator(stage):
             self.assertPrim(stage, '/Top/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Top/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertPrim(stage, '/Top/OtherMid', 'Xform')
             self.assertPrim(stage, '/Top/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Top', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.))])
-            self.assertPrimXform(stage, '/Top/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Top/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Top', worldspace=True)
@@ -176,17 +160,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootTop_selTop(self):
         def validator(stage):
             self.assertPrim(stage, '/Top/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Top/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertPrim(stage, '/Top/OtherMid', 'Xform')
             self.assertPrim(stage, '/Top/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Top', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.))])
-            self.assertPrimXform(stage, '/Top/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Top/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Top', selection='Top')
@@ -194,17 +178,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootTop_selMid(self):
         def validator(stage):
             self.assertPrim(stage, '/Top/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Top/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/Top/OtherMid')
             self.assertPrim(stage, '/Top/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Top', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.))])
-            self.assertPrimXform(stage, '/Top/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Top/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Top', selection='Mid')
@@ -212,17 +196,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootTop_selCube(self):
         def validator(stage):
             self.assertPrim(stage, '/Top/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Top/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/Top/OtherMid')
             self.assertNotPrim(stage, '/Top/Mid/OtherLowest')
-            self.assertPrimXform(stage, '/Top', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.))])
-            self.assertPrimXform(stage, '/Top/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Top/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Top/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Top', selection='Cube')
@@ -230,15 +214,15 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootMid_selNone(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Mid')
@@ -246,17 +230,17 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootMid_selNone_worldspace(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.)),
                 ('xformOp:translate:channel1', (0., 2., 0.)),
                 ('xformOp:rotateXYZ:channel1', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Mid', worldspace=True)
@@ -264,15 +248,15 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootMid_selTop(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Mid', selection='Top')
@@ -280,15 +264,15 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootMid_selMid(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/Mid/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Mid', selection='Mid')
@@ -296,15 +280,15 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootMid_selCube(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/Mid/OtherLowest')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Mid', selection='Cube')
@@ -312,13 +296,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCube_selNone(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Cube')
@@ -326,13 +310,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCube_selNone_worldspace(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (2., 0., 0.)),
                 ('xformOp:rotateXYZ', (45., 0., 0.)),
                 ('xformOp:translate:channel1', (0., 2., 0.)),
@@ -344,13 +328,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCube_selTop(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Cube', selection='Top')
@@ -358,13 +342,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCube_selMid(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Cube', selection='Mid')
@@ -372,13 +356,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCube_selCube(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='Cube', selection='Cube')
@@ -386,13 +370,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootEMPTY_selCube(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='', selection='Cube')
@@ -400,13 +384,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootEMPTY_selCubeOtherLowest(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root='', selection=['Cube','OtherLowest'])
@@ -414,13 +398,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCubeOtherLowest_selNone(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root=['Cube','OtherLowest'])
@@ -428,13 +412,13 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCubeOtherLowest_selCube(self):
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/Mid')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
-            self.assertPrimXform(stage, '/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root=['Cube','OtherLowest'], selection='Cube')
@@ -442,15 +426,15 @@ class testUsdExportRoot(unittest.TestCase):
     def testExportRoot_rootCubeOtherLowest_selCubeOtherLowest(self):
         def validator(stage):
             self.assertPrim(stage, '/Mid/Cube', 'Mesh')
-            self.assertPrim(stage, '/Mid/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertPrim(stage, '/OtherLowest', 'Xform')
-            self.assertPrimXform(stage, '/Mid', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid', [
                 ('xformOp:translate', (0., 2., 0.)),
                 ('xformOp:rotateXYZ', (0., 0., 45.))])
-            self.assertPrimXform(stage, '/Mid/Cube', [
+            transformUtils.assertStagePrimXforms(self, stage, '/Mid/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root=['Mid','OtherLowest'], selection=['Cube','OtherLowest'])
@@ -459,14 +443,14 @@ class testUsdExportRoot(unittest.TestCase):
         # test that two objects from sibling hierarchies export correctly with materials
         def validator(stage):
             self.assertPrim(stage, '/Cube', 'Mesh')
-            self.assertPrim(stage, '/Cube/Looks/lambert2SG/lambert2', 'Shader')
+            self.assertPrim(stage, '/Looks/lambert2SG/lambert2', 'Shader')
             self.assertNotPrim(stage, '/Top')
             self.assertNotPrim(stage, '/OtherTop')
             self.assertNotPrim(stage, '/OtherMid')
             self.assertNotPrim(stage, '/OtherLowest')
             self.assertPrim(stage, '/Cube1', 'Mesh')
-            self.assertPrim(stage, '/Cube1/Looks/lambert3SG/lambert3', 'Shader')
-            self.assertPrimXform(stage, '/Cube', [
+            self.assertPrim(stage, '/Looks/lambert3SG/lambert3', 'Shader')
+            transformUtils.assertStagePrimXforms(self, stage, '/Cube', [
                 ('xformOp:translate', (0., 0., 3.)),
                 ('xformOp:rotateXYZ', (0., 45., 0.))])
         self.doExportImportTest(validator, root=['Cube','Cube1'], selection=['Cube','Cube1'])

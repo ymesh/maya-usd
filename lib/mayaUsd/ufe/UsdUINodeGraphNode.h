@@ -33,16 +33,12 @@ class MAYAUSD_CORE_PUBLIC UsdUINodeGraphNode
 public:
     typedef std::shared_ptr<UsdUINodeGraphNode> Ptr;
 
-    UsdUINodeGraphNode(const UsdSceneItem::Ptr& item);
-    ~UsdUINodeGraphNode() override = default;
+    UsdUINodeGraphNode(const UsdUfe::UsdSceneItem::Ptr& item);
 
-    UsdUINodeGraphNode(const UsdUINodeGraphNode&) = delete;
-    UsdUINodeGraphNode& operator=(const UsdUINodeGraphNode&) = delete;
-    UsdUINodeGraphNode(UsdUINodeGraphNode&&) = delete;
-    UsdUINodeGraphNode& operator=(UsdUINodeGraphNode&&) = delete;
+    MAYAUSD_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(UsdUINodeGraphNode);
 
     //! Create a UsdUINodeGraphNode.
-    static UsdUINodeGraphNode::Ptr create(const UsdSceneItem::Ptr& item);
+    static UsdUINodeGraphNode::Ptr create(const UsdUfe::UsdSceneItem::Ptr& item);
 
     // Ufe::UsdUINodeGraphNode overrides
     Ufe::SceneItem::Ptr       sceneItem() const override;
@@ -54,6 +50,11 @@ public:
     Ufe::Vector2f             getSize() const override;
     Ufe::UndoableCommand::Ptr setSizeCmd(const Ufe::Vector2f& size) override;
 #endif
+#ifdef UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR
+    bool                      hasDisplayColor() const override;
+    Ufe::Color3f              getDisplayColor() const override;
+    Ufe::UndoableCommand::Ptr setDisplayColorCmd(const Ufe::Color3f& color) override;
+#endif
 
 private:
     enum class CoordType
@@ -62,7 +63,7 @@ private:
         Size
     };
 
-    class SetPosOrSizeCommand : public UsdUndoableCommand<Ufe::UndoableCommand>
+    class SetPosOrSizeCommand : public UsdUfe::UsdUndoableCommand<Ufe::UndoableCommand>
     {
     public:
         SetPosOrSizeCommand(
@@ -79,7 +80,22 @@ private:
         const PXR_NS::VtValue         _newValue;
     };
 
-    UsdSceneItem::Ptr fItem;
+#ifdef UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR
+    class SetDisplayColorCommand : public UsdUfe::UsdUndoableCommand<Ufe::UndoableCommand>
+    {
+    public:
+        SetDisplayColorCommand(const PXR_NS::UsdPrim& prim, const Ufe::Color3f& newColor);
+
+        void executeImplementation() override;
+
+    private:
+        const PXR_NS::UsdStageWeakPtr _stage;
+        const PXR_NS::SdfPath         _primPath;
+        const PXR_NS::VtValue         _newValue;
+    };
+#endif
+
+    UsdUfe::UsdSceneItem::Ptr _item;
 
     bool          hasPosOrSize(CoordType coordType) const;
     Ufe::Vector2f getPosOrSize(CoordType coordType) const;

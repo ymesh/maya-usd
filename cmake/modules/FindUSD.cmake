@@ -121,6 +121,23 @@ if(USD_INCLUDE_DIR)
     endif()
 endif()
 
+# See if USD changetracker has instance count.
+set(USD_HAS_TRACKER_INSTANCE_COUNT FALSE CACHE INTERNAL "USD.Track.InstanceCount")
+if (USD_INCLUDE_DIR AND EXISTS "${USD_INCLUDE_DIR}/pxr/imaging/hd/changeTracker.h")
+    file(STRINGS ${USD_INCLUDE_DIR}/pxr/imaging/hd/changeTracker.h USD_HAS_API REGEX "GetInstanceIndicesChangeCount")
+    if(USD_HAS_API)
+        set(USD_HAS_TRACKER_INSTANCE_COUNT TRUE CACHE INTERNAL "USD.Track.InstanceCount")
+        message(STATUS "USD has tracker instance count")
+    endif()
+endif()
+
+# See if USD changetracker has instance count.
+set(USD_HAS_NAMESPACE_EDIT FALSE CACHE INTERNAL "USD.NamespaceEdit")
+if (USD_INCLUDE_DIR AND EXISTS "${USD_INCLUDE_DIR}/pxr/usd/sdf/namespaceEdit.h")
+    set(USD_HAS_NAMESPACE_EDIT TRUE CACHE INTERNAL "USD.NamespaceEdit")
+    message(STATUS "USD has namespace edit")
+endif()
+
 # See if MaterialX shaders with color4 inputs exist natively in Sdr:
 # Not yet in a tagged USD version: https://github.com/PixarAnimationStudios/USD/pull/1894
 set(USD_HAS_COLOR4_SDR_SUPPORT FALSE CACHE INTERNAL "USD.Sdr.PropertyTypes.Color4")
@@ -143,13 +160,28 @@ if (USD_LIBRARY_DIR AND EXISTS "${USD_LIBRARY_DIR}/${USD_LIB_PREFIX}usdMtlx${CMA
     endif()
 endif()
 
+# See if we are getting OpenPBR Surface shader from USD:
+set(USD_HAS_MX_OPENPBR_SURFACE FALSE CACHE INTERNAL "USD.MaterialX.OpenPBRSurface")
+if (PXR_USD_LOCATION AND 
+        (EXISTS "${PXR_USD_LOCATION}/libraries/bxdf/mx39_open_pbr_surface.mtlx" OR 
+         EXISTS "${PXR_USD_LOCATION}/libraries/bxdf/open_pbr_surface.mtlx"))
+    set(USD_HAS_MX_OPENPBR_SURFACE TRUE CACHE INTERNAL "USD.MaterialX.OpenPBRSurface")
+    message(STATUS "USD has OpenPBR Surface")
+endif()
+
+# See if we are using the backported OpenPBR Surface shader, which needs special handling of Mx39FresnelData:
+set(USD_HAS_BACKPORTED_MX39_OPENPBR FALSE CACHE INTERNAL "USD.MaterialX.Mx39OpenPBRSurface")
+if (PXR_USD_LOCATION AND EXISTS "${PXR_USD_LOCATION}/libraries/pbrlib/genglsl/lib/mx39_microfacet_specular.glsl")
+    set(USD_HAS_BACKPORTED_MX39_OPENPBR TRUE CACHE INTERNAL "USD.MaterialX.Mx39OpenPBRSurface")
+    message(STATUS "USD has backported MaterialX 1.39 OpenPBR Surface code")
+endif()
+
 include(FindPackageHandleStandardArgs)
 
 find_package_handle_standard_args(USD
     REQUIRED_VARS
         PXR_USD_LOCATION
-        USD_INCLUDE_DIR
-        USD_LIBRARY_DIR
+        PXR_INCLUDE_DIRS
         USD_CONFIG_FILE
         USD_VERSION
         ADSK_USD_VERSION
@@ -160,8 +192,7 @@ find_package_handle_standard_args(USD
 
 if (USD_FOUND)
     # This will follow a message "-- Found USD: <path> ..."
-    message(STATUS "   USD include dir: ${USD_INCLUDE_DIR}")
-    message(STATUS "   USD library dir: ${USD_LIBRARY_DIR}")
+    message(STATUS "   USD include dirs: ${PXR_INCLUDE_DIRS}")
     if (USD_GENSCHEMA)
         message(STATUS "   usdGenSchema: ${USD_GENSCHEMA}")
     endif()

@@ -37,6 +37,7 @@ from maya.internal.ufeSupport import ufeCmdWrapper as ufeCmd
 import maya.api.OpenMaya as om
 
 import ufe
+import usdUfe
 
 import os
 import unittest
@@ -188,8 +189,8 @@ class ContextOpsTestCase(unittest.TestCase):
 
         # Not supported in bulk (from UsdContextOps).
         self.assertNotIn('Load', contextItemStrings)
-        self.assertNotIn('Load with Descendants', contextItemStrings)
-        self.assertNotIn('Unload', contextItemStrings)
+        self.assertIn('Load with Descendants', contextItemStrings)
+        self.assertIn('Unload', contextItemStrings)
         self.assertNotIn('Variant Sets', contextItemStrings)
         self.assertNotIn('Add New Prim', contextItemStrings)
 
@@ -292,6 +293,104 @@ class ContextOpsTestCase(unittest.TestCase):
         ufeCmd.execute(cmd)
         self.assertEqual(shadingVariant(), 'Ball_8')
         self.assertEqual(shadingVariantOnPrim(), 'Ball_8')
+
+    def testDeactivateInLayer(self):
+        """
+        Test deactivate prim in layers: stronger, weaker, session.
+        """
+        self.assertTrue(self.ball35Prim.IsActive())
+        stage = self.ball35Prim.GetStage()
+
+        # Create a sub-layer of root to test weaker layers.
+        rootLayer = stage.GetRootLayer()
+        newLayerName = "Layer_1"
+        usdFormat = Sdf.FileFormat.FindByExtension("usd")
+        subLayer = Sdf.Layer.New(usdFormat, newLayerName)
+        rootLayer.subLayerPaths.append(subLayer.identifier)
+
+        def changeActivation(layer, activate, expectSuccess, undoIt=False):
+            stage.SetEditTarget(layer)
+            cmdName = "Toggle Active State"
+            cmd = self.contextOps.doOpCmd([cmdName])
+            self.assertIsNotNone(cmd)
+            expectedActivation = bool(expectSuccess == activate)
+            ufeCmd.execute(cmd)
+            self.assertEqual(self.ball35Prim.IsActive(), expectedActivation)
+            if undoIt:
+                cmds.undo()
+                # Note: when we expect failure, undo will do nothing, so in all
+                #       cases we expect the opposite of the activate flag.
+                self.assertEqual(self.ball35Prim.IsActive(), not activate)
+
+        # Some boolean variables to make the code clearer below.
+        doActivate = True
+        doDeactivate = False
+        shouldWork = True
+        shouldFail = False
+        thenUndo = True
+
+        # Deactivate in root layer.
+        changeActivation(stage.GetRootLayer(), doDeactivate, shouldWork)
+
+        # Activate in root layer.
+        changeActivation(stage.GetRootLayer(), doActivate, shouldWork, thenUndo)
+
+        # Activate in session layer.
+        changeActivation(stage.GetSessionLayer(), doActivate, shouldWork, thenUndo)
+
+        # Activate in sub layer.
+        changeActivation(subLayer, doActivate, shouldFail)
+
+    def testInstanceableInLayer(self):
+        """
+        Test instanceable flag in layers: stronger, weaker, session.
+        """
+        self.assertTrue(self.ball35Prim.IsActive())
+        stage = self.ball35Prim.GetStage()
+
+        # Create a sub-layer of root to test weaker layers.
+        rootLayer = stage.GetRootLayer()
+        newLayerName = "Layer_1"
+        usdFormat = Sdf.FileFormat.FindByExtension("usd")
+        subLayer = Sdf.Layer.New(usdFormat, newLayerName)
+        rootLayer.subLayerPaths.append(subLayer.identifier)
+
+        def changeInstanceable(layer, makeInstanceable, expectSuccess, undoIt=False):
+            stage.SetEditTarget(layer)
+            cmdName = "Toggle Instanceable State"
+            cmd = self.contextOps.doOpCmd([cmdName])
+            self.assertIsNotNone(cmd)
+            expectedInstanceable = bool(expectSuccess == makeInstanceable)
+            ufeCmd.execute(cmd)
+            self.assertEqual(self.ball35Prim.IsInstanceable(), expectedInstanceable)
+            if undoIt:
+                cmds.undo()
+                # Note: when we expect failure, undo will do nothing, so in all
+                #       cases we expect the opposite of the activate flag.
+                self.assertEqual(self.ball35Prim.IsInstanceable(), not makeInstanceable)
+
+        # Some boolean variables to make the code clearer below.
+        doInstanceable = True
+        doNonInstanceable = False
+        shouldWork = True
+        shouldFail = False
+        thenUndo = True
+
+        # Instanceable in root layer.
+        changeInstanceable(stage.GetRootLayer(), doInstanceable, shouldWork)
+
+        # Non-instanceable in root layer.
+        changeInstanceable(
+            stage.GetRootLayer(), doNonInstanceable, shouldWork, thenUndo
+        )
+
+        # Non-instanceable in session layer.
+        changeInstanceable(
+            stage.GetSessionLayer(), doNonInstanceable, shouldWork, thenUndo
+        )
+
+        # Non-instanceable in sub layer.
+        changeInstanceable(subLayer, doNonInstanceable, shouldFail)
 
     def testDoOp(self):
         # Change visibility, undo / redo.
@@ -401,6 +500,48 @@ class ContextOpsTestCase(unittest.TestCase):
         # Re-create a ContextOps interface for it.
         # Since the context item is in the selection, we get a bulk context.
         self.contextOps = ufe.ContextOps.contextOps(self.ball35Item)
+
+        # Test Bulk Unload and Load with Descendants
+        payloadFile = testUtils.getTestScene('twoSpheres', 'sphere.usda')
+
+        def addPayLoads(payloadFile, ballPrims):
+            for ballPrim in ballPrims.values():
+                cmd = usdUfe.AddPayloadCommand(ballPrim, payloadFile, True)
+                self.assertIsNotNone(cmd)
+
+                # Verify state after add payload
+                cmd.execute()
+                self.assertTrue(ballPrim.HasPayload())
+                self.assertTrue(ballPrim.IsLoaded())
+    
+        def verifyBulkPrimPayload(ballPrims, ifLoaded):
+            for ballPrim in ballPrims.values():
+                self.assertEqual(ballPrim.IsLoaded(), ifLoaded)
+
+        addPayLoads(payloadFile, ballPrims)
+
+        # Unload
+        cmd = self.contextOps.doOpCmd(['Unload'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        ufeCmd.execute(cmd)
+        verifyBulkPrimPayload(ballPrims, False)
+        cmds.undo()
+        verifyBulkPrimPayload(ballPrims, True)
+
+        # Load with Descendants
+        # Unload the payloads first, using the unload command
+        ufeCmd.execute(cmd)
+        cmd = self.contextOps.doOpCmd(['Load with Descendants'])
+        self.assertIsNotNone(cmd)
+        self.assertIsInstance(cmd, ufe.CompositeUndoableCommand)
+
+        ufeCmd.execute(cmd)
+        verifyBulkPrimPayload(ballPrims, True)
+        cmds.undo()
+        verifyBulkPrimPayload(ballPrims, False)
+
 
         # Change visility, undo/redo.
         cmd = self.contextOps.doOpCmd(['Make Invisible'])
@@ -607,6 +748,50 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertEqual(ufeObs.nbAddNotif(), 2)
         self.assertEqual(ufeObs.nbDeleteNotif(), 2)
 
+    def testUndoAddNewPrimCleanSessionLayer(self):
+        cmds.file(new=True, force=True)
+
+        # Create a proxy shape with empty stage to start with.
+        proxyShape = mayaUsd_createStageWithNewLayer.createStageWithNewLayer()
+        stage = mayaUsd.lib.GetPrim(proxyShape).GetStage()
+
+        # Create a ContextOps interface for the proxy shape.
+        proxyShapePath = ufe.Path([mayaUtils.createUfePathSegment(proxyShape)])
+        proxyShapeItem = ufe.Hierarchy.createItem(proxyShapePath)
+        contextOps = ufe.ContextOps.contextOps(proxyShapeItem)
+
+        # Add a new prim.
+        cmd = contextOps.doOpCmd(['Add New Prim', 'Xform'])
+        self.assertIsNotNone(cmd)
+        ufeCmd.execute(cmd)
+
+        # The proxy shape should now have a single UFE child item.
+        proxyShapehier = ufe.Hierarchy.hierarchy(proxyShapeItem)
+        self.assertTrue(proxyShapehier.hasChildren())
+        self.assertEqual(len(proxyShapehier.children()), 1)
+
+        # Add a new prim to the prim we just added.
+        cmds.pickWalk(d='down')
+
+        # Get the scene item from the UFE selection.
+        snIter = iter(ufe.GlobalSelection.get())
+        xformItem = next(snIter)
+        xformPrim = usdUtils.getPrimFromSceneItem(xformItem)
+        xformPath = xformPrim.GetPath()
+
+        # Add data in the session layer.
+        metadataName = 'instanceable'
+        sessionLayer = stage.GetSessionLayer()
+        with Usd.EditContext(stage, sessionLayer):
+            xformPrim.SetMetadata(metadataName, True)
+
+        self.assertTrue(xformPrim.HasAuthoredMetadata(metadataName))
+        self.assertTrue(sessionLayer.GetPrimAtPath(xformPath))
+
+        # Verify that after undo the sessin layer got cleaned.
+        cmd.undo()
+        self.assertFalse(sessionLayer.GetPrimAtPath(xformPath))
+
     def testAddNewPrimInWeakerLayer(self):
         cmds.file(new=True, force=True)
 
@@ -769,6 +954,34 @@ class ContextOpsTestCase(unittest.TestCase):
         self.assertEqual(capsuleBindAPI.GetDirectBinding().GetMaterialPath(), Sdf.Path("/Material1"))
         cmds.redo()
         self.assertTrue(capsuleBindAPI.GetDirectBinding().GetMaterialPath().isEmpty)
+
+    @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
+    def testMaterialCreationInLockedLayer(self):
+        """This test creates a material in a locked layer. This should fail but not crash."""
+        cmds.file(new=True, force=True)
+
+        # Create a proxy shape with empty stage to start with.
+        proxyShape, stage = mayaUtils.createProxyAndStage()
+
+        # Create a cube prim without material.
+        cubeUsdPathStr = '/MyCube'
+        cubePrim = stage.DefinePrim(cubeUsdPathStr, 'Cube')
+        self.assertFalse(cubePrim.HasAPI(UsdShade.MaterialBindingAPI))
+
+        # Create a sub-layer, target it and lock it.
+        subLayer = usdUtils.addNewLayerToStage(stage, anonymous=True)
+        stage.SetEditTarget(subLayer)
+        subLayer.SetPermissionToEdit(False)
+
+        # try to create a material on the cube prim.
+        cubeSceneItem = ufeUtils.createUfeSceneItem(proxyShape, cubeUsdPathStr)
+        contextOps = ufe.ContextOps.contextOps(cubeSceneItem)
+        cmdPS = contextOps.doOpCmd(['Assign New Material', 'USD', 'UsdPreviewSurface'])
+        self.assertIsNotNone(cmdPS)
+        ufeCmd.execute(cmdPS)
+
+        # Verify the command filed due to the lock, but did not crash.
+        self.assertFalse(cubePrim.HasAPI(UsdShade.MaterialBindingAPI))
 
     @unittest.skipUnless(ufeUtils.ufeFeatureSetVersion() >= 4, 'Test only available in UFE v4 or greater')
     def testMaterialCreationForSingleObject(self):
@@ -1688,7 +1901,9 @@ class ContextOpsTestCase(unittest.TestCase):
         dagPath.extendToShape()
 
         with mayaUsd.lib.OpUndoItemList():
-            mayaUsd.lib.PrimUpdaterManager.duplicate(cmds.ls(cubeXForm, long=True)[0], psPathStr)
+            mayaUsd.lib.PrimUpdaterManager.duplicate(
+                cmds.ls(cubeXForm, long=True)[0], psPathStr, 
+                {'exportComponentTags': True})
 
         topPath = ufe.PathString.path(psPathStr + ',/' + cubeXForm + "/" + "top")
         topItem = ufe.Hierarchy.createItem(topPath)

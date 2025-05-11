@@ -86,6 +86,28 @@ getAllSublayers(const std::vector<std::string>& layerPaths, bool includeParents)
     return layers;
 }
 
+StageDirtyState isStageDirty(const PXR_NS::UsdStage& stage)
+{
+    const bool               includeTopLayer = true;
+    std::set<SdfLayerRefPtr> rootLayers = getAllSublayerRefs(stage.GetRootLayer(), includeTopLayer);
+    std::set<SdfLayerRefPtr> sessionLayers
+        = getAllSublayerRefs(stage.GetSessionLayer(), includeTopLayer);
+
+    SdfLayerHandleVector allLayers = stage.GetUsedLayers(true);
+    for (auto layer : allLayers) {
+        if (!TF_VERIFY(layer) || !layer->IsDirty())
+            continue;
+
+        if (rootLayers.count(layer))
+            return StageDirtyState::kDirtyRootLayers;
+
+        if (sessionLayers.count(layer))
+            return StageDirtyState::kDirtySessionLayers;
+    }
+
+    return StageDirtyState::kClean;
+}
+
 bool hasMutedLayer(const PXR_NS::UsdPrim& prim)
 {
     const PXR_NS::PcpPrimIndex& primIndex = prim.GetPrimIndex();
@@ -197,13 +219,15 @@ SdfLayerHandle getStrongerLayer(
         return layer2;
 
     for (auto path : root->GetSubLayerPaths()) {
-        SdfLayerRefPtr subLayer = SdfLayer::FindOrOpen(path);
-        if (subLayer) {
-            SdfLayerHandle stronger = getStrongerLayer(subLayer, layer1, layer2);
-            if (!stronger.IsInvalid()) {
-                return stronger;
-            }
-        }
+        SdfLayerRefPtr subLayer = SdfLayer::FindRelativeToLayer(root, path);
+        if (!subLayer)
+            continue;
+
+        SdfLayerHandle stronger = getStrongerLayer(subLayer, layer1, layer2);
+        if (!stronger)
+            continue;
+
+        return stronger;
     }
 
     return SdfLayerHandle();

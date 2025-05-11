@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef MAYAUSD_MAYAUSDHIERARCHYHANDLER_H
+#define MAYAUSD_MAYAUSDHIERARCHYHANDLER_H
 
 #include <mayaUsd/base/api.h>
 
@@ -32,21 +33,18 @@ class MAYAUSD_CORE_PUBLIC MayaUsdHierarchyHandler : public UsdUfe::UsdHierarchyH
 public:
     typedef std::shared_ptr<MayaUsdHierarchyHandler> Ptr;
 
-    MayaUsdHierarchyHandler();
-    ~MayaUsdHierarchyHandler() override;
-
-    // Delete the copy/move constructors assignment operators.
-    MayaUsdHierarchyHandler(const MayaUsdHierarchyHandler&) = delete;
-    MayaUsdHierarchyHandler& operator=(const MayaUsdHierarchyHandler&) = delete;
-    MayaUsdHierarchyHandler(MayaUsdHierarchyHandler&&) = delete;
-    MayaUsdHierarchyHandler& operator=(MayaUsdHierarchyHandler&&) = delete;
+    MayaUsdHierarchyHandler() = default;
 
     //! Create a MayaUsdHierarchyHandler.
     static MayaUsdHierarchyHandler::Ptr create();
 
     // UsdHierarchyHandler overrides
-    Ufe::Hierarchy::Ptr hierarchy(const Ufe::SceneItem::Ptr& item) const override;
+    Ufe::Hierarchy::Ptr         hierarchy(const Ufe::SceneItem::Ptr& item) const override;
+    Ufe::Hierarchy::ChildFilter childFilter() const override;
+
 }; // MayaUsdHierarchyHandler
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF
+
+#endif // MAYAUSD_MAYAUSDHIERARCHYHANDLER_H

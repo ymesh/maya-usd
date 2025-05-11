@@ -13,20 +13,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef USDUFE_UFE_GLOBAL_H
+#define USDUFE_UFE_GLOBAL_H
 
 #include <usdUfe/base/api.h>
 #include <usdUfe/ufe/StagesSubject.h>
 #include <usdUfe/ufe/Utils.h>
 
+#include <pxr/usd/usd/notice.h>
+#include <pxr/usd/usd/stage.h>
+
+#include <ufe/attributesHandler.h>
 #include <ufe/cameraHandler.h>
 #include <ufe/contextOpsHandler.h>
 #include <ufe/hierarchyHandler.h>
 #include <ufe/object3dHandler.h>
 #include <ufe/rtid.h>
+#include <ufe/transform3dHandler.h>
 #include <ufe/uiInfoHandler.h>
 
 #include <string>
+
+#if UFE_CLIPBOARD_SUPPORT
+#include <ufe/clipboardHandler.h>
+#endif
 
 namespace USDUFE_NS_DEF {
 
@@ -44,10 +54,18 @@ struct USDUFE_PUBLIC DCCFunctions
     TimeAccessorFn      timeAccessorFn = nullptr;
 
     // Optional: default values will be used if no function is supplied.
-    IsAttributeLockedFn  isAttributeLockedFn = nullptr;
-    SaveStageLoadRulesFn saveStageLoadRulesFn = nullptr;
-    IsRootChildFn        isRootChildFn = nullptr;
-    UniqueChildNameFn    uniqueChildNameFn = nullptr;
+    IsAttributeLockedFn        isAttributeLockedFn = nullptr;
+    SaveStageLoadRulesFn       saveStageLoadRulesFn = nullptr;
+    IsRootChildFn              isRootChildFn = nullptr;
+    UniqueChildNameFn          uniqueChildNameFn = nullptr;
+    DefaultMaterialScopeNameFn defaultMaterialScopeNameFn = nullptr;
+    Transform3dMatrixOpNameFn  transform3dMatrixOpNameFn = nullptr;
+    ExtractTRSFn               extractTRSFn = nullptr;
+    DisplayMessageFn displayMessageFn[static_cast<int>(MessageType::nbTypes)] = { nullptr };
+
+    // Optional: nothing will be done if no function is supplied.
+    WaitCursorFn startWaitCursorFn = nullptr;
+    WaitCursorFn stopWaitCursorFn = nullptr;
 };
 
 /*! Ufe runtime handlers used to initialize the plugin.
@@ -60,12 +78,12 @@ struct USDUFE_PUBLIC DCCFunctions
 struct USDUFE_PUBLIC Handlers
 {
     // Ufe v1 handlers
-    Ufe::HierarchyHandler::Ptr hierarchyHandler;
-    //     Ufe::Transform3dHandler::Ptr  transform3dHandler;
+    Ufe::HierarchyHandler::Ptr   hierarchyHandler;
+    Ufe::Transform3dHandler::Ptr transform3dHandler;
     //     Ufe::SceneItemOpsHandler::Ptr sceneItemOpsHandler;
 
     // Ufe v2 handlers
-    //     Ufe::AttributesHandler::Ptr   attributesHandler;
+    Ufe::AttributesHandler::Ptr attributesHandler;
     Ufe::Object3dHandler::Ptr   object3dHandler;
     Ufe::ContextOpsHandler::Ptr contextOpsHandler;
     Ufe::UIInfoHandler::Ptr     uiInfoHandler;
@@ -82,6 +100,10 @@ struct USDUFE_PUBLIC Handlers
 //     Ufe::ConnectionHandler::Ptr      connectionHandler;
 //     Ufe::UINodeGraphNodeHandler::Ptr uiNodeGraphNodeHandler;
 //     Ufe::BatchOpsHandler::Ptr        batchOpsHandler;
+#endif
+
+#if UFE_CLIPBOARD_SUPPORT
+    Ufe::ClipboardHandler::Ptr clipboardHandler;
 #endif
 };
 
@@ -111,4 +133,10 @@ std::string getUsdRunTimeName();
 USDUFE_PUBLIC
 Ufe::Rtid getUsdRunTimeId();
 
+//! Connect a stage to USD notifications.
+USDUFE_PUBLIC
+PXR_NS::TfNotice::Key registerStage(const PXR_NS::UsdStageRefPtr&);
+
 } // namespace USDUFE_NS_DEF
+
+#endif // USDUFE_UFE_GLOBAL_H

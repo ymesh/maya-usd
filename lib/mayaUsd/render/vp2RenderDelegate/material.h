@@ -168,10 +168,13 @@ private:
             return status;
         }
 
+        MStatus SetShaderIsTransparent(bool isTransparent);
+
     private:
         HdVP2Material* _owner;
-        TfToken _surfaceNetworkToken; //!< Generated token to uniquely identify a material network
-        SdfPath _surfaceShaderId;     //!< Path of the surface shader
+        TfToken _surfaceNetworkToken;   //!< Generated token to uniquely identify a material network
+        SdfPath _surfaceShaderId;       //!< Path of the surface shader
+        bool    _transparent { false }; //!< Whether this network is transparent
         HdVP2ShaderUniquePtr         _surfaceShader;    //!< VP2 surface shader instance
         mutable HdVP2ShaderUniquePtr _frontFaceShader;  //!< same as above + backface culling
         mutable HdVP2ShaderUniquePtr _pointShader;      //!< VP2 point shader instance, if needed
@@ -182,6 +185,8 @@ private:
         // MaterialX-only at the moment, but will be used for UsdPreviewSurface when the upgrade to
         // HdMaterialNetwork2 is complete.
         size_t _topoHash = 0;
+        HdVP2ShaderCache::StringMap
+            _renamedParameters; //!< Keep track of parameters that were renamed.
 
         void _ApplyMtlxVP2Fixes(HdMaterialNetwork2& outNet, const HdMaterialNetwork2& inNet);
         MHWRender::MShaderInstance* _CreateMaterialXShaderInstance(

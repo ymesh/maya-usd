@@ -15,9 +15,9 @@
 //
 #include "StagesSubject.h"
 
-#include "private/UfeNotifGuard.h"
-
+#include <usdUfe/base/tokens.h>
 #include <usdUfe/ufe/Global.h>
+#include <usdUfe/ufe/UfeNotifGuard.h>
 #include <usdUfe/ufe/UfeVersionCompat.h>
 #include <usdUfe/ufe/UsdCamera.h>
 #include <usdUfe/ufe/Utils.h>
@@ -339,6 +339,18 @@ void processAttributeChanges(
                         metadataKeys.insert(newMetadataKey);
                     }
                 }
+            } else if (infoChanged.first == SdfFieldKeys->AllowedTokens) {
+                sendMetadataChanged = true;
+                metadataKeys.insert(UsdUfe::MetadataTokens->UIEnumLabels);
+            } else if (infoChanged.first == SdfFieldKeys->Documentation) {
+                sendMetadataChanged = true;
+                metadataKeys.insert(UsdUfe::MetadataTokens->UIDoc);
+            } else if (infoChanged.first == SdfFieldKeys->DisplayGroup) {
+                sendMetadataChanged = true;
+                metadataKeys.insert(UsdUfe::MetadataTokens->UIFolder);
+            } else if (infoChanged.first == SdfFieldKeys->DisplayName) {
+                sendMetadataChanged = true;
+                metadataKeys.insert(UsdUfe::MetadataTokens->UIName);
             }
         }
     }
@@ -371,6 +383,12 @@ void processAttributeChanges(
 
 namespace USDUFE_NS_DEF {
 
+// Ensure that StagesSubject is properly setup.
+USDUFE_VERIFY_CLASS_SETUP(PXR_NS::TfRefBase, StagesSubject);
+USDUFE_VERIFY_CLASS_BASE(PXR_NS::TfWeakBase, StagesSubject);
+
+USDUFE_VERIFY_CLASS_NOT_MOVE_OR_COPY(AttributeChangedNotificationGuard);
+
 //------------------------------------------------------------------------------
 // StagesSubject
 //------------------------------------------------------------------------------
@@ -381,6 +399,12 @@ StagesSubject::~StagesSubject() { }
 
 /*static*/
 StagesSubject::RefPtr StagesSubject::create() { return TfCreateRefPtr(new StagesSubject); }
+
+PXR_NS::TfNotice::Key StagesSubject::registerStage(const PXR_NS::UsdStageRefPtr& stage)
+{
+    auto me = PXR_NS::TfCreateWeakPtr(this);
+    return TfNotice::Register(me, &StagesSubject::stageChanged, stage);
+}
 
 void StagesSubject::stageChanged(
     UsdNotice::ObjectsChanged const& notice,
@@ -467,19 +491,17 @@ void StagesSubject::stageChanged(
                         sentNotif = true;
                         break;
                     }
-                    // Note : Do nothing here with didRemoveInertPrim and didRemoveNonInertPrim.
-                    // Indeed, we can get these if prim specs are removed from some layers, but it
-                    // does not mean that the prim is no longer in the composed stage. If the prim
-                    // was actually gone, we would either get an invalid prim (in which case we
-                    // would not even get here, and would send a object destroyed" notif in the else
-                    // below), or we would fall into the "HasInfoChange : Active" case below. If
-                    // nothing else sends a notif in the loop (typically via the info change :
-                    // active) we do not want to send the fallback notif, so act as if a notif was
-                    // sent.
-                    else if (
-                        entry->flags.didRemoveInertPrim || entry->flags.didRemoveNonInertPrim) {
-                        sentNotif = true;
-                    }
+                    // Note : Do not send ObjectDelete notifs when didRemoveInertPrim or
+                    // didRemoveNonInertPrim are set. Indeed, we can get these if prim
+                    // specs are removed from some layers, but it does not mean that the prim is no
+                    // longer in the composed stage. If the prim was actually gone, we would either
+                    // get an invalid prim (in which case we would not even get here, and would send
+                    // a object destroyed" notif in the else below), or we would fall into the
+                    // "HasInfoChange : Active" case below. However, let the fallback
+                    // SubtreeInvalidate notif be sent, as it is sometimes required (for example
+                    // when unmarking a prim as instanceable - we get entries with the inert prim
+                    // removed, as its instanced version is removed, but it is still there as a
+                    // regular prim and needs to be invalidated.
 
                     // Special case for "active" metadata.
                     if (entry->HasInfoChange(SdfFieldKeys->Active)) {
@@ -506,6 +528,27 @@ void StagesSubject::stageChanged(
             Ufe::SceneItem::Ptr sceneItem = Ufe::Hierarchy::createItem(ufePath);
             if (!sceneItem || InAddOrDeleteOperation::inAddOrDeleteOperation()) {
                 sendObjectDestroyed(ufePath);
+
+                // If we are not in an add or delete operation, and a prim is
+                // removed, we need to trigger a subtree invalidation.  This is
+                // necessary in order to prevent stale items from being kept in
+                // the global selection set.
+                // Note: at the point of this notif the prim is not valid anymore
+                // and thus we cannot create a scene item to simply remove
+                // the item from selection list.
+                if (!InAddOrDeleteOperation::inAddOrDeleteOperation()) {
+                    auto       parentPath = changedPath.GetParentPath();
+                    const auto parentUfePath = parentPath == SdfPath::AbsoluteRootPath()
+                        ? stagePath(sender)
+                        : stagePath(sender)
+                            + Ufe::PathSegment(
+                                parentPath.GetString(), UsdUfe::getUsdRunTimeId(), '/');
+
+                    auto parentItem = Ufe::Hierarchy::createItem(parentUfePath);
+                    if (parentItem) {
+                        sendSubtreeInvalidate(parentItem);
+                    }
+                }
             } else {
                 sendSubtreeInvalidate(sceneItem);
             }
@@ -651,6 +694,7 @@ void StagesSubject::sendSubtreeInvalidate(const Ufe::SceneItem::Ptr& sceneItem) 
         TF_WARN("Caught error during notification: %s", ex.what());
     }
 }
+
 AttributeChangedNotificationGuard::AttributeChangedNotificationGuard()
 {
     if (inAttributeChangedNotificationGuard()) {

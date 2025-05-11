@@ -15,6 +15,7 @@
 //
 #include "translatorMesh.h"
 
+#include <mayaUsd/fileio/translators/translatorUtil.h>
 #include <mayaUsd/fileio/utils/meshReadUtils.h>
 #include <mayaUsd/fileio/utils/meshWriteUtils.h>
 #include <mayaUsd/fileio/utils/readUtil.h>
@@ -25,8 +26,6 @@
 
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 
-#include <maya/MColor.h>
-#include <maya/MColorArray.h>
 #include <maya/MDGModifier.h>
 #include <maya/MDoubleArray.h>
 #include <maya/MFloatArray.h>
@@ -34,9 +33,7 @@
 #include <maya/MFnBlendShapeDeformer.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MFnGeometryFilter.h>
 #include <maya/MFnMesh.h>
-#include <maya/MFnSet.h>
 #include <maya/MGlobal.h>
 #include <maya/MIntArray.h>
 #include <maya/MItMeshFaceVertex.h>
@@ -49,6 +46,8 @@
 #include <vector>
 
 namespace MAYAUSD_NS_DEF {
+
+MAYAUSD_VERIFY_CLASS_NOT_MOVE_OR_COPY(TranslatorMeshRead);
 
 TranslatorMeshRead::TranslatorMeshRead(
     const UsdGeomMesh&        mesh,
@@ -199,8 +198,12 @@ TranslatorMeshRead::TranslatorMeshRead(
 
     // set mesh name
     const auto& primName = prim.GetName().GetString();
-    const bool  inPrototype = UsdPrim::IsPathInPrototype(prim.GetPath());
-    const auto  shapeName = inPrototype ? primName : TfStringPrintf("%sShape", primName.c_str());
+    // Note: in prototype instances, we don't need an intermediary transform node.
+    //       See: EMSUSD-80
+    const bool inPrototype = UsdPrim::IsPathInPrototype(prim.GetPath());
+    const bool protoWithoutXform = inPrototype && !UsdMayaTranslatorUtil::HasXformOps(prim);
+    const auto shapeName
+        = protoWithoutXform ? primName : TfStringPrintf("%sShape", primName.c_str());
 
     const bool creatingOnlyMeshData
         = !transformObj.isNull() && MFn::kMeshData == transformObj.apiType();
@@ -465,6 +468,8 @@ MString TranslatorMeshRead::pointBasedDeformerName() const { return m_newPointBa
 size_t TranslatorMeshRead::pointsNumTimeSamples() const { return m_pointsNumTimeSamples; }
 
 SdfPath TranslatorMeshRead::shapePath() const { return m_shapePath; }
+
+MAYAUSD_VERIFY_CLASS_NOT_MOVE_OR_COPY(TranslatorMeshWrite);
 
 TranslatorMeshWrite::TranslatorMeshWrite(
     const MFnDependencyNode& depNodeFn,

@@ -20,16 +20,15 @@ target_sources(${TARGET_NAME}
         instancerWriter.cpp
         jointWriter.cpp
         lightReader.cpp
-        lightRfMReader.cpp
         lightRfMWriter.cpp
-        lightRfMWriter_PxrMeshLight.cpp
+        lightRfMWriterPxrMeshLight.cpp
         lightWriter.cpp
         locatorWriter.cpp
         materialReader.cpp
         mayaReferenceReader.cpp
         meshReader.cpp
         meshWriter.cpp
-        meshWriter_BlendShapes.cpp
+        meshWriterBlendShapes.cpp
         nurbsCurvesReader.cpp
         nurbsCurveWriter.cpp
         nurbsPatchReader.cpp
@@ -38,6 +37,7 @@ target_sources(${TARGET_NAME}
         plugin.cpp
         scopeReader.cpp
         skelReader.cpp
+        stageWriter.cpp
         strokeWriter.cpp
         xformReader.cpp
 )
@@ -60,6 +60,13 @@ target_compile_definitions(${TARGET_NAME}
         $<$<BOOL:${IS_MACOSX}>:OSMac_>
 )
 
+if (MAYA_HAS_OPENPBR_SURFACE_SHADER)
+    target_compile_definitions(${TARGET_NAME}
+        PRIVATE
+        MAYA_HAS_OPENPBR_SURFACE_SHADER=1
+    )
+endif()
+
 mayaUsd_compile_config(${TARGET_NAME})
 
 # -----------------------------------------------------------------------------
@@ -67,6 +74,7 @@ mayaUsd_compile_config(${TARGET_NAME})
 # -----------------------------------------------------------------------------
 target_include_directories(${TARGET_NAME}
     PRIVATE
+        ${PXR_INCLUDE_DIRS}
         ${MAYA_INCLUDE_DIRS}
         ${CMAKE_BINARY_DIR}
 )

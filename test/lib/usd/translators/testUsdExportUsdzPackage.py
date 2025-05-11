@@ -49,11 +49,11 @@ class testUsdExportPackage(unittest.TestCase):
 
         # Write the file out
         path = os.path.join(self.temp_dir, 'testExportSelfContainedPackage.usdz')
-        cmds.mayaUSDExport(f=path, compatibility='appleArKit')
+        cmds.mayaUSDExport(f=path, compatibility='appleArKit', legacyMaterialScope=False, defaultPrim='None')
 
         # Check with USD what the path to the texture is
         stage = Usd.Stage.Open(path)
-        prim = stage.GetPrimAtPath("/AssetGroup/Looks/AssetMatSG/file1")
+        prim = stage.GetPrimAtPath("/Looks/AssetMatSG/file1")
         shader = UsdShade.Shader(prim)
         tex = shader.GetInput("file").Get().path
 

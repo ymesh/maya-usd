@@ -18,10 +18,10 @@
 
 #include "bboxGeom.h"
 #include "debugCodes.h"
-#include "draw_item.h"
+#include "drawItem.h"
 #include "instancer.h"
 #include "material.h"
-#include "render_delegate.h"
+#include "renderDelegate.h"
 #include "tokens.h"
 
 #include <pxr/base/gf/matrix4d.h>
@@ -607,12 +607,12 @@ void HdVP2Points::_UpdateDrawItem(
         if (0 == instanceCount) {
             instancerWithNoInstances = true;
         } else {
+            const SdfPathVector usdPaths = drawScene.GetScenePrimPaths(id, instanceCount);
             stateToCommit._instanceTransforms->setLength(instanceCount);
             for (unsigned int i = 0; i < instanceCount; ++i) {
                 transforms[i].Get(instanceMatrix.matrix);
                 (*stateToCommit._instanceTransforms)[i] = worldMatrix * instanceMatrix;
-                stateToCommit._ufeIdentifiers.append(
-                    drawScene.GetScenePrimPath(GetId(), i).GetString().c_str());
+                stateToCommit._ufeIdentifiers.append(usdPaths[i].GetString().c_str());
             }
 
             // If the item is used for both regular draw and selection highlight,

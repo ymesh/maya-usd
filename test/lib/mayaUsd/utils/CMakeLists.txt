@@ -24,6 +24,8 @@ foreach(script ${TEST_SCRIPT_FILES})
     mayaUsd_add_test(${target}
         PYTHON_MODULE ${target}
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        ENV
+            "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
     )
 
     # Add a ctest label to these tests for easy filtering.
@@ -36,6 +38,8 @@ foreach(script ${INTERACTIVE_TEST_SCRIPT_FILES})
         INTERACTIVE
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         PYTHON_SCRIPT ${script}
+        ENV
+            "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
     )
 
     # Add a ctest label to these tests for easy filtering.
@@ -74,13 +78,10 @@ function(add_mayaUsdLibUtils_test TARGET_NAME)
     # -----------------------------------------------------------------------------
     target_link_libraries(${TARGET_NAME}
         PRIVATE
-            # GTest::GTest
-            # ${GTEST_LIBRARIES}
-            ${GTEST_LIBRARY}
-            # gtest
-            mayaUsdUtils
-            ${MAYA_LIBRARIES}
-            mayaUsd
+        GTest::GTest
+        ${MAYA_LIBRARIES}
+        mayaUsd
+        usdUfe
     )
 
     # -----------------------------------------------------------------------------
@@ -114,4 +115,25 @@ if(IS_WINDOWS)
         testSplitString
         testSplitString.cpp
     )
+
+    if(CMAKE_WANT_MATERIALX_BUILD AND PXR_VERSION GREATER_EQUAL 2211)
+        add_mayaUsdLibUtils_test(
+            test_ShaderGenUtils
+            test_ShaderGenUtils.cpp
+        )
+
+        target_compile_definitions(test_ShaderGenUtils
+        PRIVATE
+            MATERIALX_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/materialx_test_data"
+            MATERIALX_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test/Temporary/test_ShaderGenUtils"
+        )
+
+        target_link_libraries(test_ShaderGenUtils
+        PRIVATE
+            usdMtlx
+            MaterialXCore
+            MaterialXFormat
+        )
+
+    endif()    
 endif()

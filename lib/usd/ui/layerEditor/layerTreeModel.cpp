@@ -151,7 +151,7 @@ bool LayerTreeModel::canDropMimeData(
     }
 
     auto parentItem = layerItemFromIndex(parentIndex);
-    if (!parentItem || parentItem->isReadOnly()) {
+    if (!parentItem || parentItem->isReadOnly() || parentItem->isLocked()) {
         return false;
     }
 
@@ -194,7 +194,7 @@ bool LayerTreeModel::dropMimeData(
     }
 
     auto parentItem = layerItemFromIndex(parentIndex);
-    if (!parentItem || parentItem->isReadOnly()) {
+    if (!parentItem || parentItem->isReadOnly() || parentItem->isLocked()) {
         return false;
     }
 
@@ -235,7 +235,8 @@ bool LayerTreeModel::dropMimeData(
 
 void LayerTreeModel::setEditTarget(LayerTreeItem* item)
 {
-    if (!item->appearsMuted() && !item->isReadOnly()) {
+    if (!item->appearsMuted() && !item->isReadOnly() && !item->isLocked()
+        && !item->isSystemLocked()) {
         UndoContext context(_sessionState->commandHook(), "Set USD Edit Target Layer");
         context.hook()->setEditTarget(item->layer());
     }
@@ -286,17 +287,26 @@ void LayerTreeModel::rebuildModelOnIdle()
 {
     if (!_rebuildOnIdlePending) {
         _rebuildOnIdlePending = true;
-        QTimer::singleShot(0, this, &LayerTreeModel::rebuildModel);
+        QTimer::singleShot(0, this, [this]() {
+            bool refreshLockState = false;
+            this->rebuildModel(refreshLockState);
+        });
     }
 }
 
-void LayerTreeModel::rebuildModel()
+void LayerTreeModel::rebuildModel(bool refreshLockState /*= false*/)
 {
     _rebuildOnIdlePending = false;
     _lastAskedAnonLayerNameSinceRebuild = 0;
 
     beginResetModel();
-    clear();
+
+    //  Note: do *not* call clear() here! Unfortunately, clear() itself calls,
+    //        beginResetModel() and endResetModel(). Qt does not detect the nested
+    //        begin/end/ So calling clear() would make the layer manager flicker
+    //        to be empty for a brief time.
+    if (rowCount() > 0)
+        removeRows(0, rowCount());
 
     if (_sessionState->isValid()) {
         auto rootLayer = _sessionState->stage()->GetRootLayer();
@@ -344,6 +354,11 @@ void LayerTreeModel::rebuildModel()
             rootLayer, LayerType::RootLayer, "", &incomingLayers, sharedStage, &sharedLayers));
 
         updateTargetLayer(InRebuildModel::Yes);
+
+        if (refreshLockState) {
+            bool refreshSubLayers = true;
+            _sessionState->commandHook()->refreshLayerSystemLock(rootLayer, refreshSubLayers);
+        }
     }
 
     endResetModel();
@@ -424,7 +439,11 @@ void LayerTreeModel::usd_layerDirtinessChanged(
 }
 
 // called from SessionState::currentStageChangedSignal
-void LayerTreeModel::sessionStageChanged() { rebuildModel(); }
+void LayerTreeModel::sessionStageChanged()
+{
+    bool refreshLockState = true;
+    rebuildModel(refreshLockState);
+}
 
 // called from SessionState::autoHideSessionLayerSignal
 void LayerTreeModel::autoHideSessionLayerChanged() { rebuildModelOnIdle(); }
@@ -481,8 +500,11 @@ void LayerTreeModel::saveStage(QWidget* in_parent)
     auto saveAllLayers = [this]() {
         const auto layers = getAllNeedsSavingLayers();
         for (auto layer : layers) {
-            if (!layer->isAnonymous())
-                layer->saveEditsNoPrompt();
+            if (!layer->isSystemLocked()) {
+                if (!layer->isAnonymous()) {
+                    layer->saveEditsNoPrompt();
+                }
+            }
         }
     };
 
@@ -502,7 +524,8 @@ void LayerTreeModel::saveStage(QWidget* in_parent)
     }
 
     if (showConfirmDgl) {
-        SaveLayersDialog dlg(_sessionState, in_parent);
+        bool             isExporting = false;
+        SaveLayersDialog dlg(_sessionState, in_parent, isExporting);
         if (QDialog::Accepted == dlg.exec()) {
 
             if (!dlg.layersWithErrorPairs().isEmpty()) {
@@ -566,6 +589,25 @@ void LayerTreeModel::toggleMuteLayer(LayerTreeItem* item, bool* forcedState)
     }
 
     _sessionState->commandHook()->muteSubLayer(item->layer(), !item->isMuted());
+}
+
+void LayerTreeModel::toggleLockLayer(
+    LayerTreeItem* item,
+    bool           includeSublayers,
+    bool*          forcedState /*= nullptr*/)
+{
+    if (item->isInvalidLayer() || item->isSessionLayer() || item->isSystemLocked())
+        return;
+
+    if (forcedState) {
+        if (*forcedState == item->isLocked())
+            return;
+    }
+
+    MayaUsd::LayerLockType toggledLockType = item->isLocked()
+        ? MayaUsd::LayerLockType::LayerLock_Unlocked
+        : MayaUsd::LayerLockType::LayerLock_Locked;
+    _sessionState->commandHook()->lockLayer(item->layer(), toggledLockType, includeSublayers);
 }
 
 } // namespace UsdLayerEditor

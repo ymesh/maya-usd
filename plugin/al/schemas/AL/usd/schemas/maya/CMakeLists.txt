@@ -74,7 +74,7 @@ target_compile_definitions(AL_USDMayaSchemas
 
 target_include_directories(AL_USDMayaSchemas 
   PUBLIC
-    ${USD_INCLUDE_DIR}
+    ${PXR_INCLUDE_DIRS}
 )
 
 # Hamed 2019 
@@ -127,6 +127,11 @@ target_compile_definitions(${PYTHON_LIBRARY_NAME}
         MFB_PACKAGE_NAME=AL_USDMayaSchemas
         MFB_ALT_PACKAGE_NAME=AL_USDMayaSchemas
         MFB_PACKAGE_MODULE=AL.usd.schemas.maya
+)
+
+target_include_directories(${PYTHON_LIBRARY_NAME} 
+  PRIVATE
+    ${CMAKE_BINARY_DIR}/include
 )
 
 set_python_module_property(${PYTHON_LIBRARY_NAME})

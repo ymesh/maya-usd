@@ -22,7 +22,11 @@
 #include "layerTreeModel.h"
 #include "stringResources.h"
 
+#include <maya/MGlobal.h>
+#include <maya/MQtUtil.h>
+
 #include <QtGui/QColor>
+#include <QtGui/QCursor>
 #include <QtWidgets/QMenu>
 
 using namespace UsdLayerEditor;
@@ -35,7 +39,7 @@ struct CallMethodParams
 };
 
 namespace {
-QColor BLACK_BACKGROUND(43, 43, 43);
+QColor BLACK_BACKGROUND(55, 55, 55);
 
 typedef void (LayerTreeItem::*simpleLayerMethod)();
 
@@ -49,6 +53,28 @@ void doCallMethodOnSelection(const CallMethodParams& params, simpleLayerMethod m
         }
     }
 }
+
+class LayerTreeViewRefreshCallback : public UsdUfe::UICallback
+{
+public:
+    LayerTreeViewRefreshCallback(LayerTreeView* treeView)
+        : UICallback()
+        , _treeView(treeView)
+    {
+    }
+
+    void
+    operator()(const PXR_NS::VtDictionary& context, PXR_NS::VtDictionary& callbackData) override
+    {
+        if (!_treeView)
+            return;
+
+        _treeView->repaint();
+    }
+
+private:
+    LayerTreeView* _treeView;
+};
 
 } // namespace
 
@@ -81,6 +107,7 @@ LayerTreeView::LayerTreeView(SessionState* in_sessionState, QWidget* in_parent)
     setAcceptDrops(true);
     setDropIndicatorShown(true);
     setDragDropMode(QAbstractItemView::InternalMove);
+    updateMouseCursor();
 
     // custom row drawing
     _delegate = new LayerTreeItemDelegate(this);
@@ -101,15 +128,44 @@ LayerTreeView::LayerTreeView(SessionState* in_sessionState, QWidget* in_parent)
 
     // signals
     connect(this, &QAbstractItemView::doubleClicked, this, &LayerTreeView::onItemDoubleClicked);
+    connect(this, &QTreeView::expanded, this, &LayerTreeView::onExpanded);
+    connect(this, &QTreeView::collapsed, this, &LayerTreeView::onCollapsed);
 
-    // renderSetuplike API
-    auto actionButtons = LayerTreeItem::actionButtonsDefinition();
-    for (auto actionInfo : actionButtons) {
-        auto action = new QAction(actionInfo._name, this);
-        connect(action, &QAction::triggered, this, &LayerTreeView::onMuteLayerButtonPushed);
-        _actionButtons._staticActions.push_back(action);
+    auto buttonDefinitions = LayerTreeItem::actionButtonsDefinition();
+    auto muteActionIter = buttonDefinitions.find(LayerActionType::Mute);
+    if (muteActionIter != buttonDefinitions.end()) {
+        LayerActionInfo muteActionInfo = muteActionIter->second;
+        auto            muteAction = new QAction(muteActionInfo._name, this);
+        connect(muteAction, &QAction::triggered, this, &LayerTreeView::onMuteLayerButtonPushed);
+        _actionButtons._staticActions.push_back(muteAction);
     }
+    auto lockActionIter = buttonDefinitions.find(LayerActionType::Lock);
+    if (lockActionIter != buttonDefinitions.end()) {
+        LayerActionInfo lockActionInfo = lockActionIter->second;
+        auto            lockAction = new QAction(lockActionInfo._name, this);
+        connect(lockAction, &QAction::triggered, this, &LayerTreeView::onLockLayerButtonPushed);
+        _actionButtons._staticActions.push_back(lockAction);
+    }
+
+    _refreshCallback = std::make_shared<LayerTreeViewRefreshCallback>(this);
+    UsdUfe::registerUICallback(PXR_NS::TfToken("onRefreshSystemLock"), _refreshCallback);
+
+    TfWeakPtr<LayerTreeView> me(this);
+    _layerMutingNoticeKey = TfNotice::Register(me, &LayerTreeView::onLayerMutingChanged);
 }
+
+LayerTreeView::~LayerTreeView()
+{
+    if (_refreshCallback) {
+        UsdUfe::unregisterUICallback(PXR_NS::TfToken("onRefreshSystemLock"), _refreshCallback);
+        _refreshCallback.reset();
+    }
+
+    // Stop listening to layer muting.
+    TfNotice::Revoke(_layerMutingNoticeKey);
+}
+
+void LayerTreeView::onLayerMutingChanged(const UsdNotice::LayerMutingChanged&) { repaint(); }
 
 LayerTreeItem* LayerTreeView::layerItemFromIndex(const QModelIndex& index) const
 {
@@ -128,12 +184,67 @@ void LayerTreeView::selectLayerRquest(const QModelIndex& index)
 
 void LayerTreeView::onItemDoubleClicked(const QModelIndex& index)
 {
-    if (index.isValid()) {
-        auto layerTreeItem = layerItemFromIndex(index);
-        if (layerTreeItem->isAnonymous()) {
-            layerTreeItem->saveEdits();
-        }
+    if (!index.isValid())
+        return;
+
+    auto layerTreeItem = layerItemFromIndex(index);
+    if (!layerTreeItem->needsSaving())
+        return;
+
+    // Note: system-locked layers cannot be saved.
+    if (layerTreeItem->isSystemLocked() || layerTreeItem->appearsSystemLocked())
+        return;
+
+    layerTreeItem->saveEdits();
+}
+
+bool LayerTreeView::shouldExpandOrCollapseAll() const
+{
+    // Internal private function to check if the expand and collapse of
+    // items should be recursive. Currently, this is controlled by the
+    // fact the user is pressing the SHIFT key on the keyboard.
+    int modifiers = 0;
+    MGlobal::executeCommand("getModifiers", modifiers);
+
+    // Magic constant 2 is how the getModifiers reports the SHIFT key.
+    // This is a public command and the shift value is only declared in
+    // its documentation. Being a public command, it is practically
+    // guaranteed to never change, so hard-coding the value is not a problem.
+    const bool shiftHeld = ((modifiers % 2) != 0);
+    return shiftHeld;
+}
+
+void LayerTreeView::onExpanded(const QModelIndex& index)
+{
+    if (!shouldExpandOrCollapseAll())
+        return;
+
+    expandChildren(index);
+}
+
+void LayerTreeView::onCollapsed(const QModelIndex& index)
+{
+    if (!shouldExpandOrCollapseAll())
+        return;
+
+    collapseChildren(index);
+}
+
+void LayerTreeView::expandChildren(const QModelIndex& index) { expandRecursively(index); }
+
+void LayerTreeView::collapseChildren(const QModelIndex& index)
+{
+    if (!index.isValid())
+        return;
+
+    // Recursively collapse each child node.
+    const int count = index.model()->rowCount(index);
+    for (int i = 0; i < count; i++) {
+        const QModelIndex& child = index.model()->index(i, 0, index);
+        collapseChildren(child);
     }
+
+    collapse(index);
 }
 
 LayerViewMemento::LayerViewMemento(const LayerTreeView& view, const LayerTreeModel& model)
@@ -143,6 +254,13 @@ LayerViewMemento::LayerViewMemento(const LayerTreeView& view, const LayerTreeMod
 
 void LayerViewMemento::preserve(const LayerTreeView& view, const LayerTreeModel& model)
 {
+    if (QScrollBar* hsb = view.horizontalScrollBar()) {
+        _horizontalScrollbarPosition = hsb->value();
+    }
+    if (QScrollBar* vsb = view.verticalScrollBar()) {
+        _verticalScrollbarPosition = vsb->value();
+    }
+
     const LayerItemVector items = model.getAllItems();
     if (items.size() == 0)
         return;
@@ -172,7 +290,7 @@ void LayerViewMemento::restore(LayerTreeView& view, LayerTreeModel& model)
         if (!item)
             continue;
 
-        bool expanded = true;
+        bool expanded = false;
 
         PXR_NS::SdfLayerRefPtr layer = item->layer();
         if (layer) {
@@ -185,6 +303,19 @@ void LayerViewMemento::restore(LayerTreeView& view, LayerTreeModel& model)
 
         view.setExpanded(item->index(), expanded);
     }
+
+    if (QScrollBar* hsb = view.horizontalScrollBar()) {
+        if (hsb->value() != _horizontalScrollbarPosition) {
+            hsb->setValue(_horizontalScrollbarPosition);
+            hsb->valueChanged(_horizontalScrollbarPosition);
+        }
+    }
+    if (QScrollBar* vsb = view.verticalScrollBar()) {
+        if (vsb->value() != _verticalScrollbarPosition) {
+            vsb->setValue(_verticalScrollbarPosition);
+            vsb->valueChanged(_verticalScrollbarPosition);
+        }
+    }
 }
 
 void LayerTreeView::onModelAboutToBeReset()
@@ -192,10 +323,13 @@ void LayerTreeView::onModelAboutToBeReset()
     if (!_model)
         return;
 
-    LayerViewMemento memento(*this, *_model);
-    if (memento.empty())
+    // Don't allow recursive saving of the tree view state.
+    // Could happen if notifications are sent in response
+    // to other notifications or Qt events.
+    if (_cachedModelState)
         return;
 
+    LayerViewMemento memento(*this, *_model);
     _cachedModelState = std::make_unique<LayerViewMemento>(std::move(memento));
 }
 
@@ -204,10 +338,12 @@ void LayerTreeView::onModelReset()
     if (!_model)
         return;
 
-    if (_cachedModelState)
+    if (_cachedModelState) {
         _cachedModelState->restore(*this, *_model);
-    else
+        _cachedModelState.reset();
+    } else {
         expandAll();
+    }
 }
 
 LayerItemVector LayerTreeView::getSelectedLayerItems() const
@@ -232,6 +368,8 @@ LayerItemVector LayerTreeView::getSelectedLayerItems() const
 
 void LayerTreeView::onAddParentLayer(const QString& undoName) const
 {
+    DelayAbstractCommandHook delayed(*_model->sessionState()->commandHook());
+
     auto selection = getSelectedLayerItems();
 
     CallMethodParams params;
@@ -261,6 +399,8 @@ void LayerTreeView::onAddParentLayer(const QString& undoName) const
 
 void LayerTreeView::onMuteLayer(const QString& undoName) const
 {
+    DelayAbstractCommandHook delayed(*_model->sessionState()->commandHook());
+
     auto selection = getSelectedLayerItems();
 
     CallMethodParams params;
@@ -276,7 +416,39 @@ void LayerTreeView::onMuteLayer(const QString& undoName) const
     }
 }
 
+void LayerTreeView::onLockLayer(const QString& undoName) const
+{
+    bool includeSubLayers = false;
+    onLockLayerAndSublayers(undoName, includeSubLayers);
+}
+
+void LayerTreeView::onLockLayerAndSublayers(const QString& undoName, bool includeSublayers) const
+{
+    DelayAbstractCommandHook delayed(*_model->sessionState()->commandHook());
+
+    auto selection = getSelectedLayerItems();
+
+    CallMethodParams params;
+    params.selection = &selection;
+    params.commandHook = _model->sessionState()->commandHook();
+    params.name = undoName;
+
+    bool isLocked = !currentLayerItem()->isLocked();
+
+    UndoContext context(params.commandHook, params.name);
+    for (auto item : *params.selection) {
+        item->parentModel()->toggleLockLayer(item, includeSublayers, &isLocked);
+    }
+}
+
 void LayerTreeView::callMethodOnSelection(const QString& undoName, simpleLayerMethod method)
+{
+    DelayAbstractCommandHook delayed(*_model->sessionState()->commandHook());
+
+    callMethodOnSelectionNoDelay(undoName, method);
+}
+
+void LayerTreeView::callMethodOnSelectionNoDelay(const QString& undoName, simpleLayerMethod method)
 {
     CallMethodParams params;
     auto             selection = getSelectedLayerItems();
@@ -312,47 +484,6 @@ void LayerTreeView::paintEvent(QPaintEvent* event)
     }
 }
 
-bool LayerTreeView::event(QEvent* event)
-{
-    // override for dynamic tooltips
-    if (event->type() == QEvent::ToolTip) {
-        handleTooltips(dynamic_cast<QHelpEvent*>(event));
-        return true;
-    } else {
-        return PARENT_CLASS::event(event);
-    }
-}
-
-void LayerTreeView::handleTooltips(QHelpEvent* event)
-{
-    auto index = indexAt(event->pos());
-    if (index.isValid()) {
-        auto itemRect = visualRect(index);
-        auto layerTreeItem = _model->layerItemFromIndex(index);
-        itemRect = _delegate->getAdjustedItemRect(layerTreeItem, itemRect);
-        auto targetRect = _delegate->getTargetIconRect(itemRect);
-        auto textRect = _delegate->getTextRect(itemRect);
-        if (targetRect.contains(event->pos())) {
-            QString tip
-                = StringResources::getAsQString(StringResources::kSetLayerAsTargetLayerTooltip);
-            QToolTip::showText(event->globalPos(), tip);
-            return;
-        } else if (textRect.contains(event->pos())) {
-            QString tip;
-            if (layerTreeItem->isInvalidLayer()) {
-                tip = StringResources::getAsQString(StringResources::kPathNotFound)
-                    + layerTreeItem->subLayerPath().c_str();
-            } else {
-                tip = layerTreeItem->layer()->GetRealPath().c_str();
-            }
-            QToolTip::showText(event->globalPos(), tip);
-            return;
-        }
-    }
-    QToolTip::hideText();
-    event->ignore();
-}
-
 void LayerTreeView::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
@@ -369,9 +500,25 @@ void LayerTreeView::mousePressEvent(QMouseEvent* event)
     PARENT_CLASS::mousePressEvent(event);
 }
 
+void LayerTreeView::updateMouseCursor()
+{
+    // Note: special mouse cursor taken from Maya resources.
+    QString pixmapName = QtUtils::getDPIPixmapName(":/rmbMenu");
+    // Note: in Maya, the normal-sized pixmap name does not ends with _100,
+    //       so remove that ending if it is present.
+    pixmapName.remove("_100");
+    QPixmap pixmap(pixmapName);
+
+    const int hitX = MQtUtil::dpiScale(11);
+    const int hitY = MQtUtil::dpiScale(9);
+
+    setCursor(QCursor(pixmap, hitX, hitY));
+}
+
 // support for renderSetup-like action button API
 void LayerTreeView::mouseMoveEvent(QMouseEvent* event)
 {
+    updateMouseCursor();
 
     // dirty the tree view so it will repaint when mouse is over it
     // this is needed to change the icons when hovered over them
@@ -407,6 +554,8 @@ void LayerTreeView::mouseReleaseEvent(QMouseEvent* event)
 
 void LayerTreeView::keyPressEvent(QKeyEvent* event)
 {
+    DelayAbstractCommandHook delayed(*_model->sessionState()->commandHook());
+
     if (event->type() == QEvent::KeyPress) {
         if (event->key() == Qt::Key_Delete) {
             CallMethodParams params;
@@ -446,6 +595,7 @@ QAction* LayerTreeView::getCurrentAction(
 void LayerTreeView::leaveEvent(QEvent* event)
 {
     //
+    updateMouseCursor();
     _delegate->clearLastHitAction();
 }
 
@@ -459,4 +609,14 @@ void LayerTreeView::onMuteLayerButtonPushed()
     update();
 }
 
+void LayerTreeView::onLockLayerButtonPushed()
+{
+    auto item = currentLayerItem();
+    if (item && !item->isSystemLocked()) {
+        bool includeSublayers = false;
+        item->parentModel()->toggleLockLayer(item, includeSublayers);
+    }
+    // need to force redraw of everything otherwise redraw isn't right
+    update();
+}
 } // namespace UsdLayerEditor

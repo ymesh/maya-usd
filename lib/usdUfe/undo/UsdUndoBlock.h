@@ -35,14 +35,15 @@ TF_DECLARE_WEAK_AND_REF_PTRS(UsdUndoManager);
 class USDUFE_PUBLIC UsdUndoBlock
 {
 public:
-    UsdUndoBlock(UsdUndoableItem* undoItem);
-    ~UsdUndoBlock();
+    /// @brief Create an undo block that will capture all undo into the given undo item.
+    /// @param undoItem the item to receive the undos.
+    /// @param extraEdits if true, the undos are added the item, even if the item already contained
+    /// undos.
+    ///                   Otherwise, any undos that were already in the items are discarded.
+    UsdUndoBlock(UsdUndoableItem* undoItem, bool extraEdits = false);
+    virtual ~UsdUndoBlock();
 
-    // delete the copy/move constructors assignment operators.
-    UsdUndoBlock(const UsdUndoBlock&) = delete;
-    UsdUndoBlock& operator=(const UsdUndoBlock&) = delete;
-    UsdUndoBlock(UsdUndoBlock&&) = delete;
-    UsdUndoBlock& operator=(UsdUndoBlock&&) = delete;
+    USDUFE_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(UsdUndoBlock);
 
     static uint32_t depth() { return _undoBlockDepth; }
 
@@ -50,6 +51,7 @@ private:
     static uint32_t _undoBlockDepth;
 
     UsdUndoableItem* _undoItem;
+    bool             _extraEdits;
 };
 
 } // namespace USDUFE_NS_DEF

@@ -64,6 +64,8 @@ const auto kLoadSublayersTo              { create("kLoadSublayersTo", "Load Subl
 const auto kLoadSublayers                { create("kLoadSublayers", "Load Sublayers") };
 const auto kLayerPath                    { create("kLayerPath", "Layer Path:") };
 const auto kMuteUnmuteLayer              { create("kMuteUnmuteLayer", "Mute/unmute the layer. Muted layers are ignored by the stage.")};
+const auto kLockUnlockLayer              { create("kLockUnlockLayer", "Lock/unlock the layer. A locked layer cannot be edited.")};
+const auto kLayerIsSystemLocked          { create("kLayerIsSystemLocked", "This layer has been locked by the system or administrator and is not editable.\nContact your TD for access.")};
 const auto kNoLayers                     { create("kNoLayers", "No Layers") };
 const auto kNotUndoable                  { create("kNotUndoable", "You can not undo this action.") };
 const auto kOption                       { create("kOption", "Option") };
@@ -81,9 +83,12 @@ const auto kSaveLayerWarnTitle           { create("kSaveLayerWarnTitle", "Save ^
 const auto kSaveLayerWarnMsg             { create("kSaveLayerWarnMsg", "Saving edits to ^1s will overwrite your file.") };
 const auto kSaveStage                    { create("kSaveStage", "Save Stage") };
 const auto kSaveStages                   { create("kSaveStages", "Save Stage(s)") };
+const auto kSaveStagesAndExport          { create("kSaveStagesAndExport", "Save Stage(s) and Export") };
 const auto kSaveXStages                  { create("kSaveXStages", "Save ^1s Stage(s)") };
 const auto kToSaveTheStageSaveAnonym     { create("kToSaveTheStageSaveAnonym", "To save the ^1s stage(s), save the following ^2s anonymous layer(s).") };
 const auto kToSaveTheStageSaveFiles      { create("kToSaveTheStageSaveFiles", "To save the ^1s stage(s), the following existing file(s) will be overwritten.") };
+const auto kToExportTheStageSaveAnonym   { create("kToExportTheStageSaveAnonym", "To export the ^1s stage(s), save the following ^2s anonymous layer(s).") };
+const auto kToExportTheStageSaveFiles    { create("kToExportTheStageSaveFiles", "To export the ^1s stage(s), the following existing file(s) will be overwritten.") };
 const auto kUsedInStagesTooltip          { create("kUsedInStagesTooltip", "<b>Used in Stages</b>: ") };
 
 const auto kSetLayerAsTargetLayerTooltip { create("kSetLayerAsTargetLayerTooltip", "Set layer as target layer. Edits are added to the target layer.") };

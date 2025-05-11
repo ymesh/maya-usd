@@ -44,6 +44,7 @@
 #include <maya/MFn.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MGlobal.h>
 #include <maya/MItDag.h>
 #include <maya/MObject.h>
 #include <maya/MObjectHandle.h>
@@ -195,16 +196,17 @@ SdfPath UsdMayaWriteJobContext::ConvertDagToUsdPath(const MDagPath& dagPath) con
     // write to the parent (transform) path instead.
     MDagPath parentDag(dagPath);
     parentDag.pop();
-    if (IsMergedTransform(parentDag)) {
+
+    if (IsMergedTransform(parentDag) && UsdMayaUtil::isShape(dagPath)) {
         path = path.GetParentPath();
     }
 
     path = _GetRootOverridePath(mArgs, path, /* modelRootOverride = */ false, /* rootMap = */ true);
 
-    if (!mParentScopePath.IsEmpty()) {
+    if (!mRootPrimPath.IsEmpty()) {
         // Since path is from MDagPathToUsdPath, it will always be
         // an absolute path...
-        path = path.ReplacePrefix(SdfPath::AbsoluteRootPath(), mParentScopePath);
+        path = path.ReplacePrefix(SdfPath::AbsoluteRootPath(), mRootPrimPath);
     }
     return _GetRootOverridePath(mArgs, path, /* modelRootOverride = */ true, /* rootMap = */ false);
 }
@@ -404,18 +406,15 @@ bool UsdMayaWriteJobContext::_NeedToTraverse(const MDagPath& curDag) const
 
         const std::string mayaTypeName(depFn.typeName().asChar());
 
-        if ((mArgs.excludeExportTypes.count(TfToken("Meshes")) != 0)
-            || (mArgs.excludeExportTypes.count(TfToken("meshes")) != 0)) {
+        if (!mArgs.isExportingMeshes()) {
             if (mayaTypeName == "mesh")
                 return false;
         }
-        if ((mArgs.excludeExportTypes.count(TfToken("Cameras")) != 0)
-            || (mArgs.excludeExportTypes.count(TfToken("camera")) != 0)) {
+        if (!mArgs.isExportingCameras()) {
             if (mayaTypeName.find("camera") != std::string::npos)
                 return false;
         }
-        if ((mArgs.excludeExportTypes.count(TfToken("Lights")) != 0)
-            || (mArgs.excludeExportTypes.count(TfToken("light")) != 0)) {
+        if (!mArgs.isExportingLights()) {
             if (mayaTypeName.find("Light") != std::string::npos)
                 return false;
         }
@@ -464,15 +463,23 @@ bool UsdMayaWriteJobContext::_OpenFile(const std::string& filename, bool append)
         return false;
     }
 
-    if (!mArgs.parentScope.IsEmpty()) {
-        mParentScopePath = mArgs.parentScope;
+    if (!mArgs.parentScope.IsEmpty() || !mArgs.rootPrim.IsEmpty()) {
+        if (!mArgs.parentScope.IsEmpty()) {
+            MGlobal::displayWarning("Flag parentScope is deprecated. Please use rootPrim instead.");
+            mRootPrimPath = mArgs.parentScope;
+        } else {
+            mRootPrimPath = mArgs.rootPrim;
+        }
         // Note that we only need to create the parentScope prim if we're not
         // using a usdModelRootOverridePath - if we ARE using
         // usdModelRootOverridePath, then IT will take the name of our parent
         // scope, and will be created when we write out the model variants
         if (mArgs.usdModelRootOverridePath.IsEmpty()) {
-            mParentScopePath
-                = UsdGeomScope::Define(mStage, mParentScopePath).GetPrim().GetPrimPath();
+            if (mArgs.rootPrimType == TfToken("xform") || mArgs.rootPrimType == TfToken("Xform")) {
+                mRootPrimPath = UsdGeomXform::Define(mStage, mRootPrimPath).GetPrim().GetPrimPath();
+            } else {
+                mRootPrimPath = UsdGeomScope::Define(mStage, mRootPrimPath).GetPrim().GetPrimPath();
+            }
         }
     }
 
@@ -589,8 +596,11 @@ UsdMayaWriteJobContext::_FindWriter(const MFnDependencyNode& mayaNode)
     const std::string mayaNodeType(mayaNode.typeName().asChar());
 
     // Check if type is already cached locally.
+    // If this type has multiple writers, we need to call CanExport again to determine which writer
+    // to use
     auto iter = mWriterFactoryCache.find(mayaNodeType);
-    if (iter != mWriterFactoryCache.end()) {
+    if (iter != mWriterFactoryCache.end()
+        && !UsdMayaPrimWriterRegistry::HasMultipleWriters(mayaNodeType)) {
         return iter->second;
     }
 
@@ -682,6 +692,7 @@ void UsdMayaWriteJobContext::MarkSkelBindings(
     const TfToken& config)
 {
     _skelBindingsProcessor->MarkBindings(path, skelPath, config);
+    _skelBindingsProcessor->SetRootPrimPath(mRootPrimPath);
 }
 
 bool UsdMayaWriteJobContext::UpdateSkelBindingsWithExtent(

@@ -34,8 +34,8 @@ global proc mayaUsd_PrefSaveMayaSceneFilesChanged()
 
 global proc mayaUsd_PrefFileFormatChanged()
 {
+	string $saveLayerFormatArgBinaryOptionPref = `python("import mayaUsd.lib as mlib; mlib.OptionVarTokens.SaveLayerFormatArgBinaryOption")`;
 	if (`radioButtonGrp -exists usdPrefSaveFileFormat`) {
-		string $saveLayerFormatArgBinaryOptionPref = `python("import mayaUsd.lib as mlib; mlib.OptionVarTokens.SaveLayerFormatArgBinaryOption")`;
 		int $sel = `radioButtonGrp -q -select usdPrefSaveFileFormat`;
 		optionVar -iv $saveLayerFormatArgBinaryOptionPref ($sel == 1);	// Button 1 is binary
 	}
@@ -43,6 +43,14 @@ global proc mayaUsd_PrefFileFormatChanged()
 		string $confirmExistingFileSaveOptionPref = `python("import mayaUsd.lib as mlib; mlib.OptionVarTokens.ConfirmExistingFileSave")`;
 		int $v = `checkBoxGrp -q -v1 usdPrefConfirmExistFileSave`;
 		optionVar -iv $confirmExistingFileSaveOptionPref $v;
+	}
+
+	// Update the clipboard file format to match the format here.
+	int $haveClipboardSupport = `python("import mayaUsd.ufe as mufe; callable(getattr(mufe, 'setClipboardFileFormat', None))")`;
+	if ($haveClipboardSupport && `optionVar -exists $saveLayerFormatArgBinaryOptionPref`) {
+		int $isBinary = `optionVar -q $saveLayerFormatArgBinaryOptionPref`;
+		string $formatTag = $isBinary ? "usdc" : "usda";
+		python("import mayaUsd.ufe as mufe; mufe.setClipboardFileFormat('" + $formatTag + "')");
 	}
 }
 
@@ -94,6 +102,10 @@ global proc mayaUsd_PrefUntexturedModeChanged()
 	if (`radioButtonGrp -exists usdPrefUntexturedMode`) {
 		int $sel = `radioButtonGrp -q -select usdPrefUntexturedMode`;
 		optionVar -iv mayaUsd_ShowDisplayColorTextureOff ($sel == 2);
+        
+        // Set a temporary optionVar saying that we have changed the untextured mode
+        // so in case user cancels, we can do reset again.
+        optionVar -transient -iv mayaUsd_PrefUntexturedModeChanged 1;
 		ogs -reset;
 	}
 }
@@ -103,6 +115,13 @@ global proc mayaUsd_PrefInitOptionVars(int $forceFactoryDefault)
 {
 	string $saveLayerFormatArgBinaryOptionPref = `python("import mayaUsd.lib as mlib; mlib.OptionVarTokens.SaveLayerFormatArgBinaryOption")`;
 	string $confirmExistingFileSaveOptionPref = `python("import mayaUsd.lib as mlib; mlib.OptionVarTokens.ConfirmExistingFileSave")`;
+
+    // Special case for the resetting the untextured mode. 
+	if ($forceFactoryDefault && `optionVar -exists "mayaUsd_ShowDisplayColorTextureOff"`) {
+        if (`optionVar -q "mayaUsd_ShowDisplayColorTextureOff"`) {
+            optionVar -transient -iv mayaUsd_PrefUntexturedModeChanged 1;
+        }
+    }
 
 	int $mjv = `about -majorVersion`;
 	if ($mjv <= 2022) {
@@ -155,8 +174,13 @@ global proc mayaUsd_PrefInitOptionVars(int $forceFactoryDefault)
 			-iv mayaUsd_ShowDisplayColorTextureOff false
 		;
 	}
-	// Need to refresh the viewport for display mayaUsd_ShowDisplayColorTextureOff
-	ogs -reset;
+    
+    if ($forceFactoryDefault && `optionVar -q mayaUsd_PrefUntexturedModeChanged`)
+    {
+        // Need to refresh the viewport for display mayaUsd_ShowDisplayColorTextureOff
+        optionVar -remove mayaUsd_PrefUntexturedModeChanged;
+        ogs -reset;
+    }
 }
 
 global proc mayaUsd_PrefCreateTab()
@@ -392,8 +416,20 @@ global proc mayaUsd_PrefHoldState(string $mode)
 	};
 	prefsHoldOptionVars($prefOptionVars, $mode); 
 
+	if ($mode == "save") {
+		// Preferences dialog was opened, make sure we don't have this transient optionVar.
+		optionVar -remove mayaUsd_PrefUntexturedModeChanged;
+	}
+
+	if ($mode == "restore") {
+		if (`optionVar -q mayaUsd_PrefUntexturedModeChanged`) {
+			// Need to refresh the viewport for display mayaUsd_ShowDisplayColorTextureOff
+			ogs -reset;
+		}
+	}
+
 	if ($mode == "remove") {
-		// Finalize preference changes into MayaUsd.
+		optionVar -remove mayaUsd_PrefUntexturedModeChanged;
 	}
 
 	global string $gPreferenceWindow;

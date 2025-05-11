@@ -16,6 +16,7 @@
 #include "UsdUIInfoHandler.h"
 
 #include <usdUfe/ufe/UsdSceneItem.h>
+#include <usdUfe/ufe/Utils.h>
 
 #include <pxr/usd/sdf/listOp.h> // SdfReferenceListOp/SdfPayloadListOp/SdfPathListOp
 #include <pxr/usd/sdf/schema.h> // SdfFieldKeys
@@ -23,6 +24,17 @@
 
 #include <map>
 #include <vector>
+
+#ifdef UFE_V5_FEATURES_AVAILABLE
+#include <ufe/value.h>
+#endif
+
+#ifndef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+#include <pxr/base/gf/vec3d.h>
+#include <pxr/base/tf/diagnostic.h>
+#include <pxr/base/vt/dictionary.h>
+#include <pxr/base/vt/value.h>
+#endif
 
 namespace {
 // Simple helper to add the metadata strings to the end of the input tooltip string.
@@ -70,16 +82,16 @@ void addMetadataCount(
 
 namespace USDUFE_NS_DEF {
 
+USDUFE_VERIFY_CLASS_SETUP(Ufe::UIInfoHandler, UsdUIInfoHandler);
+
 UsdUIInfoHandler::UsdUIInfoHandler()
     : Ufe::UIInfoHandler()
 {
     // Initialize to invalid values.
-    fInvisibleColor[0] = -1.;
-    fInvisibleColor[1] = -1.;
-    fInvisibleColor[2] = -1.;
+    _invisibleColor[0] = -1.;
+    _invisibleColor[1] = -1.;
+    _invisibleColor[2] = -1.;
 }
-
-UsdUIInfoHandler::~UsdUIInfoHandler() { }
 
 /*static*/
 UsdUIInfoHandler::Ptr UsdUIInfoHandler::create() { return std::make_shared<UsdUIInfoHandler>(); }
@@ -91,23 +103,60 @@ UsdUIInfoHandler::Ptr UsdUIInfoHandler::create() { return std::make_shared<UsdUI
 bool UsdUIInfoHandler::treeViewCellInfo(const Ufe::SceneItem::Ptr& item, Ufe::CellInfo& info) const
 {
     bool              changed = false;
-    UsdSceneItem::Ptr usdItem = std::dynamic_pointer_cast<UsdSceneItem>(item);
+    UsdSceneItem::Ptr usdItem = downcast(item);
 #if !defined(NDEBUG)
     assert(usdItem);
 #endif
     if (usdItem && usdItem->prim()) {
-        if (!usdItem->prim().IsActive()) {
+        auto prim = usdItem->prim();
+        if (!prim.IsActive()) {
             changed = true;
             info.fontStrikeout = true;
-            if (fInvisibleColor[0] >= 0) {
+            if (_invisibleColor[0] >= 0) {
                 info.textFgColor.set(
-                    static_cast<float>(fInvisibleColor[0]),
-                    static_cast<float>(fInvisibleColor[1]),
-                    static_cast<float>(fInvisibleColor[2]));
+                    static_cast<float>(_invisibleColor[0]),
+                    static_cast<float>(_invisibleColor[1]),
+                    static_cast<float>(_invisibleColor[2]));
             } else {
                 // Default color (dark gray) if none provided.
                 info.textFgColor.set(0.403922f, 0.403922f, 0.403922f);
             }
+        } else {
+            // Check the prim to see if it has any custom data for text color.
+#ifdef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+            static const std::string kAdskCustomDataGroup("Autodesk");
+            static const std::string kUseTextColor("Use Text Color");
+            static const std::string kTextColor("Text Color");
+
+            auto useTextColor = usdItem->getGroupMetadata(kAdskCustomDataGroup, kUseTextColor);
+            if (!useTextColor.empty() && useTextColor.safeGet<bool>(false)) {
+                // USD has no support for Color3 in VtValue, so we store a double3.
+                auto textColor = usdItem->getGroupMetadata(kAdskCustomDataGroup, kTextColor);
+                auto textClr = textColor.safeGet<Ufe::Vector3d>(Ufe::Vector3d(0, 0, 0));
+                info.textFgColor.set(
+                    static_cast<float>(textClr.x()),
+                    static_cast<float>(textClr.y()),
+                    static_cast<float>(textClr.z()));
+                changed = true;
+            }
+#else
+            static const PXR_NS::TfToken kUseTextColor("Autodesk:Use Text Color");
+            static const PXR_NS::TfToken kTextColor("Autodesk:Text Color");
+
+            PXR_NS::VtValue vtValue = prim.GetCustomDataByKey(kUseTextColor);
+            auto            useTextColor = vtValue.GetWithDefault<bool>(false);
+            if (useTextColor) {
+                vtValue = prim.GetCustomDataByKey(kTextColor);
+                if (vtValue.IsHolding<PXR_NS::GfVec3d>()) {
+                    auto textClr = vtValue.UncheckedGet<PXR_NS::GfVec3d>();
+                    info.textFgColor.set(
+                        static_cast<float>(textClr[0]),
+                        static_cast<float>(textClr[1]),
+                        static_cast<float>(textClr[2]));
+                    changed = true;
+                }
+            }
+#endif
         }
     }
 
@@ -161,7 +210,7 @@ Ufe::UIInfoHandler::Icon UsdUIInfoHandler::treeViewIcon(const Ufe::SceneItem::Pt
     }
 
     // Check if we have any composition meta data - if yes we display a special badge.
-    UsdSceneItem::Ptr usdItem = std::dynamic_pointer_cast<UsdSceneItem>(item);
+    auto usdItem = downcast(item);
     if (usdItem && usdItem->prim()) {
         // Variants
         if (!usdItem->prim().GetVariantSets().GetNames().empty()) {
@@ -191,7 +240,7 @@ std::string UsdUIInfoHandler::treeViewTooltip(const Ufe::SceneItem::Ptr& item) c
 {
     std::string tooltip;
 
-    UsdSceneItem::Ptr usdItem = std::dynamic_pointer_cast<UsdSceneItem>(item);
+    auto usdItem = downcast(item);
     if (usdItem && usdItem->prim()) {
         // Composition related metadata.
         bool                       needComma = false;

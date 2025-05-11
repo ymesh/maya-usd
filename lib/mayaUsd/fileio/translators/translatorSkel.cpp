@@ -17,6 +17,7 @@
 
 #include <mayaUsd/fileio/translators/translatorUtil.h>
 #include <mayaUsd/fileio/translators/translatorXformable.h>
+#include <mayaUsd/fileio/utils/meshWriteUtils.h>
 #include <mayaUsd/undo/OpUndoItems.h>
 #include <mayaUsd/utils/util.h>
 
@@ -28,21 +29,18 @@
 #include <pxr/usd/usdSkel/topology.h>
 
 #include <maya/MDGModifier.h>
-#include <maya/MDagModifier.h>
 #include <maya/MDoubleArray.h>
 #include <maya/MEulerRotation.h>
 #include <maya/MFnAnimCurve.h>
+#include <maya/MFnBlendShapeDeformer.h>
 #include <maya/MFnComponentListData.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MFnDoubleArrayData.h>
-#include <maya/MFnMatrixData.h>
 #include <maya/MFnMesh.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnSingleIndexedComponent.h>
 #include <maya/MFnSkinCluster.h>
 #include <maya/MFnTransform.h>
 #include <maya/MMatrix.h>
-#include <maya/MObjectHandle.h>
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
 
@@ -1140,7 +1138,6 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
     CHECK_MSTATUS_AND_RETURN(status, false);
     status = shapeDagPath.extendToShape();
     CHECK_MSTATUS_AND_RETURN(status, false);
-
     MObject shapeToSkin = shapeDagPath.node(&status);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
@@ -1153,11 +1150,6 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
     MObject parentTransform = shapeDagPath.transform(&status);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
-    MObject restMesh;
-    if (!_CreateRestMesh(shapeToSkin, parentTransform, &restMesh)) {
-        return false;
-    }
-
     if (!_ConfigureSkinnedObjectTransform(skinningQuery, parentTransform)) {
         return false;
     }
@@ -1168,6 +1160,26 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
     CHECK_MSTATUS_AND_RETURN(status, false);
     std::string skinClusterName = TfStringPrintf("skinCluster_%s", primToSkin.GetName().GetText());
     status = dgMod.renameNode(skinCluster, MString(skinClusterName.c_str()));
+
+    // Check if the skinning method on the mesh is dualQuaternion (classicLinear is default)
+    TfToken skinningMethod;
+    if (skinningQuery
+            .GetPrim()
+#if PXR_VERSION > 2211
+            .GetAttribute(UsdSkelTokens->primvarsSkelSkinningMethod)
+            .Get(&skinningMethod)
+        && skinningMethod == UsdSkelTokens->dualQuaternion) {
+#else
+            .GetAttribute(TfToken("primvars:skel:skinningMethod"))
+            .Get(&skinningMethod)
+        && skinningMethod == TfToken("dualQuaternion")) {
+#endif
+        MFnSkinCluster skinClusterFn(skinCluster, &status);
+        if (status == MS::kSuccess) {
+            MPlug skinMethodPlug = skinClusterFn.findPlug("skinningMethod");
+            skinMethodPlug.setInt(1); // Dual quaternion
+        }
+    }
 
     CHECK_MSTATUS_AND_RETURN(status, false);
 
@@ -1187,9 +1199,6 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
     MFnDependencyNode groupPartsDep(groupParts, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
-    MFnDependencyNode restMeshDep(restMesh, &status);
-    CHECK_MSTATUS_AND_RETURN(status, false);
-
     MFnDependencyNode shapeToSkinDep(shapeToSkin, &status);
     CHECK_MSTATUS_AND_RETURN(status, false);
 
@@ -1197,7 +1206,6 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
     CHECK_MSTATUS_AND_RETURN(status, false);
 
     // Register all new nodes on the context.
-    context->RegisterNewMayaNode(restMeshDep.name().asChar(), restMesh);
     context->RegisterNewMayaNode(skinClusterDep.name().asChar(), skinCluster);
     context->RegisterNewMayaNode(groupIdDep.name().asChar(), groupId);
     context->RegisterNewMayaNode(groupPartsDep.name().asChar(), groupParts);
@@ -1217,17 +1225,6 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
         CHECK_MSTATUS_AND_RETURN(status, false);
 
         status = inputComponentsPlug.setValue(componentList);
-        CHECK_MSTATUS_AND_RETURN(status, false);
-    }
-
-    // Connect restMesh.outMesh -> groupParts->inputGeometry
-    {
-        MPlug restMeshOutMesh = restMeshDep.findPlug(_MayaTokens->outMesh, &status);
-        CHECK_MSTATUS_AND_RETURN(status, false);
-        MPlug groupPartsInputGeometry = groupPartsDep.findPlug(_MayaTokens->inputGeometry, &status);
-        CHECK_MSTATUS_AND_RETURN(status, false);
-
-        status = dgMod.connect(restMeshOutMesh, groupPartsInputGeometry);
         CHECK_MSTATUS_AND_RETURN(status, false);
     }
 
@@ -1263,6 +1260,7 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
             = UsdMayaUtil::FindChildPlugByName(objectGroups0, _MayaTokens->objectGroupId);
 
         status = dgMod.connect(groupIdGroupId, objectGroupId);
+        CHECK_MSTATUS_AND_RETURN(status, false)
     }
 
     MPlug skinClusterInput = skinClusterDep.findPlug(_MayaTokens->input, &status);
@@ -1307,6 +1305,59 @@ bool UsdMayaTranslatorSkel::CreateSkinCluster(
 
         MPlug shapeToSkinInMesh = shapeToSkinDep.findPlug(_MayaTokens->inMesh, &status);
         CHECK_MSTATUS_AND_RETURN(status, false);
+
+        // The output mesh could already have a connection (blendShapes, for example).
+        // Make sure to disconnect those, before proceeding on adding the skinCluster.
+        {
+            MPlug groupPartsInputGeometry
+                = groupPartsDep.findPlug(_MayaTokens->inputGeometry, &status);
+            CHECK_MSTATUS_AND_RETURN(status, false);
+
+            const auto skinSrc = shapeToSkinInMesh.source();
+            if (!skinSrc.isNull()) {
+                MObjectArray blendShapeDeformers;
+                UsdMayaMeshWriteUtils::getBlendShapesOfMesh(
+                    shapeToSkin, blendShapeDeformers, &status);
+
+                dgMod.disconnect(skinSrc, shapeToSkinInMesh);
+
+                // If the mesh has blendShapes, it has already been created prior to this step.
+                // When that's the case, we need to disconnect the blendShape outputGeometry
+                // and connect it to the groupParts.inputGeometry which drives the skel/skinCluster.
+                // Then, the output of the groupParts will be connected to the end mesh.
+                if (blendShapeDeformers.length() > 0) {
+                    MFnBlendShapeDeformer blendShapeFn(blendShapeDeformers[0], &status);
+                    MPlug                 blenshapeOutputPlug
+                        = blendShapeFn.findPlug(_MayaTokens->outputGeometry, &status);
+                    MPlug blenshapeOutputPlug0
+                        = blenshapeOutputPlug.elementByLogicalIndex(0, &status);
+
+                    status = dgMod.connect(blenshapeOutputPlug0, groupPartsInputGeometry);
+                } else {
+                    status = dgMod.connect(skinSrc, groupPartsInputGeometry);
+                }
+                CHECK_MSTATUS_AND_RETURN(status, false);
+            } else {
+                // For the case where there were no blendShapes attached to the mesh, create a rest
+                // pose mesh.
+                MObject restMesh;
+                if (!_CreateRestMesh(shapeToSkin, parentTransform, &restMesh)) {
+                    return false;
+                }
+
+                MFnDependencyNode restMeshDep(restMesh, &status);
+                CHECK_MSTATUS_AND_RETURN(status, false);
+
+                context->RegisterNewMayaNode(restMeshDep.name().asChar(), restMesh);
+
+                MPlug restMeshOutMesh = restMeshDep.findPlug(_MayaTokens->outMesh, &status);
+                CHECK_MSTATUS_AND_RETURN(status, false);
+
+                // Connect restMesh.outMesh -> groupParts->inputGeometry
+                status = dgMod.connect(restMeshOutMesh, groupPartsInputGeometry);
+                CHECK_MSTATUS_AND_RETURN(status, false);
+            }
+        }
 
         status = dgMod.connect(skinClusterOutputGeometry0, shapeToSkinInMesh);
         CHECK_MSTATUS_AND_RETURN(status, false);

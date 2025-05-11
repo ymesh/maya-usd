@@ -56,8 +56,11 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
         cls._testDir = os.path.abspath('.')
 
         cls._imageVersion = None
-        if maya.mel.eval("defaultShaderName") != "standardSurface1":
+        defaultSurfaceName = maya.mel.eval("defaultShaderName")
+        if defaultSurfaceName == "lambert1":
             cls._imageVersion = 'lambertDefaultMaterial'
+        elif defaultSurfaceName in ("openPBRSurface1", "openPBR_shader1"):
+            cls._imageVersion = 'openPBRSurfaceDefaultMaterial'
 
     @classmethod
     def tearDownClass(cls):
@@ -100,10 +103,13 @@ class testVP2RenderDelegatePerInstanceInheritedData(imageUtils.ImageDiffingTestC
         self.assertSnapshotClose('%s_ball_03_selected.png' % self._testName)
 
         ball_03_vis.Set('hidden')
+        cmds.select("|stage|stageShape,/root/group/ball_04")
         self.assertSnapshotClose('%s_ball_03_hidden.png' % self._testName)
         ball_04_vis.Set('hidden')
+        cmds.select("|stage|stageShape,/root/group/ball_05")
         self.assertSnapshotClose('%s_ball_03_and_04_hidden.png' % self._testName)
         ball_03_vis.Set('inherited') # this should show the object again
+        cmds.select("|stage|stageShape,/root/group/ball_03")
         self.assertSnapshotClose('%s_ball_04_hidden.png' % self._testName)
         ball_04_vis.Set('inherited')
         self.assertSnapshotClose('%s_shown_after_hidden.png' % self._testName)

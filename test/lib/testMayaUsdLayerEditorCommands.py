@@ -19,10 +19,16 @@
 import unittest
 import tempfile
 import testUtils
-from os import path
+import mayaUtils
+
+from os import path, chmod
+from stat import S_IREAD
+
 from maya import cmds, mel
 import mayaUsd_createStageWithNewLayer
 import mayaUsd
+from mayaUsd import ufe as mayaUsdUfe
+
 from pxr import Sdf, Usd
 
 CLEAR = "-clear"
@@ -529,6 +535,411 @@ class MayaUsdLayerEditorCommandsTestCase(unittest.TestCase):
         relLayerNewFileId = myDir_name + "/" + relLayerFileId
         self.assertTrue(len(absLayer1.subLayerPaths) == 1)
         self.assertEqual(absLayer1.subLayerPaths[0], relLayerNewFileId)
+
+    def testLockLayer(self):
+        """ test 'mayaUsdLayerEditor' command 'lockLayer' parameter """
+        
+        # Helpers
+        def createLayer():
+            layer = Sdf.Layer.CreateAnonymous()
+            stage.GetRootLayer().subLayerPaths.append(layer.identifier)
+            return layer
+        
+        shapePath, stage = getCleanMayaStage()
+        self.assertTrue(stage)
+        
+        subLayer = createLayer()
+        self.assertTrue(subLayer.permissionToEdit)
+        
+        # Locking a layer
+        cmds.mayaUsdLayerEditor(subLayer.identifier, edit=True, lockLayer=(1, 0, shapePath))
+        self.assertFalse(subLayer.permissionToEdit)
+        cmds.undo()
+        self.assertTrue(subLayer.permissionToEdit)
+        cmds.redo()
+        self.assertFalse(subLayer.permissionToEdit)
+        # Unlocking a layer
+        cmds.mayaUsdLayerEditor(subLayer.identifier, edit=True, lockLayer=(0, 0, shapePath))
+        self.assertTrue(subLayer.permissionToEdit)
+        # System locking a layer
+        cmds.mayaUsdLayerEditor(subLayer.identifier, edit=True, lockLayer=(2, 0, shapePath))
+        self.assertFalse(subLayer.permissionToEdit)
+        self.assertFalse(subLayer.permissionToSave)
+        cmds.undo()
+        self.assertTrue(subLayer.permissionToEdit)
+
+    def testRecursiveLockSingleLayer(self):
+        """
+        Test the 'mayaUsdLayerEditor' command 'lockLayer' parameter in recursive mode
+        when the layer has no sub0layer
+        """
+        
+        rootLayerPath = testUtils.getTestScene("layerLocking", "layerLocking.usda")
+        stage = Usd.Stage.Open(rootLayerPath)
+        topLayer = stage.GetRootLayer();
+        subLayer1 = Sdf.Layer.FindRelativeToLayer(topLayer, topLayer.subLayerPaths[0])
+        subLayer1_1 = Sdf.Layer.FindRelativeToLayer(subLayer1, subLayer1.subLayerPaths[0])
+
+        layerLockingShapes = cmds.ls(type="mayaUsdProxyShapeBase", long=True)
+        shapePath = layerLockingShapes[0]
+
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        
+        # Locking a layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1_1.identifier, edit=True, lockLayer=(1, 1, shapePath))
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+    
+        # Unlocking a layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1_1.identifier, edit=True, lockLayer=(0, 1, shapePath))
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+
+        # System locking a layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1_1.identifier, edit=True, lockLayer=(2, 1, shapePath))
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+
+        # Unlocking a system-locked layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1_1.identifier, edit=True, lockLayer=(0, 1, shapePath))
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+
+    def testRecursiveLockMultiLayers(self):
+        """
+        Test the 'mayaUsdLayerEditor' command 'lockLayer' parameter in recursive mode
+        when it has a sub-layer
+        """
+        
+        rootLayerPath = testUtils.getTestScene("layerLocking", "layerLocking.usda")
+        stage = Usd.Stage.Open(rootLayerPath)
+        topLayer = stage.GetRootLayer();
+        subLayer1 = Sdf.Layer.FindRelativeToLayer(topLayer, topLayer.subLayerPaths[0])
+        subLayer1_1 = Sdf.Layer.FindRelativeToLayer(subLayer1, subLayer1.subLayerPaths[0])
+
+        layerLockingShapes = cmds.ls(type="mayaUsdProxyShapeBase", long=True)
+        shapePath = layerLockingShapes[0]
+
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        
+        # Locking a layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1.identifier, edit=True, lockLayer=(1, 1, shapePath))
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+    
+        # Unlocking a layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1.identifier, edit=True, lockLayer=(0, 1, shapePath))
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+
+        # System locking a layer
+        cmds.mayaUsdLayerEditor(subLayer1.identifier, edit=True, lockLayer=(2, 1, shapePath))
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertFalse(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertFalse(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+
+        # Unlocking a system-locked layer recursively
+        #
+        # Note: we use the flag to skip system-locked layer to *only* unlock
+        #       the layer itself because by design we don't want to recursively
+        #       unlock system-locked layers from the UI.
+        #
+        #       Otherwise, unlocking recursively inthe UI would unlock system
+        #       layers, which is not something we want the user to do.
+        cmds.mayaUsdLayerEditor(subLayer1.identifier, edit=True, skipSystemLocked=True, lockLayer=(0, 1, shapePath))
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertFalse(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.undo()
+
+        # Unlocking a system-locked layer recursively
+        cmds.mayaUsdLayerEditor(subLayer1.identifier, edit=True, lockLayer=(0, 1, shapePath))
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+        cmds.undo()
+        self.assertFalse(subLayer1.permissionToEdit)
+        self.assertFalse(subLayer1.permissionToSave)
+        self.assertFalse(subLayer1_1.permissionToEdit)
+        self.assertFalse(subLayer1_1.permissionToSave)
+        cmds.redo()
+        self.assertTrue(subLayer1.permissionToEdit)
+        self.assertTrue(subLayer1.permissionToSave)
+        self.assertTrue(subLayer1_1.permissionToEdit)
+        self.assertTrue(subLayer1_1.permissionToSave)
+
+    def testRefreshSystemLock(self):
+        # FileBacked Layer Write Permission
+        # 1- Loading the test scene
+        rootLayerPath = testUtils.getTestScene("layerLocking", "layerLocking.usda")
+        stage = Usd.Stage.Open(rootLayerPath)
+        topLayer = stage.GetRootLayer();
+        layerLockingShapes = cmds.ls(type="mayaUsdProxyShapeBase", long=True)
+        proxyShapePath = layerLockingShapes[0]
+        # 2- Setting a system lock on a layer loaded from a file
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, lockLayer=(2, 0, proxyShapePath))
+        self.assertFalse(topLayer.permissionToEdit)
+        self.assertFalse(topLayer.permissionToSave)
+        # 3- Refreshing the system lock should remove the lock if the file is writable
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, refreshSystemLock=(proxyShapePath, 1))
+        self.assertTrue(topLayer.permissionToEdit)
+        self.assertTrue(topLayer.permissionToSave)
+        
+    def testLockLayerAndSubLayers(self):
+        # Locking a layer and its sublayer
+        # 1- Loading the test scene
+        rootLayerPath = testUtils.getTestScene("layerLocking", "layerLocking.usda")
+        stage = Usd.Stage.Open(rootLayerPath)
+        topLayer = stage.GetRootLayer();
+        layerLockingShapes = cmds.ls(type="mayaUsdProxyShapeBase", long=True)
+        proxyShapePath = layerLockingShapes[0]
+        # 2- Setting a lock on the top layer with the option to lock its sublayer
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, lockLayer=(1, 1, proxyShapePath))
+        self.assertFalse(topLayer.permissionToEdit)
+        # 3- Check that sublayer is also locked
+        subLayer = Sdf.Layer.FindRelativeToLayer(topLayer, topLayer.subLayerPaths[0])
+        self.assertFalse(subLayer.permissionToEdit)
+        # 4- Checking that no layers are modifiable
+        self.assertFalse(mayaUsdUfe.isAnyLayerModifiable(stage))
+        # 5- Undo and check that both top and sublayer are unlocked
+        cmds.undo()
+        self.assertTrue(topLayer.permissionToEdit)
+        self.assertTrue(subLayer.permissionToEdit)
+        # 6- Checking that at least one layer is modifiable
+        self.assertTrue(mayaUsdUfe.isAnyLayerModifiable(stage))
+    
+    def testRefreshSystemLockCallback(self):
+        # FileBacked Layer Write Permission
+        # 1- Loading the test scene
+        rootLayerPath = testUtils.getTestScene("layerLocking", "layerLocking.usda")
+        stage = Usd.Stage.Open(rootLayerPath)
+        topLayer = stage.GetRootLayer();
+        subLayer = Sdf.Layer.FindRelativeToLayer(topLayer, topLayer.subLayerPaths[0])
+        layerLockingShapes = cmds.ls(type="mayaUsdProxyShapeBase", long=True)
+        proxyShapePath = layerLockingShapes[0]
+        # 2- Setting a system lock on a layer loaded from a file and its sub-layer
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, lockLayer=(2, 0, proxyShapePath))
+        self.assertFalse(topLayer.permissionToEdit)
+        self.assertFalse(topLayer.permissionToSave)
+        # 3- Attach callbacks to capture any system-lock changes due to refreshSystemLock
+        self.callCount = 0
+        def refreshSystemLockCallback(context, callbackData):
+            layerIds = callbackData.get('affectedLayerIds')
+            # Check that only the top layers is affected
+            self.assertTrue(len(layerIds), 1)
+            self.assertEqual(layerIds[0], topLayer.identifier)
+            # Check that the top layer is unlocked due to the refresh
+            self.assertTrue(topLayer.permissionToEdit)
+            self.assertTrue(topLayer.permissionToSave)
+            # Check that the sublayer is unchanged
+            self.assertTrue(subLayer.permissionToEdit)
+            self.assertTrue(subLayer.permissionToSave)
+            self.callCount = self.callCount + 1
+        
+        from usdUfe import registerUICallback, unregisterUICallback
+        mayaUsd.lib.registerUICallback('onRefreshSystemLock', refreshSystemLockCallback)        
+        # 4- Refreshing the system lock should remove the lock but also get re-locked by refreshSystemLockCallback
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, refreshSystemLock=(proxyShapePath, 1))
+        self.assertEqual(self.callCount, 1)
+
+        # 5- Unregistering the callback and refreshing the system lock should not call
+        #    call the callback again.
+        #
+        # Note: we must relock the layer for the callback to be called, otherwise it does not get
+        #       called as the status of the layer would not have changed during the refresh.
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, lockLayer=(2, 0, proxyShapePath))
+        mayaUsd.lib.unregisterUICallback('onRefreshSystemLock', refreshSystemLockCallback)        
+        cmds.mayaUsdLayerEditor(topLayer.identifier, edit=True, refreshSystemLock=(proxyShapePath, 1))
+        self.assertEqual(self.callCount, 1)
+
+        # 6- Unregistering again should do nothing and not crash.
+        mayaUsd.lib.unregisterUICallback('onRefreshSystemLock', refreshSystemLockCallback)        
+
+    def _verifyStageAfterRefreshSystemLock(
+            self, writableFiles, expectedLayerModifiable, callback=None):
+
+        with testUtils.TemporaryDirectory(prefix='RefreshLock') as testDir:
+            # Create a stage with a simple layer stack.
+            rootLayerPath = path.join(testDir, "root.usda")
+            rootLayer = Sdf.Layer.CreateNew(rootLayerPath)
+
+            subLayerPath = path.join(testDir, "sub.usda")
+            subLayer = Sdf.Layer.CreateNew(subLayerPath)
+
+            rootLayer.subLayerPaths.append(subLayer.identifier)
+            rootLayer.Save()
+
+            proxyShape, stage = mayaUtils.createProxyFromFile(rootLayerPath)
+
+            # Apply requested file permissions if needed.
+            if not writableFiles:
+                for layer in stage.GetLayerStack(False):
+                    chmod(layer.realPath, S_IREAD)
+
+            if callback is not None:
+                # Install the given callback.
+                mayaUsd.lib.registerUICallback('onRefreshSystemLock', callback)
+
+                # Alter a layer lock to ensure the callback is triggered on
+                # refreshSystemLock.
+                lockStatus = 0 if mayaUsd.lib.isLayerSystemLocked(rootLayer) else 2
+                cmds.mayaUsdLayerEditor(rootLayerPath, e=True,
+                                        lockLayer=(lockStatus, 0, proxyShape))
+
+            cmds.mayaUsdLayerEditor(rootLayerPath, e=True,
+                                    refreshSystemLock=(proxyShape, 1))
+
+            if callback is not None:
+                mayaUsd.lib.unregisterUICallback('onRefreshSystemLock', callback)
+
+            # Verify that the expected locks were applied
+            # e.g. during the callback.
+            self.assertEqual(mayaUsdUfe.isAnyLayerModifiable(stage),
+                             expectedLayerModifiable)
+
+            # Verify that refreshSystemLock properly handled the editTarget
+            # e.g. that it accounts for lock changes during the callback.
+            if expectedLayerModifiable:
+                # The initial target should be preserved in this case.
+                expectedTargetLayer = rootLayer
+            else:
+                # Edit target should have been forced to session layer.
+                expectedTargetLayer = stage.GetSessionLayer()
+
+            self.assertEqual(stage.GetEditTarget().GetLayer(),
+                             expectedTargetLayer)
+
+    def testRefreshSystemLockWithoutCallback(self):
+        """
+        Test refreshSystemLocks without any callback.
+        """
+        self._verifyStageAfterRefreshSystemLock(
+            writableFiles=False, expectedLayerModifiable=False)
+
+        self._verifyStageAfterRefreshSystemLock(
+            writableFiles=True, expectedLayerModifiable=True)
+
+    def testRefreshSystemLockCallbackLockingAll(self):
+        """
+        Test refreshSystemLocks with a callback that force a systemLock on all
+        layers even if the usd files are writable.
+        """
+        def callback(context, callbackData):
+            shapePath = context.get('proxyShapePath')
+            stage = mayaUsdUfe.getStage(shapePath)
+            for layer in stage.GetLayerStack(False):
+                mayaUsd.lib.systemLockLayer(shapePath, layer)
+
+        self._verifyStageAfterRefreshSystemLock(
+            writableFiles=True, expectedLayerModifiable=False,
+            callback=callback)
+
+    def testRefreshSystemLockWithCallbackUnlockingAll(self):
+        """
+        Test refreshSystemLocks with a callback that will unlock all
+        layers while they were automatically locked according to usd files
+        permissions.
+        """
+        def callback(context, callbackData):
+            shapePath = context.get('proxyShapePath')
+            for layerId in callbackData.get('affectedLayerIds'):
+                mayaUsd.lib.unlockLayer(shapePath, Sdf.Find(layerId))
+
+        self._verifyStageAfterRefreshSystemLock(
+            writableFiles=False, expectedLayerModifiable=True,
+            callback=callback)
+
+    def testRefreshSystemLockWithCallbackUnlockingEditTarget(self):
+        """
+        Test refreshSystemLocks with a callback that unlocks the current
+        edit target layer while it was automatically locked according
+        to usd file permission.
+        """
+        def callback(context, callbackData):
+            shapePath = context.get('proxyShapePath')
+            stage = mayaUsdUfe.getStage(shapePath)
+            mayaUsd.lib.unlockLayer(shapePath, stage.GetEditTarget().GetLayer())
+
+        self._verifyStageAfterRefreshSystemLock(
+            writableFiles=False, expectedLayerModifiable=True,
+            callback=callback)
 
     def testMuteLayer(self):
         """ test 'mayaUsdLayerEditor' command 'muteLayer' paramater """

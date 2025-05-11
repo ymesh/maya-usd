@@ -13,7 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef MAYAUSD_MAYAUSDHIERARCHY_H
+#define MAYAUSD_MAYAUSDHIERARCHY_H
 
 #include <mayaUsd/base/api.h>
 
@@ -32,17 +33,10 @@ class MAYAUSD_CORE_PUBLIC MayaUsdHierarchy : public UsdUfe::UsdHierarchy
 public:
     typedef std::shared_ptr<MayaUsdHierarchy> Ptr;
 
-    MayaUsdHierarchy(const UsdSceneItem::Ptr& item);
-    ~MayaUsdHierarchy() override;
-
-    // Delete the copy/move constructors assignment operators.
-    MayaUsdHierarchy(const MayaUsdHierarchy&) = delete;
-    MayaUsdHierarchy& operator=(const MayaUsdHierarchy&) = delete;
-    MayaUsdHierarchy(MayaUsdHierarchy&&) = delete;
-    MayaUsdHierarchy& operator=(MayaUsdHierarchy&&) = delete;
+    MayaUsdHierarchy(const UsdUfe::UsdSceneItem::Ptr& item);
 
     //! Create a MayaUsdHierarchy.
-    static MayaUsdHierarchy::Ptr create(const UsdSceneItem::Ptr& item);
+    static MayaUsdHierarchy::Ptr create(const UsdUfe::UsdSceneItem::Ptr& item);
 
 protected:
     // UsdHierarchy overrides
@@ -58,9 +52,12 @@ protected:
 //! UsdRootChildHierarchy). These two classes don't share a common base class
 //! but they both override UsdHierarchy::childrenHook() with the same code.
 bool mayaUsdHierarchyChildrenHook(
-    const PXR_NS::UsdPrim& child,
-    Ufe::SceneItemList&    children,
-    bool                   filterInactive);
+    const Ufe::SceneItem::Ptr& item,
+    const PXR_NS::UsdPrim&     child,
+    Ufe::SceneItemList&        children,
+    bool                       filterInactive);
 
 } // namespace ufe
 } // namespace MAYAUSD_NS_DEF
+
+#endif // MAYAUSD_MAYAUSDHIERARCHY_H

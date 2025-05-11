@@ -17,18 +17,17 @@
 #include <mayaUsd/undo/MayaUsdUndoBlock.h>
 
 #include <usdUfe/undo/UsdUndoManager.h>
+#include <usdUfe/undo/UsdUndoableItem.h>
 
 #include <pxr/base/tf/pyContainerConversions.h>
 #include <pxr/base/tf/pyNoticeWrapper.h>
 #include <pxr/pxr.h>
 #include <pxr/usd/sdf/layer.h>
-
-#include <boost/python/class.hpp>
-#include <boost/python/def.hpp>
+#include <pxr_python.h>
 
 #include <memory>
 
-using namespace boost::python;
+using namespace PXR_BOOST_PYTHON_NAMESPACE;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -36,8 +35,15 @@ namespace {
 class PythonUndoBlock
 {
 public:
+    PythonUndoBlock(UsdUfe::UsdUndoableItem& item)
+        : _item(&item)
+        , _block(nullptr)
+    {
+    }
+
     PythonUndoBlock()
-        : _block(nullptr)
+        : _item(nullptr)
+        , _block(nullptr)
     {
     }
 
@@ -48,19 +54,17 @@ public:
         if (!TF_VERIFY(_block == nullptr)) {
             return;
         }
-        _block = std::make_unique<MayaUsd::MayaUsdUndoBlock>();
+        if (_item)
+            _block = std::make_unique<UsdUfe::UsdUndoBlock>(_item);
+        else
+            _block = std::make_unique<MayaUsd::MayaUsdUndoBlock>();
     }
 
-    void exit(object, object, object)
-    {
-        if (!TF_VERIFY(_block != nullptr)) {
-            return;
-        }
-        _block.reset();
-    }
+    void exit(object, object, object) { _block.reset(); }
 
 private:
-    std::unique_ptr<MayaUsd::MayaUsdUndoBlock> _block;
+    UsdUfe::UsdUndoableItem*              _item;
+    std::unique_ptr<UsdUfe::UsdUndoBlock> _block;
 };
 
 void _trackLayerStates(const SdfLayerHandle& layer)
@@ -75,15 +79,24 @@ void wrapUsdUndoManager()
     // UsdUndoManager
     {
         typedef UsdUfe::UsdUndoManager This;
-        class_<This, boost::noncopyable>("UsdUndoManager", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("UsdUndoManager", no_init)
             .def("trackLayerStates", &_trackLayerStates)
             .staticmethod("trackLayerStates");
+    }
+
+    // UsdUfe::UsdUndoableItem
+    {
+        class_<UsdUfe::UsdUndoableItem>("UsdUndoableItem")
+            .def("undo", &UsdUfe::UsdUndoableItem::undo)
+            .def("redo", &UsdUfe::UsdUndoableItem::redo);
     }
 
     // UsdUndoBlock
     {
         typedef PythonUndoBlock This;
-        class_<This, boost::noncopyable>("UsdUndoBlock", init<>())
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("UsdUndoBlock")
+            .def(init<>())
+            .def(init<UsdUfe::UsdUndoableItem&>(arg("item")))
             .def("__enter__", &This::enter)
             .def("__exit__", &This::exit);
     }

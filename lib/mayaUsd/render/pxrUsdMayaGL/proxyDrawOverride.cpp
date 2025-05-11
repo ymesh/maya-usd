@@ -93,8 +93,19 @@ UsdMayaProxyDrawOverride::transform(const MDagPath& objPath, const MDagPath& cam
     MStatus       status;
     const MMatrix transform = objPath.inclusiveMatrix(&status);
     if (status == MS::kSuccess) {
-        const_cast<PxrMayaHdUsdProxyShapeAdapter&>(_shapeAdapter)
-            .SetRootXform(GfMatrix4d(transform.matrix));
+        GfMatrix4d rootXform(transform.matrix);
+
+        MayaUsdProxyShapeBase* pShape = MayaUsdProxyShapeBase::GetShapeAtDagPath(objPath);
+        if (pShape && pShape->usdPrim().GetPath() != SdfPath::AbsoluteRootPath()) {
+            // If we're not computing the transform of the root of the Usd
+            // scene, apply the usdPrim transform from within the scene
+            const UsdTimeCode timeCode = pShape->getTime();
+            UsdGeomXformCache xformCache(timeCode);
+            GfMatrix4d primTransform = xformCache.GetLocalToWorldTransform(pShape->usdPrim());
+            rootXform = primTransform * rootXform;
+        }
+
+        const_cast<PxrMayaHdUsdProxyShapeAdapter&>(_shapeAdapter).SetRootXform(rootXform);
     }
 
     return MHWRender::MPxDrawOverride::transform(objPath, cameraPath);
@@ -278,7 +289,11 @@ bool UsdMayaProxyDrawOverride::userSelect(
         return false;
     }
 
+#if HDX_API_VERSION >= 12
+    const GfVec3d& gfHitPoint = nearestHit->worldSpaceHitPoint;
+#else
     const GfVec3f& gfHitPoint = nearestHit->worldSpaceHitPoint;
+#endif
     hitPoint = MPoint(gfHitPoint[0], gfHitPoint[1], gfHitPoint[2]);
 
     return true;

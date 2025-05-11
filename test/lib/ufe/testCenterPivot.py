@@ -47,11 +47,6 @@ class CenterPivotTestCase(unittest.TestCase):
         self.assertTrue(self.pluginsLoaded)
 
 
-    def checkPos(self, m, p):
-        self.assertAlmostEqual(m[ndx(3,0)], p[0])
-        self.assertAlmostEqual(m[ndx(3,1)], p[1])
-        self.assertAlmostEqual(m[ndx(3,2)], p[2])
-
     def testCenterPivot(self):
         '''Verify the behavior Transform3d UFE pivot interface.
 
@@ -121,6 +116,105 @@ class CenterPivotTestCase(unittest.TestCase):
         # Verify the object did not move.
         verifyPointInstancerPosition()
 
+    def testCenterPivotWithUSDPivot(self):
+        '''
+        Test centering the pivot when the USD file has a USD-style pivot,
+        not a Maya-style pivot.
+
+        UFE Feature : Transform3d
+        Maya Feature : center pivot
+        Action : Center the pivot.
+        Applied On Selection : the Maya command always uses the selection.
+
+        Undo/Redo Test : Maya undoable command only.
+        '''
+        # Open the USD file containing the prim we want to affect.
+        testFile = getTestScene("pivot", "cube-far-pivot.usda")
+        testDagPath, stage = mayaUtils.createProxyFromFile(testFile)
+        self.assertIsNotNone(stage)
+
+        # Retrieve the UFE item to the prim and the prim.
+        cubeUfePathString = testDagPath + ",/Cube1"
+        cubeUfePath = ufe.PathString.path(cubeUfePathString)
+        cubeUfeItem = ufe.Hierarchy.createItem(cubeUfePath)
+        self.assertIsNotNone(cubeUfeItem)
+        cubeUsdPrim = stage.GetPrimAtPath("/Cube1")
+        self.assertIsNotNone(cubeUsdPrim)
+
+        # Verify the cube overall position.
+        def verifyCubePosition():
+            cubeUfeT3d = ufe.Transform3d.transform3d(cubeUfeItem)
+            cubeUfeMtx = cubeUfeT3d.matrix()
+            flatMtx = []
+            for row in cubeUfeMtx.matrix:
+                flatMtx.extend(row)
+            assertVectorAlmostEqual(self, flatMtx, [ 1., 0., 0., 0.,
+                                                     0., 1., 0., 0.,
+                                                     0., 0., 1., 0.,
+                                                     0., 20., 0., 1.])
+            
+        verifyCubePosition()
+
+        def verifyCubeUSDPivots(trPivot, tPivot, tsPivot, tstPivot):
+            namesAndValues = [
+                ('xformOp:translate:rotatePivot',           trPivot),
+                ('xformOp:translate:pivot',                 tPivot), # Equivalent to trt below
+                ('xformOp:translate:scalePivot',            tsPivot),
+                ('xformOp:translate:scalePivotTranslate',   tstPivot),
+            ]
+            for name, value in namesAndValues:
+                usdAttr = cubeUsdPrim.GetAttribute(name)
+                self.assertIsNotNone(usdAttr)
+                assertVectorAlmostEqual(self, usdAttr.Get(), value)
+
+        verifyCubeUSDPivots(
+            [2., -3., -1.],     # translate rotate pivot
+            [7., 7., 8.],       # USD translate pivot (equivalent to translate rotate translate pivot)
+            [2., -3., -1.],     # translate scale pivot
+            [0., 0., 0.]        # translate scale translate pivot
+        )
+
+        def verifyCubeUFEPivots(trPivot, trtPivot, tsPivot, tstPivot):
+            cubeUfeT3d = ufe.Transform3d.transform3d(cubeUfeItem)
+
+            assertVectorAlmostEqual(self, cubeUfeT3d.rotatePivot().vector,            trPivot)
+            assertVectorAlmostEqual(self, cubeUfeT3d.rotatePivotTranslation().vector, trtPivot)
+            assertVectorAlmostEqual(self, cubeUfeT3d.scalePivot().vector,             tsPivot)
+            assertVectorAlmostEqual(self, cubeUfeT3d.scalePivotTranslation().vector,  tstPivot)
+
+        # Note: when going through UFE, the USD translate pivot is added to the Maya
+        #       pivots (translate and scale). So the USD translate pivot that was verified
+        #       above to be [7., 7., 8.] is instead added to the other pivot values.
+        verifyCubeUFEPivots(
+            [9., 4., 7.],     # translate rotate pivot
+            [0., 0., 0.],     # translate rotate translate pivot
+            [9., 4., 7.],     # translate scale pivot
+            [0., 0., 0.]      # translate scale translate pivot
+        )
+
+        # Select the prim.
+        sn = ufe.GlobalSelection.get()
+        sn.clear()
+        sn.append(cubeUfeItem)
+
+        cmds.CenterPivot()
+
+        # Verify the object did not move.
+        verifyCubePosition()
+
+        verifyCubeUSDPivots(
+            [0., 0., 0.],       # translate rotate pivot
+            [0., 0., 0.],       # translate pivot (equivalent to translate rotate translate pivot)
+            [0., 0., 0.],       # translate scale pivot
+            [0., 0., 0.]        # translate scale translate pivot
+        )
+
+        verifyCubeUFEPivots(
+            [0., 0., 0.],       # translate rotate pivot
+            [0., 0., 0.],       # translate rotate translate pivot
+            [0., 0., 0.],       # translate scale pivot
+            [0., 0., 0.]        # translate scale translate pivot
+        )
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

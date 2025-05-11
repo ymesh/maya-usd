@@ -21,6 +21,8 @@ project(maya-usd)
 # options
 #------------------------------------------------------------------------------
 option(BUILD_MAYAUSD_LIBRARY "Build Core USD libraries." ON)
+option(BUILD_MAYAUSDAPI_LIBRARY "Build the mayaUsdAPI subset library that provides a stable versioned interface to mayaUsd for external plugins." ON)
+option(BUILD_LOOKDEVXUSD_LIBRARY "Build LookdevXUsd library using LookdevXUfe." ON)
 option(BUILD_ADSK_PLUGIN "Build Autodesk USD plugin." ON)
 option(BUILD_PXR_PLUGIN "Build the Pixar USD plugin and libraries." ON)
 option(BUILD_AL_PLUGIN "Build the Animal Logic USD plugin and libraries." ON)
@@ -39,6 +41,35 @@ option(CMAKE_WANT_VALIDATE_UNDO_ITEM "Enable validating undo items list." OFF)
 
 set(PXR_OVERRIDE_PLUGINPATH_NAME PXR_PLUGINPATH_NAME
     CACHE STRING "Name of env var USD searches to find plugins")
+
+# Build-related information, expected to be passed in by the parent build.
+
+# Build number corresponding to this build
+#
+# This is used to report version information about the build number that
+# has produced this binary. When unset, the default value "0" is used
+# instead as this usually corresponds to developers local builds.
+set(MAYAUSD_BUILD_NUMBER "0" CACHE STRING "Build number corresponding to this build.")
+
+# Git commit hash corresponding to this build
+#
+# This is used to report version information of the Git commit has that
+# corresponds to a build. When unset, the default value DEVBLD is used
+# instead as this usually corresponds to a developers local build.
+set(MAYAUSD_GIT_COMMIT "DEVBLD" CACHE STRING "Git commit hash corresponding to this build.")
+
+# Git branch corresponding to this build
+#
+# This is used to report version information about the Git branch of a
+# build. When unset, the default value DEVBR is used instead as this
+# usually corresponds to developers local builds.
+set(MAYAUSD_GIT_BRANCH "DEVBR" CACHE STRING "Change set identifier corresponding to this build.")
+
+# MayaUsd cut-id
+
+# This is used to distinguish daily builds from one another. It is a
+# usually a combination of the date & git commit hash.
+set(MAYAUSD_CUT_ID "DEVBLD" CACHE STRING "MayaUsd cut-id corresponding to this build.")
 
 #------------------------------------------------------------------------------
 # internal flags to control build
@@ -91,6 +122,17 @@ endif()
 if (BUILD_MAYAUSD_LIBRARY)
     include(cmake/mayausd_version.info)
     set(MAYAUSD_VERSION "${MAYAUSD_MAJOR_VERSION}.${MAYAUSD_MINOR_VERSION}.${MAYAUSD_PATCH_LEVEL}")
+endif()
+
+if (BUILD_MAYAUSDAPI_LIBRARY)
+    include(cmake/mayausdapi_version.info)
+    set(MAYAUSDAPI_VERSION "${MAYAUSDAPI_MAJOR_VERSION}.${MAYAUSDAPI_MINOR_VERSION}.${MAYAUSDAPI_PATCH_LEVEL}")
+endif()
+
+if (BUILD_MAYAUSDAPI_LIBRARY)
+    if (NOT BUILD_MAYAUSD_LIBRARY)
+        message(FATAL_ERROR "Building mayaUsdAPI library requires MayaUsd core libraries to be built, please enable BUILD_MAYAUSD_LIBRARY.")
+    endif()
 endif()
 
 if (DEFINED PYTHON_INCLUDE_DIR AND DEFINED PYTHON_LIBRARIES AND DEFINED Python_EXECUTABLE)
@@ -152,45 +194,101 @@ if(TARGET hdMtlx)
     endif()
 endif()
 
-if(MAYA_APP_VERSION VERSION_GREATER 2024)
-    # First look for Qt6 in the Maya devkit.
-    # The Qt6 archive in the Maya devkit contains everything needed for the normal cmake find_package.
-    set(CMAKE_PREFIX_PATH "${MAYA_DEVKIT_LOCATION}/Qt")
-    find_package(Qt6 6.5 COMPONENTS Core Gui Widgets QUIET)
-endif()
-if (Qt6_FOUND)
-    message(STATUS "Found Qt6 in Maya devkit, building with Qt ${Qt6_VERSION} features enabled.")
-    set(Qt_FOUND TRUE)
-else()
-    # If we didn't find Qt6 in Maya devkit, search again, but for Qt5 this time.
-    # Minimum version required is 5.15 (Maya 2022/2023/2024).
-    # This will find Qt in the Maya devkit using a custom find package.
-    # So the version will match Maya we are building for.
-    find_package(Maya_Qt 5.15 COMPONENTS Core Gui Widgets QUIET)
-    if (Maya_Qt_FOUND)
-        message(STATUS "Found Qt5 in Maya devkit, building with Qt ${MAYA_QT_VERSION} features enabled.")
-        set(Qt_FOUND TRUE)
-    endif()
-endif()
-    
-if(NOT Qt_FOUND)
-    message(SEND_ERROR "Could not find Qt in Maya devkit directory: ${MAYA_DEVKIT_LOCATION}.")
+# Only need Qt when building MayaUsd (i.e. Qt not needed for UsdUfe standalone build).
+if(BUILD_MAYAUSD_LIBRARY)
     if(MAYA_APP_VERSION VERSION_GREATER 2024)
-        message(STATUS "  You must extract Qt.tar.gz")
+        # First look for Qt6 in the Maya devkit.
+        # The Qt6 archive in the Maya devkit contains everything needed for the normal cmake find_package.
+        set(CMAKE_PREFIX_PATH "${MAYA_DEVKIT_LOCATION}/Qt")
+        find_package(Qt6 6.5 COMPONENTS Core Gui Widgets QUIET)
+    endif()
+    if (Qt6_FOUND)
+        message(STATUS "Found Qt6 in Maya devkit, building with Qt ${Qt6_VERSION} features enabled.")
+        set(Qt_FOUND TRUE)
     else()
-        if (IS_WINDOWS)
-            message(STATUS "  In Maya devkit you must extract include/qt_5.15.2_vc14-include.zip")
-        else()
-            message(STATUS "  In Maya devkit you must extract include/qt_5.15.2-include.tar.gz")
+        # If we didn't find Qt6 in Maya devkit, search again, but for Qt5 this time.
+        # Minimum version required is 5.15 (Maya 2022/2023/2024).
+        # This will find Qt in the Maya devkit using a custom find package.
+        # So the version will match Maya we are building for.
+        find_package(Maya_Qt 5.15 COMPONENTS Core Gui Widgets QUIET)
+        if (Maya_Qt_FOUND)
+            message(STATUS "Found Qt5 in Maya devkit, building with Qt ${MAYA_QT_VERSION} features enabled.")
+            set(Qt_FOUND TRUE)
         endif()
     endif()
-    message(FATAL_ERROR "Cannot build MayaUsd without Qt.")
+
+    if(NOT Qt_FOUND)
+        message(SEND_ERROR "Could not find Qt in Maya devkit directory: ${MAYA_DEVKIT_LOCATION}.")
+        if(MAYA_APP_VERSION VERSION_GREATER 2024)
+            message(STATUS "  You must extract Qt.tar.gz")
+        else()
+            if (IS_WINDOWS)
+                message(STATUS "  In Maya devkit you must extract include/qt_5.15.2_vc14-include.zip")
+            else()
+                message(STATUS "  In Maya devkit you must extract include/qt_5.15.2-include.tar.gz")
+            endif()
+        endif()
+        message(FATAL_ERROR "Cannot build MayaUsd without Qt.")
+    endif()
+endif()
+
+if (NOT BUILD_ADSK_PLUGIN)
+        set(BUILD_LOOKDEVXUSD_LIBRARY OFF)
+endif()
+# Need LookdevXUfe/MayaUsdAPI when building LookdevXUsd.
+if(BUILD_LOOKDEVXUSD_LIBRARY)
+    if(NOT BUILD_MAYAUSDAPI_LIBRARY)
+        message(FATAL_ERROR "Building LookdevXUsd requires MayaUsdAPI.")
+    endif()
+
+    if(MAYA_APP_VERSION VERSION_GREATER 2025)
+        find_package(LookdevXUfe) # Optional component - if not found, disable LookdevXUsd.
+    else()
+        set(BUILD_LOOKDEVXUSD_LIBRARY OFF)
+        message(WARNING "Disabling LookdevXUsd: it is not supported by Maya ${MAYA_APP_VERSION}.")
+    endif()
+    if (LookdevXUfe_FOUND)
+        message(STATUS "Build LookdevXUsd with LookdevXUfe version: ${LookdevXUfe_VERSION}")
+        message(STATUS "   LookdevXUfe include dir: ${LookdevXUfe_INCLUDE_DIR}")
+        message(STATUS "   LookdevXUfe library    : ${LookdevXUfe_LIBRARY}")
+    else()
+        set(BUILD_LOOKDEVXUSD_LIBRARY OFF)
+        message(WARNING "Disabling LookdevXUsd as LookdevXUfe was not found (in Maya devkit).")
+    endif()
+endif()
+
+if(BUILD_MAYAUSD_LIBRARY AND (USD_VERSION VERSION_GREATER_EQUAL "0.24.11"))
+    # In USD v24.11 Pixar USD has completely removed Boost.
+    # However MayaUsd is still using a few of the Boost components, so
+    # when using USD v24.11 (or greater) we need to find Boost ourselves
+    # (from the USD build, since Boost is still required for OpenImageIO).
+    if(NOT DEFINED ENV{BOOST_ROOT})
+        set(ENV{BOOST_ROOT} ${PXR_USD_LOCATION})
+    endif()
+
+    find_package(Boost REQUIRED COMPONENTS headers)
 endif()
 
 #------------------------------------------------------------------------------
 # compiler configuration
 #------------------------------------------------------------------------------
 include(cmake/compiler_config.cmake)
+
+#------------------------------------------------------------------------------
+# C++17 support
+#------------------------------------------------------------------------------
+# In cmake/compiler_config.cmake we set the C++ version to 17 when building with
+# USD 23.11 or greater to match USD.
+# Some features also require C++17 so disable them if they were enabled.
+if (USD_VERSION VERSION_LESS "0.23.11")
+    # The clipboard support was added in Ufe v6 and backported to Ufe v5.
+    # Compiling UsdUfe standalone with Ufe v5 will result in clipboard being
+    # enabled, but we must disable it here if USD version doesn't match C++ version.
+    if (UFE_CLIPBOARD_SUPPORT)
+        message(WARNING "Disabling Ufe clipboard support since it requires USD v23.11 and C++17")
+        set(UFE_CLIPBOARD_SUPPORT FALSE)
+    endif()
+endif()
 
 #------------------------------------------------------------------------------
 # gulrak filesystem
@@ -215,6 +313,13 @@ endif()
 # lib
 #------------------------------------------------------------------------------
 add_subdirectory(lib)
+
+#------------------------------------------------------------------------------
+# tutorials
+#------------------------------------------------------------------------------
+if (BUILD_MAYAUSD_LIBRARY)
+    add_subdirectory(tutorials/import-export-plugin-c++)
+endif()
 
 #------------------------------------------------------------------------------
 # plugins
@@ -285,3 +390,12 @@ if (BUILD_AL_PLUGIN)
     endif()
     install(FILES ${PROJECT_BINARY_DIR}/alUSD.mod DESTINATION ${CMAKE_INSTALL_PREFIX})
 endif()
+
+
+#------------------------------------------------------------------------------
+# Special file for handling boost vs pxr::boost
+#------------------------------------------------------------------------------
+mayaUsd_promoteHeaderList(HEADERS pxr_python.h BASEDIR "NONE")
+install(FILES ${CMAKE_BINARY_DIR}/include/pxr_python.h
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/include
+)

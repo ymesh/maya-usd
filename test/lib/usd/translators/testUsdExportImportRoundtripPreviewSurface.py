@@ -80,9 +80,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         mark.SetMark()
         self.assertTrue(mark.IsClean())
 
-        mayaUsdPluginName = "mayaUsdPlugin"
-        if not cmds.pluginInfo(mayaUsdPluginName, query=True, loaded=True):
-            cmds.loadPlugin(mayaUsdPluginName)
+        self.assertTrue(mayaUtils.loadPlugin("mayaUsdPlugin"))
 
         cmds.file(f=True, new=True)
 
@@ -131,7 +129,9 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         export_options = [
             "shadingMode=useRegistry",
             "convertMaterialsTo=[{}]".format(convertTo),
-            "mergeTransformAndShape=1"
+            "mergeTransformAndShape=1",
+            "legacyMaterialScope=0",
+            "defaultPrim=None"
         ]
 
         cmds.file(usd_path, force=True,
@@ -203,12 +203,12 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         # Make sure paths are relative in the USD file. Joining the directory
         # that the USD file lives in with the texture path should point us at
         # a file that exists.
-        file_template = "/{}/Looks/{}/{}"
+        file_template = "/Looks/{}/{}"
         if convertTo == "MaterialX":
-            file_template = "/{0}/Looks/{1}/MayaNG_{1}/{2}"
+            file_template = "/Looks/{0}/MayaNG_{0}/{1}"
         stage = Usd.Stage.Open(usd_path)
         texture_prim = stage.GetPrimAtPath(
-            file_template.format(sphere_xform, material_sg, file_node))
+            file_template.format(material_sg, file_node))
         rel_texture_path = texture_prim.GetAttribute('inputs:file').Get().path
 
         usd_dir = os.path.dirname(usd_path)
@@ -225,9 +225,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         mark.SetMark()
         self.assertTrue(mark.IsClean())
 
-        mayaUsdPluginName = "mayaUsdPlugin"
-        if not cmds.pluginInfo(mayaUsdPluginName, query=True, loaded=True):
-            cmds.loadPlugin(mayaUsdPluginName)
+        self.assertTrue(mayaUtils.loadPlugin("mayaUsdPlugin"))
 
         testPatterns = [
             # Each test has 5 elements:
@@ -313,9 +311,7 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         mark.SetMark()
         self.assertTrue(mark.IsClean())
 
-        mayaUsdPluginName = "mayaUsdPlugin"
-        if not cmds.pluginInfo(mayaUsdPluginName, query=True, loaded=True):
-            cmds.loadPlugin(mayaUsdPluginName)
+        self.assertTrue(mayaUtils.loadPlugin("mayaUsdPlugin"))
 
         for i in range(1,4):
             sphere_xform = cmds.polySphere()[0]
@@ -413,11 +409,13 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         cmds.usdExport(mergeTransformAndShape=True,
             file=usd_path,
             shadingMode='useRegistry',
-            exportDisplayColor=True)
+            exportDisplayColor=True,
+            legacyMaterialScope=False,
+            defaultPrim="None")
 
         # We expect 2 primvar readers, and 2 st transforms:
         stage = Usd.Stage.Open(usd_path)
-        mat_path = "/pSphere1/Looks/ss01SG/"
+        mat_path = "/Looks/ss01SG/"
 
         # Here are the expected connections in the produced USD file:
         connections = [
@@ -474,14 +472,18 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
                 shadingMode='useRegistry',
                 exportDisplayColor=False,
                 exportCollectionBasedBindings=True,
-                exportComponentTags=True)
+                exportComponentTags=True,
+                legacyMaterialScope=False,
+                defaultPrim='pCube1')
         else:
             usd_path = os.path.abspath('CubeWithAssignedFaces.usda')
             cmds.usdExport(mergeTransformAndShape=True,
                 file=usd_path,
                 shadingMode='useRegistry',
                 exportDisplayColor=False,
-                exportComponentTags=True)
+                exportComponentTags=True,
+                legacyMaterialScope=False,
+                defaultPrim='pCube1')
 
         stage = Usd.Stage.Open(usd_path)
 
@@ -686,16 +688,18 @@ class testUsdExportImportRoundtripPreviewSurface(unittest.TestCase):
         usd_path = os.path.abspath('OpacityRoundtripTest.usda')
         cmds.usdExport(mergeTransformAndShape=True,
                        file=usd_path,
-                       shadingMode='useRegistry')
+                       shadingMode='useRegistry',
+                       legacyMaterialScope=False,
+                       defaultPrim='None')
 
         stage = Usd.Stage.Open(usd_path)
 
         # We have 7 materials that are named:
-        #    /pPlane6/Looks/standardSurface7SG/standardSurface7
-        surf_base = "/pPlane{0}/Looks/standardSurface{1}SG/standardSurface{1}"
+        #    /Looks/standardSurface7SG/standardSurface7
+        surf_base = "/Looks/standardSurface{1}SG/standardSurface{1}"
         # results for opacity are mostly connections to:
-        #    /pPlane6/Looks/standardSurface7SG/file6.outputs:a
-        cnx_base = "/pPlane{0}/Looks/standardSurface{1}SG/file{0}"
+        #    /Looks/standardSurface7SG/file6.outputs:a
+        cnx_base = "/Looks/standardSurface{1}SG/file{0}"
         # so we only need to expect a channel name:
         expected = ["r", "a", "r", "a", "g", "a", 0.4453652]
 

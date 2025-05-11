@@ -16,7 +16,7 @@
 #include "proxyShapeUI.h"
 
 #include <mayaUsd/nodes/proxyShapeBase.h>
-#include <mayaUsd/render/px_vp20/utils_legacy.h>
+#include <mayaUsd/render/px_vp20/utilsLegacy.h>
 #include <mayaUsd/render/pxrUsdMayaGL/batchRenderer.h>
 #include <mayaUsd/render/pxrUsdMayaGL/renderParams.h>
 #include <mayaUsd/render/pxrUsdMayaGL/usdProxyShapeAdapter.h>
@@ -170,8 +170,12 @@ bool UsdMayaProxyShapeUI::select(
         return false;
     }
 
+#if HDX_API_VERSION >= 12
+    const GfVec3d& gfHitPoint = nearestHit->worldSpaceHitPoint;
+#else
     const GfVec3f& gfHitPoint = nearestHit->worldSpaceHitPoint;
-    const MPoint   mayaHitPoint(gfHitPoint[0], gfHitPoint[1], gfHitPoint[2]);
+#endif
+    const MPoint mayaHitPoint(gfHitPoint[0], gfHitPoint[1], gfHitPoint[2]);
 
     MSelectionList newSelectionList;
     newSelectionList.add(selectInfo.selectPath());

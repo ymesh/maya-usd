@@ -2,10 +2,13 @@
 set(TEST_SCRIPT_FILES
     testMayaUsdConverter.py
     testMayaUsdCreateStageCommands.py
+    testMayaUsdCreateStageInMayaRef.py
     testMayaUsdDirtyScene.py
     testMayaUsdLayerEditorCommands.py
     testMayaUsdProxyAccessor.py
     testMayaUsdCacheId.py
+    testMayaUsdInfoCommand.py
+    testMayaUsdSchemaCommand.py
 )
 
 # Interactive Unit test scripts.
@@ -39,6 +42,19 @@ mayaUsd_add_test(${target}
     ENV
         "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
         "MAYA_SECURE_BATCH_ENABLE=1"
+)
+set_property(TEST ${target} APPEND PROPERTY LABELS MayaUsd)
+
+# Install a test to check that the MayaHydra plugin loads (if available).
+mayaUsd_get_unittest_target(target testMayaHydraPlugin.py)
+mayaUsd_add_test(${target}
+    INTERACTIVE
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    PYTHON_SCRIPT testMayaHydraPlugin.py
+    ENV
+        "LD_LIBRARY_PATH=${ADDITIONAL_LD_LIBRARY_PATH}"
+        "MAYA_PLUG_IN_PATH=${CMAKE_INSTALL_PREFIX}/lib/maya"
+        "PXR_OVERRIDE_PLUGINPATH_NAME=${CMAKE_INSTALL_PREFIX}/lib/usd"
 )
 set_property(TEST ${target} APPEND PROPERTY LABELS MayaUsd)
 
@@ -99,3 +115,6 @@ endforeach()
 add_subdirectory(ufe)
 add_subdirectory(mayaUsd)
 add_subdirectory(usd)
+if (BUILD_MAYAUSDAPI_LIBRARY)
+    add_subdirectory(mayaUsdAPI)
+endif()

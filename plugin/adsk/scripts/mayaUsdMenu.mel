@@ -500,6 +500,18 @@ global proc mayaUsdMenu_aeShowMenuCallback(string $aeShowMenu)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// mayaUsdMenu_aeAttributesMenuCallback
+// Maya USD Attribute Editor Attributes menu callback.
+// Note: Maya is using a post callback to build it's menu.
+//       The maya's callback delete all menu item each time
+//       the menu is display, so we also need to create all
+//       our menu item each time.
+global proc mayaUsdMenu_aeAttributesMenuCallback(string $aeAttributeMenu)
+{
+    python("import mayaUsdMenu; mayaUsdMenu.aeAttributesMenuCallback('''" + $aeAttributeMenu + "''')");
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // initCreateMenu
 // setup the items in Maya's "Create" and "Window" menus
 proc initCreateMenu() {
@@ -568,6 +580,18 @@ proc termAEShowMenu()
     removeMenuCallback($aeShowMenu, "mayaUsdMenu_aeShowMenuCallback");
 }
 
+proc initAEAttributesMenu()
+{
+    string $aeAttributesMenu = findAEMenu(uiRes("m_showEditor.kAttributes"));
+    addMenuCallback($aeAttributesMenu, "mayaUsdMenu_aeAttributesMenuCallback " + $aeAttributesMenu);
+}
+
+proc termAEAttributesMenu()
+{
+    string $aeAttributesMenu = findAEMenu(uiRes("m_showEditor.kAttributes"));
+    removeMenuCallback($aeAttributesMenu, "mayaUsdMenu_aeAttributesMenuCallback");
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // initPullMenu
 // Marking menu with USD options for DAG objects
@@ -586,7 +610,9 @@ proc string getPulledUsdObject(string $dagObject) {
             // If there is no selection, try to fetch the item under the mouse in the outliner editor
             if (size($dagObject) == 0 || size(`ls -set $dagObject`) > 0) {
                 string $outliner = `getPanel -underPointer`;
-                $dagObject = `outlinerEditor -query -feedbackItemName $outliner`;
+                if (`outlinerEditor -exists $outliner`) {
+                    $dagObject = `outlinerEditor -query -feedbackItemName $outliner`;
+                }
             }
         }
         if (size(`ls -dagObjects $dagObject`) > 0) {
@@ -665,17 +691,49 @@ global proc mayaUsdMenu_duplicateToUSD( string $proxy, string $obj )
     if (!hasPrimUpdater())
         return;
 
+    // Convert proxy to long form.
+    {
+        string $proxyLong[] = `ls -l $proxy`;
+        if (size($proxyLong) == 0)
+            return;
+        $proxy = $proxyLong[0];
+    }
+
+    string $bulkObjects[];
+
+    // Convert selection to long form.
+    string $sel[] = `ls -sl`;
+    for ($i = 0; $i < size($sel); $i++) {
+        string $objLong[] = `ls -l $sel[$i]`;
+        if (size($objLong))
+            $sel[$i] = $objLong[0];
+    }
+
     if (size($obj) == 0) {
-        string $sel[] = `ls -sl`;
-        if (size($sel)) {
-            $obj = $sel[0];
+        $bulkObjects = $sel;
+    } else {
+        // Convert object to long form.
+        {
+            string $objLong[] = `ls -l $obj`;
+            if (size($objLong))
+                $obj = $objLong[0];
+        }
+        int $found = 0;
+        for ($item in $sel) {
+            if ($item == $obj) {
+                $found = 1;
+            }
+        }
+        if ($found) {
+            $bulkObjects = $sel;
+        } else {
+            $bulkObjects = { $obj };
         }
     }
-    string $objLong[] = `ls -l $obj`;
-    string $proxyLong[] = `ls -l $proxy`;
-    if (size($objLong) && size($proxyLong)) {
-        string $exportOptions = `python("import mayaUsdDuplicateAsUsdDataOptions; import mayaUsdOptions; mayaUsdOptions.setAnimateOption('''" + $obj + "''', mayaUsdDuplicateAsUsdDataOptions.getDuplicateAsUsdDataOptionsText())")`;
-        mayaUsdDuplicate -exportOptions $exportOptions $objLong[0] $proxyLong[0];
+
+    for ($item in $bulkObjects) {
+        string $exportOptions = `python("import mayaUsdDuplicateAsUsdDataOptions; import mayaUsdOptions; mayaUsdOptions.setAnimateOption('''" + $item + "''', mayaUsdDuplicateAsUsdDataOptions.getDuplicateAsUsdDataOptionsText())")`;
+        mayaUsdDuplicate -exportOptions $exportOptions $item $proxy;
     }
 }
 
@@ -814,6 +872,7 @@ global proc mayaUsdMenu_loadui() {
     initCreateMenu();
     initSelectMenu();
     initAEShowMenu();
+    initAEAttributesMenu();
 
     // if the current selection kind is not valid,
     // reset the current selection kind to none.
@@ -834,6 +893,7 @@ global proc mayaUsdMenu_unloadui() {
     termCreateMenu();
     termSelectMenu();
     termAEShowMenu();
+    termAEAttributesMenu();
     tearPullMenu();
     termOutlinerPopupMenu();
 }
@@ -868,7 +928,12 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
     int $isSubLayer = `mayaUsdLayerEditorWindow -q -isSubLayer $panelName`;
     int $isMuted = `mayaUsdLayerEditorWindow -q -layerIsMuted $panelName`;
     int $isReadOnly = `mayaUsdLayerEditorWindow -q -layerIsReadOnly $panelName`;
+    int $appearsLocked = `mayaUsdLayerEditorWindow -q -layerAppearsLocked $panelName`;
+    int $isLocked = `mayaUsdLayerEditorWindow -q -layerIsLocked $panelName`;
+    int $appearsSystemLocked = `mayaUsdLayerEditorWindow -q -layerAppearsSystemLocked $panelName`;
+    int $isSystemLocked = `mayaUsdLayerEditorWindow -q -layerIsSystemLocked $panelName`;
     int $isIncoming = `mayaUsdLayerEditorWindow -q -isIncomingLayer $panelName`;
+    int $hasSublayers = `mayaUsdLayerEditorWindow -q -layerHasSubLayers $panelName`;
     string $proxyShape = `mayaUsdLayerEditorWindow -q -proxyShape $panelName`;
 
     string $label;
@@ -879,15 +944,20 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
             $label = getMayaUsdString("kMenuSaveAs");
         else
             $label = getMayaUsdString("kMenuSaveEdits");
-        $enabled = $singleSelect && $needsSaving;
+        $enabled = $singleSelect && $needsSaving && !$isSystemLocked;
+        // An anonymous layer whose parent is locked or system locked cannot be saved
+        if ($isAnonymousLayer)
+            {
+                $enabled = $enabled && !$appearsLocked && !$appearsSystemLocked;
+            }
         $cmd = makeCommand($panelName, "saveEdits");
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
     if (!$isAnonymousLayer) {
-        $label = getMayaUsdString("kMenuRevertToFile");
+        $label = getMayaUsdString("kMenuReload");
         $cmd = makeCommand($panelName, "discardEdits");
-        $enabled = $needsSaving;
+        $enabled = true;
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
@@ -895,17 +965,17 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
 
     $label = getMayaUsdString("kMenuAddSublayer");
     $cmd = makeCommand($panelName, "addAnonymousSublayer");
-    $enabled = $appearsMuted == 0 && !$isReadOnly;
+    $enabled = $appearsMuted == 0 && !$isReadOnly && !$isLocked && !$isSystemLocked;
     menuItem -label $label -enable $enabled -c $cmd;
 
     $label = getMayaUsdString("kMenuAddParentLayer");
     $cmd = makeCommand($panelName, "addParentLayer");
-    $enabled = $isSubLayer && $appearsMuted == 0 && !$isReadOnly;
+    $enabled = $isSubLayer && $appearsMuted == 0 && !$isReadOnly && !$appearsLocked && !$appearsSystemLocked;
     menuItem -label $label -enable $enabled -c $cmd;
 
     $label = getMayaUsdString("kMenuLoadSublayers");
     $cmd = makeCommand($panelName, "loadSubLayers");
-    $enabled = $singleSelect && !$appearsMuted && !$isReadOnly;
+    $enabled = $singleSelect && !$appearsMuted && !$isReadOnly && !$isLocked && !$isSystemLocked;
     menuItem -label $label -enable $enabled -c $cmd;
 
     menuItem -divider 1;
@@ -917,6 +987,26 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
             $label = getMayaUsdString("kMenuMute");
         $cmd = makeCommand($panelName, "muteLayer");
         $enabled = 1;
+        menuItem -label $label -enable $enabled -c $cmd;
+    }
+    
+    if (!$isSessionLayer) {
+        if ($isLocked)
+            $label = getMayaUsdString("kMenuUnlock");
+        else
+            $label = getMayaUsdString("kMenuLock");
+        $cmd = makeCommand($panelName, "lockLayer");
+        $enabled = !$isSystemLocked;
+        menuItem -label $label -enable $enabled -c $cmd;
+    }
+
+    if (!$isSessionLayer && $hasSublayers) {
+        if ($isLocked)
+            $label = getMayaUsdString("kMenuUnlockLayerAndSublayers");
+        else
+            $label = getMayaUsdString("kMenuLockLayerAndSublayers");
+        $cmd = makeCommand($panelName, "lockLayerAndSubLayers");
+        $enabled = !$isSystemLocked;
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
@@ -961,13 +1051,13 @@ global proc mayaUsdMenu_layerEditorContextMenu(string $panelName) {
     if ($isSubLayer) {
         $label = getMayaUsdString("kMenuRemove");
         $cmd = makeCommand($panelName, "removeSubLayer");
-        $enabled = !$isReadOnly;
+        $enabled = !$isReadOnly && !$appearsLocked && !$appearsSystemLocked;
         menuItem -label $label -enable $enabled -c $cmd;
     }
 
 
     $label = getMayaUsdString("kMenuClear");
     $cmd = makeCommand($panelName, "clearLayer");
-    $enabled = !$isReadOnly;
+    $enabled = !$isReadOnly && !$isLocked && !$isSystemLocked;
     menuItem -label $label -enable $enabled -c $cmd;
 }

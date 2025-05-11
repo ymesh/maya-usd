@@ -20,7 +20,11 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 TF_WRAP_MODULE
 {
+#ifdef UFE_CLIPBOARD_SUPPORT
+    TF_WRAP(Clipboard);
+#endif
     TF_WRAP(EditRouter);
+    TF_WRAP(UICallback);
     TF_WRAP(Global);
     TF_WRAP(Tokens);
     TF_WRAP(Utils);

@@ -15,32 +15,22 @@
 //
 #include "UsdUndoAddNewPrimCommand.h"
 
-#include "private/UfeNotifGuard.h"
-
 #include <usdUfe/ufe/Global.h>
+#include <usdUfe/ufe/UfeNotifGuard.h>
 #include <usdUfe/ufe/Utils.h>
 #include <usdUfe/undo/UsdUndoBlock.h>
 
 #include <ufe/hierarchy.h>
 #include <ufe/pathString.h>
 
-namespace {
-
-Ufe::Path appendToPath(const Ufe::Path& path, const std::string& name)
-{
-    Ufe::Path newUfePath;
-    if (1 == path.getSegments().size()) {
-        newUfePath
-            = path + Ufe::PathSegment(Ufe::PathComponent(name), UsdUfe::getUsdRunTimeId(), '/');
-    } else {
-        newUfePath = path + name;
-    }
-    return newUfePath;
-}
-
-} // namespace
-
 namespace USDUFE_NS_DEF {
+
+// Ensure that UsdUndoAddNewPrimCommand is properly setup.
+#ifdef UFE_V4_FEATURES_AVAILABLE
+USDUFE_VERIFY_CLASS_SETUP(Ufe::SceneItemResultUndoableCommand, UsdUndoAddNewPrimCommand);
+#else
+USDUFE_VERIFY_CLASS_SETUP(Ufe::UndoableCommand, UsdUndoAddNewPrimCommand);
+#endif
 
 UsdUndoAddNewPrimCommand::UsdUndoAddNewPrimCommand(
     const UsdSceneItem::Ptr& usdSceneItem,
@@ -64,8 +54,8 @@ UsdUndoAddNewPrimCommand::UsdUndoAddNewPrimCommand(
         // Append the parent path and the requested name into a full ufe path.
         // Append a '1' to new primitives names if the name does not end with a digit.
         _newUfePath = splitNumericalSuffix(name, base, suffixStr)
-            ? appendToPath(ufePath, name)
-            : appendToPath(ufePath, name + '1');
+            ? appendToUsdPath(ufePath, name)
+            : appendToUsdPath(ufePath, name + '1');
 
         // Ensure the requested name is unique.
         auto newPrimName
@@ -73,7 +63,7 @@ UsdUndoAddNewPrimCommand::UsdUndoAddNewPrimCommand(
 
         // If the name had to change then we need to update the full ufe path.
         if (name != newPrimName) {
-            _newUfePath = appendToPath(ufePath, newPrimName);
+            _newUfePath = appendToUsdPath(ufePath, newPrimName);
         }
 
         // Build (and store) the usd path for the new prim with the unique name.
@@ -99,8 +89,10 @@ void UsdUndoAddNewPrimCommand::execute()
         } else {
             UsdUfe::InAddOrDeleteOperation ad;
             auto                           prim = _stage->DefinePrim(_primPath, _primToken);
-            if (!prim.IsValid())
+            if (!prim.IsValid()) {
                 TF_RUNTIME_ERROR("Failed to create new prim type: %s", _primToken.GetText());
+                _stage->RemovePrim(_primPath);
+            }
         }
     }
 }
@@ -110,6 +102,7 @@ void UsdUndoAddNewPrimCommand::undo()
     UsdUfe::InAddOrDeleteOperation ad;
 
     _undoableItem.undo();
+    removeSessionLeftOvers(_stage, _primPath, &_undoableItem);
 }
 
 void UsdUndoAddNewPrimCommand::redo()

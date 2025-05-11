@@ -16,9 +16,13 @@
 
 #include "UsdUndoToggleActiveCommand.h"
 
-#include "private/UfeNotifGuard.h"
+#include <usdUfe/ufe/UfeNotifGuard.h>
+#include <usdUfe/ufe/Utils.h>
+#include <usdUfe/utils/editRouterContext.h>
 
 namespace USDUFE_NS_DEF {
+
+USDUFE_VERIFY_CLASS_SETUP(UsdUndoableCommand<Ufe::UndoableCommand>, UsdUndoToggleActiveCommand);
 
 UsdUndoToggleActiveCommand::UsdUndoToggleActiveCommand(const PXR_NS::UsdPrim& prim)
     : _stage(prim.GetStage())
@@ -34,6 +38,16 @@ void UsdUndoToggleActiveCommand::executeImplementation()
     PXR_NS::UsdPrim prim = _stage->GetPrimAtPath(_primPath);
     if (!prim.IsValid())
         return;
+
+    PrimMetadataEditRouterContext ctx(prim, PXR_NS::SdfFieldKeys->Active);
+
+    std::string errMsg;
+    if (!UsdUfe::isPrimMetadataEditAllowed(
+            prim, PXR_NS::SdfFieldKeys->Active, PXR_NS::TfToken(), &errMsg)) {
+        // Note: we don't throw an exception because this would break bulk actions.
+        TF_RUNTIME_ERROR(errMsg);
+        return;
+    }
 
     UsdUfe::InAddOrDeleteOperation ad;
     prim.SetActive(!prim.IsActive());

@@ -23,13 +23,14 @@ import usdUtils
 import testUtils
 
 import mayaUsd.ufe
+from mayaUsd import lib as mayaUsdLib 
 
 from maya import cmds
 from maya import standalone
 
 import ufe
 
-from pxr import Sdf, UsdShade
+from pxr import Sdf, UsdShade, Usd
 
 import os
 import unittest
@@ -114,7 +115,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         
@@ -150,7 +151,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         
@@ -189,7 +190,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         
@@ -228,7 +229,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # retrieve the stage
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
 
         newLayerName = 'Layer_1'
@@ -271,7 +272,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|Variant_usd|Variant_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         
@@ -304,7 +305,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|Asset_flattened_instancing_and_class_removed_usd|Asset_flattened_instancing_and_class_removed_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         
@@ -337,7 +338,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # add child defined on a new layer
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
 
         newLayerName = 'Layer_1'
@@ -387,7 +388,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # add child defined on session layer
         mayaPathSegment = mayaUtils.createUfePathSegment('|Tree_usd|Tree_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         
         stage.SetEditTarget(stage.GetSessionLayer())
@@ -534,7 +535,7 @@ class DeleteCmdTestCase(unittest.TestCase):
 
         # validate the default edit target to be the Rootlayer.
         mayaPathSegment = mayaUtils.createUfePathSegment('|TreeRef_usd|TreeRef_usdShape')
-        stage = mayaUsd.ufe.getStage(str(mayaPathSegment))
+        stage = mayaUsd.ufe.getStage(ufe.PathString.string(ufe.Path(mayaPathSegment)))
         self.assertTrue(stage)
         self.assertEqual(stage.GetEditTarget().GetLayer(), stage.GetRootLayer())
         self.assertTrue(stage.GetPrimAtPath('/TreeBase/leaf_ref_1').HasAuthoredReferences())
@@ -647,6 +648,69 @@ class DeleteCmdTestCase(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             cmds.delete('%s,/A/ball' % proxyShapePathStr)
         self.assertTrue(stage.GetPrimAtPath('/A/ball'))
+    
+    def testDeletePrimUsingEditRouter(self):
+        '''Test deleting prims using edit target layer from an EditRouter.'''
+
+        def editRouterCallback(context, routingData):
+            prim = context.get('prim')
+            if prim is None:
+                return
+            
+            stage = prim.GetStage()
+            targetLayer = None     
+            editTarget = None 
+            
+            # Get non-local referenced layer for edit target layer.
+            for layer in stage.GetUsedLayers():
+                if 'subCRef' in layer.identifier:
+                    targetLayer = layer 
+                    break 
+            
+            query = Usd.PrimCompositionQuery(prim)
+            for arc in query.GetCompositionArcs():
+                if (arc.GetTargetNode().layerStack.identifier.rootLayer == targetLayer
+                    and not arc.GetTargetNode().path.ContainsPrimVariantSelection()):
+                    editTarget = Usd.EditTarget(targetLayer, arc.GetTargetNode())
+                    break
+            
+            routingData['layer'] = editTarget.GetLayer().identifier
+            routingData['editTarget'] = editTarget
         
+        cmds.file(new=True, force=True)
+
+        # We use an example usd file from attributeBlock which has non-local referenced layers.
+        testFile = testUtils.getTestScene('attributeBlock', 'root.usda')
+        pathString, stage = mayaUtils.createProxyFromFile(testFile)
+
+        self.assertTrue(stage)
+        self.assertTrue(pathString)
+
+        primA = stage.GetPrimAtPath('/root/a')
+        self.assertTrue(primA.IsValid())
+        
+        primPathString = pathString + ',/root/a'
+        
+        # Delete a prim defined within an non-local layer without using EditRouter.
+        cmds.delete(primPathString)
+        
+        # The deletion should fail so the prim should still be valid
+        primA = stage.GetPrimAtPath('/root/a')
+        self.assertTrue(primA.IsValid())
+        
+        # Register an EditRouter callback for prim deletion.
+        mayaUsdLib.registerEditRouter('delete', editRouterCallback)
+        
+        cmds.delete(primPathString)
+        
+        # The prim should be invalid becaue we deleted it from the layer sent by the EditRouter.
+        primA = stage.GetPrimAtPath('/root/a')
+        self.assertFalse(primA.IsValid())
+        
+        # Restore EditRouter callbacks to default.
+        mayaUsdLib.restoreAllDefaultEditRouters()
+
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

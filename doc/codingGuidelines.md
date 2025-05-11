@@ -201,7 +201,7 @@ Headers should be included in the following order, with each section separated b
 2. All private headers
 3. All public headers from this repository (maya-usd)
 4. UsdUfe library headers
-5. Pixar + USD headers
+5. Pixar + USD headers + special pxr_python.h
 6. Autodesk + Maya headers
 7. Other libraries' headers
 8. C++ standard library headers
@@ -245,15 +245,19 @@ Headers should be included in the following order, with each section separated b
 	* Each version of Ufe contains a features available define (in ufe.h) such as `UFE_V4_FEATURES_AVAILABLE` that can be used for conditional compilation on code depending on Ufe Version.
 
 **USD**
-	* `PXR_VERSION` is the macro to test USD version (`PXR_MAJOR_VERSION` * 10000 + `PXR_MINOR_VERSION` * 100 + `PXR_PATCH_VERSION`)
+	* `PXR_VERSION` is the macro to test USD version in C++ code (`PXR_MAJOR_VERSION` * 10000 + `PXR_MINOR_VERSION` * 100 + `PXR_PATCH_VERSION`), ex: `#if PXR_VERSION <= 2311`
+    * `USD_VERSION` is the cmake variable to test USD version in cmake code, ex: `if(USD_VERSION VERSION_LESS "0.24.11")`
 
 Respect the minimum supported version for Maya and USD stated in [build.md](https://github.com/Autodesk/maya-usd/blob/dev/doc/build.md) .
 
 ### std over boost
 Recent extensions to the C++ standard introduce many features previously only found in [boost](http://boost.org). To avoid introducing additional dependencies, developers should strive to use functionality in the C++ std over boost. If you encounter usage of boost in the code, consider converting this to the equivalent std mechanism. 
 Our library currently has the following boost dependencies:
-* `boost::python`
-* `boost::make_shared` (preferable to replace with `std::shared_ptr`)
+* `boost::python` for USD version < 24.11
+* `boost::make_shared` (preferable to replace with `std::shared_ptr`), `boost::static_pointer_cast`
+* `boost::hash{_range/_value}`, `boost::mpl`, `boost::multi_index`, `boost::optional`
+
+*Note*: all these Boost dependencies are header only and thus don't require linking to actual Boost libraries.
 
 ***Update:***
 * `boost::filesystem` and `boost::system` are removed. Until the transition to C++17 std::filesystem, [ghc::filesystem](https://github.com/gulrak/filesystem) must be used as an alternative across the project.
@@ -261,6 +265,9 @@ Our library currently has the following boost dependencies:
 * Dependency on `boost::thread` is removed from Animal Logic plugin.
 
 * `boost::hash_combine` is replaced with `MayaUsd::hash_combine` and should be used instead across the project.
+
+***USD version >= 24.11:***
+* In USD v24.11 Pixar has removed Boost as a dependency for the USD build. This includes Boost python which is no longer used to build the python bindings. Instead Pixar has created their own boost python in a separate `pxr/external/boost` folder. Since MayaUsd supports many versions of USD we have created a boost porting python file [pxr_python.h](https://github.com/autodesk/maya-usd/pxr_python.h). This file has uses `ifdef` checks to support all versions of USD and which python it uses. Not python (Boost or Pixar Boost) header files should be included directly in C++ source files. Instead always include only `<pxr_python.h>` and use the `PXR_BOOST_PYTHON_NAMESPACE` define to refer to the Boost python code, ex: `PXR_BOOST_PYTHON_NAMESPACE::object`
 
 ## Modern C++
 Our goal is to develop [maya-usd](https://github.com/autodesk/maya-usd) following modern C++ practices. We’ll follow the [C++ Core Guidelines](http://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines) and pay attention to:
@@ -318,12 +325,11 @@ Keyword meanings:
 6. Use cmake_parse_arguments as the recommended way for parsing the arguments given to the macro or function.
 7. Don't use file(GLOB).
 8. Be explicit by calling set_target_properties when it's appropriate.
-9. Links against Boost or GTest using imported targets rather than variables:
-e.g Boost::filesystem, Boost::system, GTest::GTest
+9. Links against GTest using imported targets rather than variables: ex: GTest::GTest
 
 ## Compiler features/flags/definitions
 1. Setting or appending compiler flags/definitions via CMAKE_CXX_FLAGS is NOT allowed.
-2. Any front-end flags (e.g. -Wno-xxx, cxx_std_xx) should be added to cmake/compiler_config.cmake
+2. Any front-end flags (e.g. -Wno-xxx, cxx_std_xx) should be added to cmake/compiler_config.cmake.
 3. All current targets, as well as newly added targets, must use mayaUsd_compile_config function in order to get the project-wide flags/definitions. These flags/definitions are added privately via target_compile_features, target_compile_options, target_compile_definitions. Individual targets are still allowed to call target_compile_definitions, target_compile_features individually for any additional flags/definitions by providing appropriate PUBLIC/INTERFACE/PRIVATE keywords. For example:
 ```cmake
 # -----------------------------------------------------------------------------
@@ -348,7 +354,7 @@ Use provided mayaUsd_xxx_rpath() utility functions to handle run-time search pat
 3. For targets that need to link against google test library. Simply add GTest::GTest to target_link_libraries. You don't need to add any Gtest include directory this is done automatically for you.
 
 ## Naming Conventions
- 1. CMake commands are case-insensitive. Use lower_case for CMake functions and macros, Use upper_case for CMake variables
+ 1. CMake commands are case-insensitive. Use lower_case for CMake functions and macros, use upper_case for CMake variables.
  ```cmake
 # e.g cmake functions
 add_subdirectory(schemas)
@@ -360,18 +366,18 @@ ${CMAKE_SYSTEM_NAME}
 ${CMAKE_INSTALL_PREFIX}
 ```
 
- 2. Use upper_case for Option names
+ 2. Use upper_case for Option names.
 ```cmake
 # e.g for options names
 option(BUILD_USDMAYA_SCHEMAS "Build optional schemas." ON)
 option(BUILD_TESTS "Build tests." ON)
-option(BUILD_HDMAYA "Build the Maya-To-Hydra plugin and scene delegate." ON)
+option(BUILD_STRICT_MODE "Enforce all warnings as errors." ON)
 ```
 
-3.  Use upper_case for Custom variables
+3.  Use upper_case for Custom variables.
 ```cmake
 # e.g for options names
-set(QT_VERSION "5.6")
+set(BUILD_WITH_PYTHON_3_VERSION 3.7 CACHE STRING "The version of Python 3 to build with")
  
 set(HEADERS
     jobArgs.h
@@ -385,7 +391,7 @@ set(RESOURCES_INSTALL_PATH ${CMAKE_INSTALL_PREFIX}/lib/usd/${TARGET_NAME}/resour
 set(USDTRANSACTION_PYTHON_LIBRARY_LOCATION ${AL_INSTALL_PREFIX}/lib/python/AL/usd/transaction)
 ```
 
-4. Respect third-party variables ( don't change them )
+4. Respect third-party variables (don't change them).
 ```cmake
 # e.g boost
 set(BOOST_ROOT ${pxr_usd_location})

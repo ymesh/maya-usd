@@ -14,6 +14,7 @@ list(APPEND usdmaya_utils_headers
     AnimationTranslator.h
     Api.h
     AttributeType.h
+    DebugCodes.h
     DgNodeHelper.h
     Utils.h
     ForwardDeclares.h
@@ -25,6 +26,7 @@ list(APPEND usdmaya_utils_headers
 list(APPEND usdmaya_utils_source
     AnimationTranslator.cpp
     AttributeType.cpp
+    DebugCodes.cpp
     DgNodeHelper.cpp
     Utils.cpp
     MeshUtils.cpp
@@ -51,7 +53,7 @@ target_compile_definitions(${USDMAYA_UTILS_LIBRARY_NAME}
 )
 
 target_link_libraries(${USDMAYA_UTILS_LIBRARY_NAME}
-  mayaUsdUtils
+  usdUfe
   AL_MayaUtils
   ar 
   gf 
@@ -71,8 +73,12 @@ target_link_libraries(${USDMAYA_UTILS_LIBRARY_NAME}
 
 target_include_directories(${USDMAYA_UTILS_LIBRARY_NAME} 
     PUBLIC
-    ${USDMAYAUTILS_INCLUDE_LOCATION}
-    ${USD_INCLUDE_DIR}
+        ${USDMAYAUTILS_INCLUDE_LOCATION}
+)
+target_include_directories(${USDMAYA_UTILS_LIBRARY_NAME} 
+    SYSTEM PUBLIC
+        ${PXR_INCLUDE_DIRS}
+        ${MAYA_INCLUDE_DIRS}
 )
 
 # install the public headers

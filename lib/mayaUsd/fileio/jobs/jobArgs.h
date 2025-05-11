@@ -64,11 +64,15 @@ TF_DECLARE_PUBLIC_TOKENS(
     (compatibility) \
     (defaultCameras) \
     (defaultMeshScheme) \
+    (defaultPrim) \
     (defaultUSDFormat) \
     (eulerFilter) \
     (exportBlendShapes) \
     (exportCollectionBasedBindings) \
     (exportColorSets) \
+    (exportMaterials) \
+    (exportAssignedMaterials) \
+    (legacyMaterialScope) \
     (exportDisplayColor) \
     (exportDistanceUnit) \
     (exportInstances) \
@@ -76,6 +80,7 @@ TF_DECLARE_PUBLIC_TOKENS(
     (referenceObjectMode) \
     (exportRefsAsInstanceable) \
     (exportRoots) \
+    (exportSelected) \
     (exportSkels) \
     (exportSkin) \
     (exportUVs) \
@@ -83,9 +88,12 @@ TF_DECLARE_PUBLIC_TOKENS(
     (exportVisibility) \
     (jobContext) \
     (exportComponentTags) \
+    (exportStagesAsRefs) \
     (file) \
     (filterTypes) \
     (ignoreWarnings) \
+    (includeEmptyTransforms) \
+    (isDuplicating) \
     (kind) \
     (disableModelKindProcessor) \
     (materialCollectionsPath) \
@@ -95,7 +103,12 @@ TF_DECLARE_PUBLIC_TOKENS(
     (mergeTransformAndShape) \
     (normalizeNurbs) \
     (preserveUVSetNames) \
+    /* Deprecated and replaced by rootPrim */ \
     (parentScope) \
+    (rootPrim) \
+    (rootPrimType) \
+    (upAxis) \
+    (unit) \
     (pythonPerFrameCallback) \
     (pythonPostCallback) \
     (renderableOnly) \
@@ -115,6 +128,26 @@ TF_DECLARE_PUBLIC_TOKENS(
     (excludeExportTypes) \
     /* Special "none" token */ \
     (none) \
+    /* up axis values */ \
+    /* (none) */ \
+    (mayaPrefs) \
+    (y) \
+    (z) \
+    /* unit values */ \
+    /* (none) */ \
+    /* (mayaPrefs) */ \
+    (nm) \
+    (um) \
+    (mm) \
+    (cm) \
+    (dm) \
+    (m) \
+    (km) \
+    (lightyear) \
+    (inch) \
+    (foot) \
+    (yard) \
+    (mile) \
     /* relative textures values */ \
     (automatic) \
     (absolute) \
@@ -134,7 +167,10 @@ TF_DECLARE_PUBLIC_TOKENS(
     /* geomSidedness values */ \
     (derived)                             \
     (single)                              \
-    ((double_, "double"))
+    ((double_, "double"))                 \
+    /* root prim type values */ \
+    (scope)							   \
+	(xform)
 // clang-format on
 
 TF_DECLARE_PUBLIC_TOKENS(
@@ -160,6 +196,14 @@ TF_DECLARE_PUBLIC_TOKENS(
     (importRelativeTextures) \
     (pullImportStage) \
     (preserveTimeline) \
+    (remapUVSetsTo) \
+    (upAxis) \
+    (unit) \
+    (axisAndUnitMethod) \
+    /* values for axis and unit method */ \
+    (rotateScale) \
+    (addTransform) \
+    (overwritePrefs) \
     /* values for import relative textures */ \
     (automatic) \
     (absolute) \
@@ -195,6 +239,9 @@ struct UsdMayaJobExportArgs
     /// per-gprim bindings.
     const bool        exportCollectionBasedBindings;
     const bool        exportColorSets;
+    const bool        exportMaterials;
+    const bool        exportAssignedMaterials;
+    const bool        legacyMaterialScope;
     const bool        exportDefaultCameras;
     const bool        exportDisplayColor;
     const bool        exportDistanceUnit;
@@ -205,13 +252,17 @@ struct UsdMayaJobExportArgs
     const TfToken     exportRelativeTextures;
     const TfToken     referenceObjectMode;
     const bool        exportRefsAsInstanceable;
+    const bool        exportSelected;
     const TfToken     exportSkels;
     const TfToken     exportSkin;
     const bool        exportBlendShapes;
     const bool        exportVisibility;
     const bool        exportComponentTags;
+    const bool        exportStagesAsRefs;
     const std::string file;
     const bool        ignoreWarnings;
+    const bool        includeEmptyTransforms;
+    const bool        isDuplicating;
 
     /// If this is not empty, then a set of collections are exported on the
     /// prim pointed to by the path, each representing the collection of
@@ -235,7 +286,11 @@ struct UsdMayaJobExportArgs
 
     /// This is the path of the USD prim under which *all* prims will be
     /// authored.
-    const SdfPath      parentScope;
+    const SdfPath      parentScope; // Deprecated, use rootPrim instead.
+    const SdfPath      rootPrim;
+    const TfToken      rootPrimType;
+    const TfToken      upAxis;
+    const TfToken      unit;
     const TfToken      renderLayerMode;
     const TfToken      rootKind;
     const bool         disableModelKindProcessor;
@@ -248,6 +303,7 @@ struct UsdMayaJobExportArgs
     const TfToken::Set includeAPINames;
     const TfToken::Set jobContextNames;
     const TfToken::Set excludeExportTypes;
+    std::string        defaultPrim;
 
     using ChaserArgs = std::map<std::string, std::string>;
     const std::vector<std::string>          chaserNames;
@@ -262,7 +318,14 @@ struct UsdMayaJobExportArgs
     const std::string pythonPerFrameCallback;
     const std::string pythonPostCallback;
 
+    // List of object to export that are DAG objects.
     const UsdMayaUtil::MDagPathSet dagPaths;
+
+    // Full list of objects that were initially requested to be
+    // exported. Contains the DAG object and also non-DAG objects,
+    // like materials.
+    const MSelectionList fullObjectList;
+
     /// The time samples at which to export animated data; the times must be
     /// monotonically non-decreasing.
     /// An empty list of time samples means that no animated (time-sampled)
@@ -277,7 +340,8 @@ struct UsdMayaJobExportArgs
     // When using export roots feature we will leverage map function to
     // override the sdfpath generated from source DAG path. Will be empty
     // if export roots is not used.
-    const PcpMapFunction rootMapFunction;
+    const std::vector<std::string> exportRoots;
+    const PcpMapFunction           rootMapFunction;
 
     // Maya type ids to avoid exporting; these are EXACT types, the constructor will also add all
     // inherited types (so if you exclude "constraint", it will also exclude "parentConstraint")
@@ -293,6 +357,7 @@ struct UsdMayaJobExportArgs
     static UsdMayaJobExportArgs CreateFromDictionary(
         const VtDictionary&             userArgs,
         const UsdMayaUtil::MDagPathSet& dagPaths,
+        const MSelectionList&           fullList,
         const std::vector<double>&      timeSamples = std::vector<double>());
 
     /// Fills a VtDictionary from the given text-encoded options.
@@ -328,11 +393,24 @@ struct UsdMayaJobExportArgs
     MAYAUSD_CORE_PUBLIC
     std::string GetResolvedFileName() const;
 
+    // Verify if meshes are exported. (i.e not excluded by excludeExportTypes)
+    MAYAUSD_CORE_PUBLIC
+    bool isExportingMeshes() const;
+
+    // Verify if cameras are exported. (i.e not excluded by excludeExportTypes)
+    MAYAUSD_CORE_PUBLIC
+    bool isExportingCameras() const;
+
+    // Verify if lights are exported. (i.e not excluded by excludeExportTypes)
+    MAYAUSD_CORE_PUBLIC
+    bool isExportingLights() const;
+
 private:
     MAYAUSD_CORE_PUBLIC
     UsdMayaJobExportArgs(
         const VtDictionary&             userArgs,
         const UsdMayaUtil::MDagPathSet& dagPaths,
+        const MSelectionList&           fullList,
         const std::vector<double>&      timeSamples = std::vector<double>());
 };
 
@@ -358,6 +436,9 @@ struct UsdMayaJobImportArgs
     const std::string    importUSDZTexturesFilePath;
     const bool           importUSDZTextures;
     const std::string    importRelativeTextures;
+    const std::string    axisAndUnitMethod;
+    const bool           upAxis;
+    const bool           unit;
     const bool           importInstances;
     const bool           useAsAnimationCache;
     const bool           importWithProxyShapes;
@@ -377,6 +458,8 @@ struct UsdMayaJobImportArgs
     const std::vector<std::string>          chaserNames;
     const std::map<std::string, ChaserArgs> allChaserArgs;
 
+    const std::map<std::string, std::string> remapUVSetsTo;
+
     /// Get the current material conversion.
     MAYAUSD_CORE_PUBLIC
     TfToken GetMaterialConversion() const;
@@ -392,6 +475,14 @@ struct UsdMayaJobImportArgs
         const VtDictionary& userArgs,
         const bool          importWithProxyShapes = false,
         const GfInterval&   timeInterval = GfInterval::GetFullInterval());
+
+    /// Fills a VtDictionary from the given text-encoded options.
+    /// Issues runtime errors if some options contain values of the wrong format.
+    ///
+    /// The text encoding is in the form: name1=value1;name2=value2;...
+    MAYAUSD_CORE_PUBLIC
+    static MStatus
+    GetDictionaryFromEncodedOptions(const MString& optionsString, VtDictionary* toFill);
 
     /// Gets the default arguments dictionary for UsdMayaJobImportArgs.
     MAYAUSD_CORE_PUBLIC

@@ -53,6 +53,10 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportInstances.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kIncludeEmptyTransformsFlag,
+        UsdMayaJobExportArgsTokens->includeEmptyTransforms.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kExportRefsAsInstanceableFlag,
         UsdMayaJobExportArgsTokens->exportRefsAsInstanceable.GetText(),
         MSyntax::kBoolean);
@@ -112,6 +116,18 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportColorSets.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
+        kExportMaterialsFlag,
+        UsdMayaJobExportArgsTokens->exportMaterials.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
+        kExportAssignedMaterialsFlag,
+        UsdMayaJobExportArgsTokens->exportAssignedMaterials.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
+        kLegacyMaterialScopeFlag,
+        UsdMayaJobExportArgsTokens->legacyMaterialScope.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
         kStripNamespacesFlag,
         UsdMayaJobExportArgsTokens->stripNamespaces.GetText(),
         MSyntax::kBoolean);
@@ -132,6 +148,10 @@ MSyntax MayaUSDExportCommand::createSyntax()
     syntax.addFlag(
         kExportComponentTagsFlag,
         UsdMayaJobExportArgsTokens->exportComponentTags.GetText(),
+        MSyntax::kBoolean);
+    syntax.addFlag(
+        kExportStagesAsRefsFlag,
+        UsdMayaJobExportArgsTokens->exportStagesAsRefs.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
         kIgnoreWarningsFlag,
@@ -155,7 +175,14 @@ MSyntax MayaUSDExportCommand::createSyntax()
         UsdMayaJobExportArgsTokens->exportBlendShapes.GetText(),
         MSyntax::kBoolean);
     syntax.addFlag(
-        kParentScopeFlag, UsdMayaJobExportArgsTokens->parentScope.GetText(), MSyntax::kString);
+        kParentScopeFlag,
+        UsdMayaJobExportArgsTokens->parentScope.GetText(),
+        MSyntax::kString); // Deprecated
+    syntax.addFlag(kRootPrimFlag, UsdMayaJobExportArgsTokens->rootPrim.GetText(), MSyntax::kString);
+    syntax.addFlag(
+        kRootPrimTypeFlag, UsdMayaJobExportArgsTokens->rootPrimType.GetText(), MSyntax::kString);
+    syntax.addFlag(kUpAxisFlag, UsdMayaJobExportArgsTokens->upAxis.GetText(), MSyntax::kString);
+    syntax.addFlag(kUnitFlag, UsdMayaJobExportArgsTokens->unit.GetText(), MSyntax::kString);
     syntax.addFlag(
         kRenderableOnlyFlag, UsdMayaJobExportArgsTokens->renderableOnly.GetText(), MSyntax::kNoArg);
     syntax.addFlag(
@@ -226,7 +253,10 @@ MSyntax MayaUSDExportCommand::createSyntax()
         kExcludeExportTypesFlag,
         UsdMayaJobExportArgsTokens->excludeExportTypes.GetText(),
         MSyntax::kString);
-    syntax.makeFlagMultiUse((kExcludeExportTypesFlag));
+    syntax.makeFlagMultiUse(kExcludeExportTypesFlag);
+
+    syntax.addFlag(
+        kDefaultPrimFlag, UsdMayaJobExportArgsTokens->defaultPrim.GetText(), MSyntax::kString);
 
     // These are additional flags under our control.
     syntax.addFlag(
@@ -288,7 +318,7 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
         }
 
         // Read all of the dictionary args first.
-        const VtDictionary userArgs = UsdMayaUtil::GetDictionaryFromArgDatabase(
+        VtDictionary userArgs = UsdMayaUtil::GetDictionaryFromArgDatabase(
             argData, UsdMayaJobExportArgs::GetGuideDictionary());
 
         // Now read all of the other args that are specific to this command.
@@ -370,7 +400,10 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
         MSelectionList           objSelList;
         UsdMayaUtil::MDagPathSet dagPaths;
         bool                     exportSelected = argData.isFlagSet(kSelectionFlag);
-        if (!exportSelected) {
+        if (exportSelected) {
+            userArgs[UsdMayaJobExportArgsTokens->exportSelected] = true;
+
+        } else {
             argData.getObjects(objSelList);
 
             if (objSelList.isEmpty()) {
@@ -408,8 +441,8 @@ MStatus MayaUSDExportCommand::doIt(const MArgList& args)
 
         const std::vector<double> timeSamples
             = UsdMayaWriteUtil::GetTimeSamples(timeInterval, frameSamples, frameStride);
-        UsdMayaJobExportArgs jobArgs
-            = UsdMayaJobExportArgs::CreateFromDictionary(userArgs, dagPaths, timeSamples);
+        UsdMayaJobExportArgs jobArgs = UsdMayaJobExportArgs::CreateFromDictionary(
+            userArgs, dagPaths, objSelList, timeSamples);
 
         std::unique_ptr<UsdMaya_WriteJob> writeJob = initializeWriteJob(jobArgs);
         if (!writeJob || !writeJob->Write(fileName, append)) {

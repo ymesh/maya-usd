@@ -16,9 +16,13 @@
 
 #include "UsdUndoClearReferencesCommand.h"
 
+#include <usdUfe/utils/editRouterContext.h>
+
 #include <pxr/usd/usd/references.h>
 
 namespace USDUFE_NS_DEF {
+
+USDUFE_VERIFY_CLASS_SETUP(UsdUndoableCommand<Ufe::UndoableCommand>, UsdUndoClearReferencesCommand);
 
 UsdUndoClearReferencesCommand::UsdUndoClearReferencesCommand(const PXR_NS::UsdPrim& prim)
     : _prim(prim)
@@ -29,6 +33,8 @@ void UsdUndoClearReferencesCommand::executeImplementation()
 {
     if (!_prim.IsValid())
         return;
+
+    PrimMetadataEditRouterContext ctx(_prim, SdfFieldKeys->References);
 
     _prim.GetReferences().ClearReferences();
 }

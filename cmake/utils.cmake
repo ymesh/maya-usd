@@ -166,14 +166,16 @@ endfunction()
 
 #
 # mayaUsd_promoteHeaderList(
-#                        [SUBDIR  <sub-directory name>]
-#                        [FILES   <list of files>]
+#                        [HEADERS <list of header files>]
 #                        [BASEDIR <sub-directory name>])
+#                        [SUBDIR  <sub-directory name>]
 #
-#   SUBDIR     - sub-directory in which to promote files.
-#   FILES      - list of files to promote.
+#   HEADERS    - list of header files to promote.
 #   BASEDIR    - base directory where promoted headers are installed into.
-#                if not defined, mayaUsd subdirectory is used by default.
+#                If not defined, mayaUsd subdirectory is used by default.
+#                Unless special keyword "NONE" is used, in which case no
+#                basedir is set.
+#   SUBDIR     - sub-directory in which to promote header files.
 #
 #
 function(mayaUsd_promoteHeaderList)
@@ -192,7 +194,9 @@ function(mayaUsd_promoteHeaderList)
 
     set(BASEDIR ${CMAKE_BINARY_DIR}/include)
     if (PREFIX_BASEDIR)
-        set(BASEDIR ${BASEDIR}/${PREFIX_BASEDIR})
+        if(NOT ${PREFIX_BASEDIR} MATCHES "NONE")
+            set(BASEDIR ${BASEDIR}/${PREFIX_BASEDIR})
+        endif()
     else()
         set(BASEDIR ${BASEDIR}/mayaUsd)
     endif()
@@ -313,3 +317,25 @@ endfunction(get_external_project_default_values)
 
 # Create one for all the project using the default list separator
 get_external_project_default_values(MAYAUSD_EXTERNAL_PROJECT_GENERAL_SETTINGS "$<SEMICOLON>")
+
+function(mayaUsd_compute_timestamp)
+    # The date is formated the same way Maya formats its date.
+    # weekday month/day/fullyear, CONCAT(fullyear + month + day + fullhour + minute)
+    string(TIMESTAMP WEEKDAY "%w")
+    set(MH_WEEK_DAYS "Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
+    list(GET MH_WEEK_DAYS ${WEEKDAY} WEEKDAY)
+    string(TIMESTAMP BUILD_DATE "\"${WEEKDAY} %m/%d/%Y, %Y%m%d%H%M\"")
+
+    set(MAYAUSD_BUILD_DATE "${BUILD_DATE}" CACHE STRING "Build Date")
+
+    # For build pipeline builds, force a new timestamp.  For developer builds,
+    # resetting the timestamps is annoying as it causes all the version file to
+    # be regenerated and thus all libraries and executable to be relinked.
+    # Therefore, don't reset the timestamps unless a clean build is made.
+    if (NOT MAYAUSD_BUILD_NUMBER EQUAL 0)
+        set(MAYAUSD_BUILD_DATE "${BUILD_DATE}" CACHE STRING "Build Date" FORCE)
+    endif()
+endfunction(mayaUsd_compute_timestamp)
+
+# Compute the build timestamp.
+mayaUsd_compute_timestamp()

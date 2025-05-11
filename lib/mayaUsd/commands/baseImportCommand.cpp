@@ -68,6 +68,13 @@ MSyntax MayaUSDImportCommand::createSyntax()
         kImportRelativeTexturesFlag,
         UsdMayaJobImportArgsTokens->importRelativeTextures.GetText(),
         MSyntax::kString);
+    syntax.addFlag(
+        kImportUpAxisFlag, UsdMayaJobImportArgsTokens->upAxis.GetText(), MSyntax::kBoolean);
+    syntax.addFlag(kImportUnitFlag, UsdMayaJobImportArgsTokens->unit.GetText(), MSyntax::kBoolean);
+    syntax.addFlag(
+        kImportAxisAndUnitMethodFlag,
+        UsdMayaJobImportArgsTokens->axisAndUnitMethod.GetText(),
+        MSyntax::kString);
     syntax.addFlag(kMetadataFlag, UsdMayaJobImportArgsTokens->metadata.GetText(), MSyntax::kString);
     syntax.makeFlagMultiUse(kMetadataFlag);
     syntax.addFlag(
@@ -103,6 +110,13 @@ MSyntax MayaUSDImportCommand::createSyntax()
         MSyntax::kString,
         MSyntax::kString);
     syntax.makeFlagMultiUse(kImportChaserArgsFlag);
+
+    syntax.addFlag(
+        kRemapUVSetsToFlag,
+        UsdMayaJobImportArgsTokens->remapUVSetsTo.GetText(),
+        MSyntax::kString,
+        MSyntax::kString);
+    syntax.makeFlagMultiUse(kRemapUVSetsToFlag);
 
     syntax.addFlag(
         kApplyEulerFilterFlag,

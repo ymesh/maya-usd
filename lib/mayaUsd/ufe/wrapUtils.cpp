@@ -23,6 +23,7 @@
 #include <pxr/base/tf/stringUtils.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usdImaging/usdImaging/delegate.h>
+#include <pxr_python.h>
 
 #include <ufe/path.h>
 #include <ufe/pathSegment.h>
@@ -36,13 +37,9 @@
 #include <ufe/undoableCommandMgr.h>
 #endif
 
-#include <boost/python.hpp>
-#include <boost/python/def.hpp>
-
 #include <string>
 
-using namespace MayaUsd;
-using namespace boost::python;
+using namespace PXR_BOOST_PYTHON_NAMESPACE;
 
 PXR_NS::UsdPrim getPrimFromRawItem(uint64_t rawItem)
 {
@@ -76,7 +73,7 @@ std::string getNodeTypeFromRawItem(uint64_t rawItem)
 
 std::vector<PXR_NS::UsdStageRefPtr> _getAllStages()
 {
-    auto                                allStages = ufe::getAllStages();
+    auto                                allStages = MayaUsd::ufe::getAllStages();
     std::vector<PXR_NS::UsdStageRefPtr> output;
     for (auto stage : allStages) {
         PXR_NS::UsdStageRefPtr stageRefPtr { stage };
@@ -88,14 +85,19 @@ std::vector<PXR_NS::UsdStageRefPtr> _getAllStages()
 PXR_NS::TfTokenVector _getProxyShapePurposes(const std::string& ufePathString)
 {
     auto path = Ufe::PathString::path(ufePathString);
-    return ufe::getProxyShapePurposes(path);
+    return MayaUsd::ufe::getProxyShapePurposes(path);
 }
 
 #ifdef UFE_V4_FEATURES_AVAILABLE
 std::string createStageWithNewLayer(const std::string& parentPathString)
 {
-    auto parentPath = Ufe::PathString::path(parentPathString);
-    auto parent = Ufe::Hierarchy::createItem(parentPath);
+    // Input path parent string is allowed to be empty in which case we'll
+    // parent the new stage to the Maya world node.
+    Ufe::SceneItem::Ptr parent;
+    if (!parentPathString.empty()) {
+        auto parentPath = Ufe::PathString::path(parentPathString);
+        parent = Ufe::Hierarchy::createItem(parentPath);
+    }
     auto command = MayaUsd::ufe::UsdUndoCreateStageWithNewLayerCommand::create(parent);
     if (!command) {
         return "";

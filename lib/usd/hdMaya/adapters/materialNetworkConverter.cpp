@@ -20,7 +20,8 @@
 #include <hdMaya/adapters/mayaAttrs.h>
 #include <hdMaya/adapters/tokens.h>
 #include <hdMaya/utils.h>
-#include <mayaUsd/utils/util.h>
+
+#include <usdUfe/utils/Utils.h>
 
 #include <pxr/usd/sdr/registry.h>
 #include <pxr/usd/sdr/shaderProperty.h>
@@ -112,7 +113,12 @@ TfToken GetOutputName(const HdMaterialNode& material, SdfValueTypeName type)
         auto addMatchingOutputs = [&](SdfValueTypeName matchingType) {
             for (const auto& outName : outputNames) {
                 auto* sdrInfo = sdrNode->GetShaderOutput(outName);
-                if (sdrInfo && sdrInfo->GetTypeAsSdfType().first == matchingType) {
+#if PXR_VERSION <= 2408
+                const SdfValueTypeName sdfValueTypeName = sdrInfo->GetTypeAsSdfType().first;
+#else
+                const SdfValueTypeName sdfValueTypeName = sdrInfo->GetTypeAsSdfType().GetSdfType();
+#endif
+                if (sdrInfo && sdfValueTypeName == matchingType) {
                     validOutputs.push_back(outName);
                 }
             }
@@ -655,7 +661,7 @@ HdMaterialNode* HdMayaMaterialNetworkConverter::GetMaterial(const MObject& mayaN
     }
     TF_DEBUG(HDMAYA_ADAPTER_MATERIALS)
         .Msg("HdMayaMaterialNetworkConverter::GetMaterial(node=%s)\n", chr);
-    std::string usdNameStr = UsdMayaUtil::SanitizeName(chr);
+    std::string usdNameStr = UsdUfe::sanitizeName(chr);
     const auto  materialPath = _prefix.AppendChild(TfToken(usdNameStr));
 
     auto findResult = std::find_if(
@@ -874,7 +880,13 @@ const HdMayaShaderParams& HdMayaMaterialNetworkConverter::GetPreviewShaderParams
                         continue;
                     }
                     _previewShaderParams.emplace_back(
-                        inputName, property->GetDefaultValue(), property->GetTypeAsSdfType().first);
+                        inputName,
+                        property->GetDefaultValue(),
+#if PXR_VERSION <= 2408
+                        property->GetTypeAsSdfType().first);
+#else
+                        property->GetTypeAsSdfType().GetSdfType());
+#endif
                 }
                 std::sort(
                     _previewShaderParams.begin(),

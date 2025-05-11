@@ -70,7 +70,9 @@ class testUsdExportCustomConverter(unittest.TestCase):
         # plugin
         options = ["shadingMode=useRegistry",
                    "convertMaterialsTo=[maya]",
-                   "mergeTransformAndShape=1"]
+                   "mergeTransformAndShape=1",
+                   "legacyMaterialScope=0",
+                   "defaultPrim=None"]
 
         default_ext_setting = cmds.file(q=True, defaultExtensions=True)
         cmds.file(defaultExtensions=False)
@@ -82,7 +84,7 @@ class testUsdExportCustomConverter(unittest.TestCase):
         # Make sure we have a Maya standardSurface material in the USD file:
         stage = Usd.Stage.Open(usd_path)
         material = stage.GetPrimAtPath(
-            "/pCube1/Looks/standardSurface2SG/standardSurface2")
+            "/Looks/standardSurface2SG/standardSurface2")
         shader = UsdShade.Shader(material)
         self.assertEqual(shader.GetIdAttr().Get(), "standardSurface")
 

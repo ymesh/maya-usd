@@ -21,7 +21,8 @@
 #include <mayaUsd/fileio/utils/writeUtil.h>
 #include <mayaUsd/utils/utilDictionary.h>
 #include <mayaUsd/utils/utilFileSystem.h>
-#include <mayaUsdUtils/DiffPrims.h>
+
+#include <usdUfe/utils/diffPrims.h>
 
 #include <pxr/base/tf/diagnostic.h>
 #include <pxr/base/tf/envSetting.h>
@@ -429,6 +430,111 @@ std::set<unsigned int> _FilteredTypeIds(const VtDictionary& userArgs)
     return result;
 }
 
+std::vector<VtValue>
+_MergeVectors(const std::vector<VtValue>& existingValues, const std::vector<VtValue>& newValues)
+{
+    std::vector<VtValue> resultValues = existingValues;
+
+    for (const VtValue& element : newValues) {
+        if (element.IsHolding<std::vector<VtValue>>()) {
+            // vector<vector<string>> is common for chaserArgs and shadingModes
+            auto findElement = [&element](const VtValue& a) {
+                return UsdUfe::compareValues(element, a) == UsdUfe::DiffResult::Same;
+            };
+            if (std::find_if(resultValues.begin(), resultValues.end(), findElement)
+                == resultValues.end()) {
+                resultValues.push_back(element);
+            }
+        } else {
+            if (std::find(resultValues.begin(), resultValues.end(), element)
+                == resultValues.end()) {
+                resultValues.push_back(element);
+            }
+        }
+    }
+
+    return resultValues;
+}
+
+bool _MergeVectors(
+    const VtValue& existingValue,
+    const VtValue& newValue,
+    VtValue&       resultValue,
+    bool           allowConflicts)
+{
+    if (!newValue.IsHolding<std::vector<VtValue>>()) {
+        return allowConflicts;
+    }
+
+    resultValue = _MergeVectors(
+        existingValue.UncheckedGet<std::vector<VtValue>>(),
+        newValue.UncheckedGet<std::vector<VtValue>>());
+
+    return true;
+}
+
+// Merge into the existing dictionary but does *not* over-write existing values.
+// Record the source name of new values in the given map.
+// (It maps value names to the dictionary name where they were initially found.)
+// Conflicting values will be reported and return false if conflicts are not allowed.
+// Conflicting values will be ignored if conflicts are allowed.
+bool _MergeDictionaries(
+    VtDictionary&                       existingDict,
+    std::map<std::string, std::string>& existingSourceNames,
+    const VtDictionary&                 newDict,
+    const std::string&                  newDictName,
+    bool                                allowConflicts)
+{
+    bool allMergeOK = true;
+
+    for (auto const& dictTuple : newDict) {
+        const std::string& valueName = dictTuple.first;
+        const VtValue&     newValue = dictTuple.second;
+
+        auto existingValueIter = existingDict.find(valueName);
+        if (existingValueIter == existingDict.end()) {
+            // New value, no need to merge of manage conflicts.
+            existingDict[valueName] = newValue;
+            existingSourceNames[valueName] = newDictName;
+            continue;
+        }
+
+        // We have already seen this argument from another jobContext. Look for conflicts:
+        const VtValue& existingValue = existingValueIter->second;
+
+        if (existingValue.IsHolding<std::vector<VtValue>>()) {
+            VtValue mergedValue;
+            if (_MergeVectors(existingValue, newValue, mergedValue, allowConflicts)) {
+                existingDict[valueName] = mergedValue;
+            } else if (!allowConflicts) {
+                // We have both an array and a scalar under the same argument name.
+                const std::string& existingDictName = existingSourceNames[valueName];
+                TF_RUNTIME_ERROR(TfStringPrintf(
+                    "Context '%s' and context '%s' do not agree on type of argument '%s'.",
+                    newDictName.c_str(),
+                    existingDictName.c_str(),
+                    valueName.c_str()));
+                allMergeOK = false;
+            }
+        } else {
+            // Scalar value already exists. Check for value conflicts:
+            if (existingValue != newValue) {
+                if (!allowConflicts) {
+                    const std::string& existingDictName = existingSourceNames[valueName];
+                    TF_RUNTIME_ERROR(TfStringPrintf(
+                        "Context '%s' and context '%s' do not agree on argument '%s'.",
+                        newDictName.c_str(),
+                        existingDictName.c_str(),
+                        valueName.c_str()));
+                    allMergeOK = false;
+                }
+            }
+        }
+    }
+
+    return allMergeOK;
+}
+
 // Merges all the jobContext arguments dictionaries found while exploring the jobContexts into a
 // single one. Also checks for conflicts and errors.
 //
@@ -439,14 +545,19 @@ std::set<unsigned int> _FilteredTypeIds(const VtDictionary& userArgs)
 // Outputs:
 // allContextArgs: dictionary of all extra jobContext arguments merged together.
 // return value: true if the merge was successful, false if a conflict or an error was detected.
-bool _MergeJobContexts(bool isExport, const VtDictionary& userArgs, VtDictionary& allContextArgs)
+bool _MergeJobContexts(
+    bool                                isExport,
+    const VtDictionary&                 userArgs,
+    std::map<std::string, std::string>& argInitialSource,
+    VtDictionary&                       allContextArgs)
 {
     // List of all argument dictionaries found while exploring jobContexts
     std::vector<VtDictionary> contextArgs;
 
     bool canMergeContexts = true;
 
-    // This first loop gathers all job context argument dictionaries found in the userArgs
+    // This first loop gathers all job context argument dictionaries found in the userArgs.
+    // The job context provides their desired arguments through their callback.
     const TfToken& jcKey = UsdMayaJobExportArgsTokens->jobContext;
     if (VtDictionaryIsHolding<std::vector<VtValue>>(userArgs, jcKey)) {
         for (const VtValue& v : VtDictionaryGet<std::vector<VtValue>>(userArgs, jcKey)) {
@@ -486,10 +597,6 @@ bool _MergeJobContexts(bool isExport, const VtDictionary& userArgs, VtDictionary
         }
     }
 
-    // Convenience map holding the jobContext that first introduces an argument to the final
-    // dictionary. Allows printing meaningful error messages.
-    std::map<std::string, std::string> argInitialSource;
-
     // Traverse argument dictionaries and look for merge conflicts while building the returned
     // allContextArgs.
     for (auto const& dict : contextArgs) {
@@ -497,74 +604,65 @@ bool _MergeJobContexts(bool isExport, const VtDictionary& userArgs, VtDictionary
         const std::string& sourceName = VtDictionaryGet<std::vector<VtValue>>(dict, jcKey)
                                             .front()
                                             .UncheckedGet<std::string>();
-        for (auto const& dictTuple : dict) {
-            const std::string& k = dictTuple.first;
-            const VtValue&     v = dictTuple.second;
 
-            auto allContextIt = allContextArgs.find(k);
-            if (allContextIt == allContextArgs.end()) {
-                // First time we see this argument. Store and remember source.
-                allContextArgs[k] = v;
-                argInitialSource[k] = sourceName;
-            } else {
-                // We have already seen this argument from another jobContext. Look for conflicts:
-                const VtValue& allContextValue = allContextIt->second;
-
-                if (allContextValue.IsHolding<std::vector<VtValue>>()) {
-                    if (v.IsHolding<std::vector<VtValue>>()) {
-                        // We merge arrays:
-                        std::vector<VtValue> mergedValues
-                            = allContextValue.UncheckedGet<std::vector<VtValue>>();
-                        for (const VtValue& element : v.UncheckedGet<std::vector<VtValue>>()) {
-                            if (element.IsHolding<std::vector<VtValue>>()) {
-                                // vector<vector<string>> is common for chaserArgs and shadingModes
-                                auto findElement = [&element](const VtValue& a) {
-                                    return MayaUsdUtils::compareValues(element, a)
-                                        == MayaUsdUtils::DiffResult::Same;
-                                };
-                                if (std::find_if(
-                                        mergedValues.begin(), mergedValues.end(), findElement)
-                                    == mergedValues.end()) {
-                                    mergedValues.push_back(element);
-                                }
-                            } else {
-                                if (std::find(mergedValues.begin(), mergedValues.end(), element)
-                                    == mergedValues.end()) {
-                                    mergedValues.push_back(element);
-                                }
-                            }
-                        }
-                        allContextArgs[k] = mergedValues;
-                    } else {
-                        // We have both an array and a scalar under the same argument name.
-                        TF_RUNTIME_ERROR(TfStringPrintf(
-                            "Context '%s' and context '%s' do not agree on type of argument '%s'.",
-                            sourceName.c_str(),
-                            argInitialSource[k].c_str(),
-                            k.c_str()));
-                        canMergeContexts = false;
-                    }
-                } else {
-                    // Scalar value already exists. Check for value conflicts:
-                    if (allContextValue != v) {
-                        TF_RUNTIME_ERROR(TfStringPrintf(
-                            "Context '%s' and context '%s' do not agree on argument '%s'.",
-                            sourceName.c_str(),
-                            argInitialSource[k].c_str(),
-                            k.c_str()));
-                        canMergeContexts = false;
-                    }
-                }
-            }
-        }
+        const bool allowConflicts = false;
+        if (!_MergeDictionaries(allContextArgs, argInitialSource, dict, sourceName, allowConflicts))
+            canMergeContexts = false;
     }
     return canMergeContexts;
+}
+
+VtDictionary
+_MergeAllArguments(bool isExport, const VtDictionary& userArgs, const VtDictionary& defaultsArgs)
+{
+    // This will contain user argumentss, default arguments and job-context arguments
+    // all merged together.
+    VtDictionary allArgs;
+
+    // Convenience map holding the job-context that first introduces an argument to the final
+    // dictionary. Allows printing meaningful error messages.
+    std::map<std::string, std::string> argSources;
+
+    // First we merge all job context arguments for all job contexts that were given in
+    // the "jobContext" entry of the user arguments dictionary.
+    if (!_MergeJobContexts(isExport, userArgs, argSources, allArgs)) {
+        MGlobal::displayWarning("Errors while processing job contexts. Using base options.");
+        return VtDictionaryOver(userArgs, defaultsArgs);
+    }
+
+    // We now merge user argument with the default values over the job-context arguments.
+    // The job-context values have priority and we allow conflicting values. (After all,
+    // one of the *goal* of the job context is to provide specific, different defaults
+    // for import/export options than the default options.)
+    const VtDictionary withDefaults = VtDictionaryOver(userArgs, defaultsArgs);
+    const std::string  userArgsName = "user arguments";
+
+    const bool allowConflicts = true;
+    if (!_MergeDictionaries(allArgs, argSources, withDefaults, userArgsName, allowConflicts)) {
+        MGlobal::displayWarning(
+            "Errors while merging job contexts with user arguments. Using base options.");
+    }
+
+    return allArgs;
+}
+
+bool _GetEncodedArg(const MString& option, std::string& argName, MString& argValue)
+{
+    MStringArray theOption;
+    option.split('=', theOption);
+    if (theOption.length() < 1)
+        return false;
+
+    argName = theOption[0].asChar();
+    argValue = theOption.length() > 1 ? theOption[1] : MString();
+    return true;
 }
 
 } // namespace
 UsdMayaJobExportArgs::UsdMayaJobExportArgs(
     const VtDictionary&             userArgs,
     const UsdMayaUtil::MDagPathSet& dagPaths,
+    const MSelectionList&           fullList,
     const std::vector<double>&      timeSamples)
     : compatibility(extractToken(
         userArgs,
@@ -586,6 +684,10 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
     , exportCollectionBasedBindings(
           extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportCollectionBasedBindings))
     , exportColorSets(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportColorSets))
+    , exportMaterials(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportMaterials))
+    , exportAssignedMaterials(
+          extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportAssignedMaterials))
+    , legacyMaterialScope(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->legacyMaterialScope))
     , exportDefaultCameras(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->defaultCameras))
     , exportDisplayColor(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportDisplayColor))
     , exportDistanceUnit(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportDistanceUnit))
@@ -608,6 +710,7 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
           { UsdMayaJobExportArgsTokens->attributeOnly, UsdMayaJobExportArgsTokens->defaultToMesh }))
     , exportRefsAsInstanceable(
           extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportRefsAsInstanceable))
+    , exportSelected(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportSelected))
     , exportSkels(extractToken(
           userArgs,
           UsdMayaJobExportArgsTokens->exportSkels,
@@ -621,8 +724,12 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
     , exportBlendShapes(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportBlendShapes))
     , exportVisibility(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportVisibility))
     , exportComponentTags(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportComponentTags))
+    , exportStagesAsRefs(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->exportStagesAsRefs))
     , file(extractString(userArgs, UsdMayaJobExportArgsTokens->file))
     , ignoreWarnings(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->ignoreWarnings))
+    , includeEmptyTransforms(
+          extractBoolean(userArgs, UsdMayaJobExportArgsTokens->includeEmptyTransforms))
+    , isDuplicating(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->isDuplicating))
     , materialCollectionsPath(
           extractAbsolutePath(userArgs, UsdMayaJobExportArgsTokens->materialCollectionsPath))
     , materialsScopeName(_GetMaterialsScopeName(
@@ -635,6 +742,36 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
     , worldspace(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->worldspace))
     , writeDefaults(extractBoolean(userArgs, UsdMayaJobExportArgsTokens->writeDefaults))
     , parentScope(extractAbsolutePath(userArgs, UsdMayaJobExportArgsTokens->parentScope))
+    , rootPrim(extractAbsolutePath(userArgs, UsdMayaJobExportArgsTokens->rootPrim))
+    , rootPrimType(extractToken(
+          userArgs,
+          UsdMayaJobExportArgsTokens->rootPrimType,
+          UsdMayaJobExportArgsTokens->scope,
+          { UsdMayaJobExportArgsTokens->xform }))
+    , upAxis(extractToken(
+          userArgs,
+          UsdMayaJobExportArgsTokens->upAxis,
+          UsdMayaJobExportArgsTokens->mayaPrefs,
+          { UsdMayaJobExportArgsTokens->none,
+            UsdMayaJobExportArgsTokens->y,
+            UsdMayaJobExportArgsTokens->z }))
+    , unit(extractToken(
+          userArgs,
+          UsdMayaJobExportArgsTokens->unit,
+          UsdMayaJobExportArgsTokens->mayaPrefs,
+          { UsdMayaJobExportArgsTokens->none,
+            UsdMayaJobExportArgsTokens->nm,
+            UsdMayaJobExportArgsTokens->um,
+            UsdMayaJobExportArgsTokens->mm,
+            UsdMayaJobExportArgsTokens->cm,
+            UsdMayaJobExportArgsTokens->dm,
+            UsdMayaJobExportArgsTokens->m,
+            UsdMayaJobExportArgsTokens->km,
+            UsdMayaJobExportArgsTokens->lightyear,
+            UsdMayaJobExportArgsTokens->inch,
+            UsdMayaJobExportArgsTokens->foot,
+            UsdMayaJobExportArgsTokens->yard,
+            UsdMayaJobExportArgsTokens->mile }))
     , renderLayerMode(extractToken(
           userArgs,
           UsdMayaJobExportArgsTokens->renderLayerMode,
@@ -665,6 +802,7 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
     , includeAPINames(extractTokenSet(userArgs, UsdMayaJobExportArgsTokens->apiSchema))
     , jobContextNames(extractTokenSet(userArgs, UsdMayaJobExportArgsTokens->jobContext))
     , excludeExportTypes(extractTokenSet(userArgs, UsdMayaJobExportArgsTokens->excludeExportTypes))
+    , defaultPrim(extractString(userArgs, UsdMayaJobExportArgsTokens->defaultPrim))
     , chaserNames(extractVector<std::string>(userArgs, UsdMayaJobExportArgsTokens->chaser))
     , allChaserArgs(_ChaserArgs(userArgs, UsdMayaJobExportArgsTokens->chaserArgs))
     , customLayerData(_CustomLayerData(userArgs, UsdMayaJobExportArgsTokens->customLayerData))
@@ -676,7 +814,9 @@ UsdMayaJobExportArgs::UsdMayaJobExportArgs(
           extractString(userArgs, UsdMayaJobExportArgsTokens->pythonPerFrameCallback))
     , pythonPostCallback(extractString(userArgs, UsdMayaJobExportArgsTokens->pythonPostCallback))
     , dagPaths(dagPaths)
+    , fullObjectList(fullList)
     , timeSamples(timeSamples)
+    , exportRoots(extractVector<std::string>(userArgs, UsdMayaJobExportArgsTokens->exportRoots))
     , rootMapFunction(PcpMapFunction::Create(
           _ExportRootsMap(
               userArgs,
@@ -698,6 +838,10 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobExportArgs& exportAr
         << "exportCollectionBasedBindings: "
         << TfStringify(exportArgs.exportCollectionBasedBindings) << std::endl
         << "exportColorSets: " << TfStringify(exportArgs.exportColorSets) << std::endl
+        << "exportMaterials: " << TfStringify(exportArgs.exportMaterials) << std::endl
+        << "exportAssignedMaterials: " << TfStringify(exportArgs.exportAssignedMaterials)
+        << std::endl
+        << "legacyMaterialScope: " << TfStringify(exportArgs.legacyMaterialScope) << std::endl
         << "exportDefaultCameras: " << TfStringify(exportArgs.exportDefaultCameras) << std::endl
         << "exportDisplayColor: " << TfStringify(exportArgs.exportDisplayColor) << std::endl
         << "exportDistanceUnit: " << TfStringify(exportArgs.exportDistanceUnit) << std::endl
@@ -711,13 +855,17 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobExportArgs& exportAr
         << "referenceObjectMode: " << exportArgs.referenceObjectMode << std::endl
         << "exportRefsAsInstanceable: " << TfStringify(exportArgs.exportRefsAsInstanceable)
         << std::endl
+        << "exportSelected: " << TfStringify(exportArgs.exportSelected) << std::endl
         << "exportSkels: " << TfStringify(exportArgs.exportSkels) << std::endl
         << "exportSkin: " << TfStringify(exportArgs.exportSkin) << std::endl
         << "exportBlendShapes: " << TfStringify(exportArgs.exportBlendShapes) << std::endl
         << "exportVisibility: " << TfStringify(exportArgs.exportVisibility) << std::endl
         << "exportComponentTags: " << TfStringify(exportArgs.exportComponentTags) << std::endl
+        << "exportStagesAsRefs: " << TfStringify(exportArgs.exportStagesAsRefs) << std::endl
         << "file: " << exportArgs.file << std::endl
-        << "ignoreWarnings: " << TfStringify(exportArgs.ignoreWarnings) << std::endl;
+        << "ignoreWarnings: " << TfStringify(exportArgs.ignoreWarnings) << std::endl
+        << "includeEmptyTransforms: " << TfStringify(exportArgs.includeEmptyTransforms)
+        << "isDuplicating: " << TfStringify(exportArgs.isDuplicating) << std::endl;
     out << "includeAPINames (" << exportArgs.includeAPINames.size() << ")" << std::endl;
     for (const std::string& includeAPIName : exportArgs.includeAPINames) {
         out << "    " << includeAPIName << std::endl;
@@ -732,7 +880,9 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobExportArgs& exportAr
         << "normalizeNurbs: " << TfStringify(exportArgs.normalizeNurbs) << std::endl
         << "preserveUVSetNames: " << TfStringify(exportArgs.preserveUVSetNames) << std::endl
         << "writeDefaults: " << TfStringify(exportArgs.writeDefaults) << std::endl
-        << "parentScope: " << exportArgs.parentScope << std::endl
+        << "parentScope: " << exportArgs.parentScope << std::endl // Deprecated
+        << "rootPrim: " << exportArgs.parentScope << std::endl
+        << "defaultPrim: " << TfStringify(exportArgs.defaultPrim) << std::endl
         << "renderLayerMode: " << exportArgs.renderLayerMode << std::endl
         << "rootKind: " << exportArgs.rootKind << std::endl
         << "disableModelKindProcessor: " << exportArgs.disableModelKindProcessor << std::endl
@@ -757,6 +907,15 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobExportArgs& exportAr
     out << "dagPaths (" << exportArgs.dagPaths.size() << ")" << std::endl;
     for (const MDagPath& dagPath : exportArgs.dagPaths) {
         out << "    " << dagPath.fullPathName().asChar() << std::endl;
+    }
+
+    out << "fullObjectList (" << exportArgs.fullObjectList.length() << ")" << std::endl;
+    {
+        MStringArray names;
+        exportArgs.fullObjectList.getSelectionStrings(names);
+        for (unsigned i = 0; i < names.length(); ++i) {
+            out << "    " << names[i].asChar() << std::endl;
+        }
     }
 
     out << "filteredTypeIds (" << exportArgs.filteredTypeIds.size() << ")" << std::endl;
@@ -794,19 +953,13 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobExportArgs& exportAr
 UsdMayaJobExportArgs UsdMayaJobExportArgs::CreateFromDictionary(
     const VtDictionary&             userArgs,
     const UsdMayaUtil::MDagPathSet& dagPaths,
+    const MSelectionList&           fullList,
     const std::vector<double>&      timeSamples)
 {
-    VtDictionary allUserArgs = VtDictionaryOver(userArgs, GetDefaultDictionary());
-    VtDictionary allContextArgs;
+    const bool         isExport = true;
+    const VtDictionary allArgs = _MergeAllArguments(isExport, userArgs, GetDefaultDictionary());
 
-    if (_MergeJobContexts(true, userArgs, allContextArgs)) {
-        allUserArgs = VtDictionaryOver(allContextArgs, allUserArgs);
-    } else {
-        MGlobal::displayWarning(
-            "Errors while processing export contexts. Using base export options.");
-    }
-
-    return UsdMayaJobExportArgs(allUserArgs, dagPaths, timeSamples);
+    return UsdMayaJobExportArgs(allArgs, dagPaths, fullList, timeSamples);
 }
 
 /* static */
@@ -822,27 +975,27 @@ MStatus UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(
     // Get the options
     if (optionsString.length() > 0) {
         MStringArray optionList;
-        MStringArray theOption;
+        std::string  argName;
+        MString      argValue;
         optionsString.split(';', optionList);
-        for (int i = 0; i < (int)optionList.length(); ++i) {
-            theOption.clear();
-            optionList[i].split('=', theOption);
-            if (theOption.length() != 2) {
-                // We allow an empty string to be passed to exportRoots. We must process it here.
-                if (theOption.length() == 1
-                    && theOption[0] == UsdMayaJobExportArgsTokens->exportRoots.GetText()) {
+        for (unsigned int i = 0; i < optionList.length(); ++i) {
+            if (!_GetEncodedArg(optionList[i], argName, argValue))
+                continue;
+
+            // We allow an empty string to be passed to exportRoots. We must process it here.
+            if (argName == UsdMayaJobExportArgsTokens->exportRoots.GetText()) {
+                if (argValue.length() == 0) {
                     std::vector<VtValue> userArgVals;
                     userArgVals.push_back(VtValue(""));
                     userArgs[UsdMayaJobExportArgsTokens->exportRoots] = userArgVals;
+                    continue;
                 }
-                continue;
             }
 
-            std::string argName(theOption[0].asChar());
             if (argName == "filterTypes") {
                 std::vector<VtValue> userArgVals;
                 MStringArray         filteredTypes;
-                theOption[1].split(',', filteredTypes);
+                argValue.split(',', filteredTypes);
                 unsigned int nbTypes = filteredTypes.length();
                 for (unsigned int idxType = 0; idxType < nbTypes; ++idxType) {
                     const std::string filteredType = filteredTypes[idxType].asChar();
@@ -852,7 +1005,7 @@ MStatus UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(
             } else if (argName == "frameSample") {
                 std::vector<double> samples;
                 MStringArray        samplesStrings;
-                theOption[1].split(' ', samplesStrings);
+                argValue.split(' ', samplesStrings);
                 unsigned int nbSams = samplesStrings.length();
                 for (unsigned int sam = 0; sam < nbSams; ++sam) {
                     if (samplesStrings[sam].isDouble()) {
@@ -863,7 +1016,7 @@ MStatus UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(
                 userArgs[argName] = samples;
             } else if (argName == UsdMayaJobExportArgsTokens->exportRoots.GetText()) {
                 MStringArray exportRootStrings;
-                theOption[1].split(',', exportRootStrings);
+                argValue.split(',', exportRootStrings);
 
                 std::vector<VtValue> userArgVals;
 
@@ -887,7 +1040,7 @@ MStatus UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(
                 userArgs[argName] = userArgVals;
             } else {
                 if (argName == "shadingMode") {
-                    TfToken shadingMode(theOption[1].asChar());
+                    TfToken shadingMode(argValue.asChar());
                     if (!shadingMode.IsEmpty()
                         && UsdMayaShadingModeRegistry::GetInstance().GetExporter(shadingMode)
                             == nullptr
@@ -899,8 +1052,15 @@ MStatus UsdMayaJobExportArgs::GetDictionaryFromEncodedOptions(
                         return MS::kFailure;
                     }
                 }
+
+                // Note: when round-tripping settings, some extra settings are not part
+                //       of the guiding dictionary. Ignore them.
+                const static bool reportError = false;
                 userArgs[argName] = UsdMayaUtil::ParseArgumentValue(
-                    argName, theOption[1].asChar(), UsdMayaJobExportArgs::GetGuideDictionary());
+                    argName,
+                    argValue.asChar(),
+                    UsdMayaJobExportArgs::GetGuideDictionary(),
+                    reportError);
             }
         }
     }
@@ -964,14 +1124,18 @@ const VtDictionary& UsdMayaJobExportArgs::GetDefaultDictionary()
         d[UsdMayaJobExportArgsTokens->eulerFilter] = false;
         d[UsdMayaJobExportArgsTokens->exportCollectionBasedBindings] = false;
         d[UsdMayaJobExportArgsTokens->exportColorSets] = true;
+        d[UsdMayaJobExportArgsTokens->exportMaterials] = true;
+        d[UsdMayaJobExportArgsTokens->exportAssignedMaterials] = true;
+        d[UsdMayaJobExportArgsTokens->legacyMaterialScope] = false;
         d[UsdMayaJobExportArgsTokens->exportDisplayColor] = false;
-        d[UsdMayaJobExportArgsTokens->exportDistanceUnit] = true;
+        d[UsdMayaJobExportArgsTokens->exportDistanceUnit] = false;
         d[UsdMayaJobExportArgsTokens->exportInstances] = true;
         d[UsdMayaJobExportArgsTokens->exportMaterialCollections] = false;
         d[UsdMayaJobExportArgsTokens->referenceObjectMode]
             = UsdMayaJobExportArgsTokens->none.GetString();
         d[UsdMayaJobExportArgsTokens->exportRefsAsInstanceable] = false;
         d[UsdMayaJobExportArgsTokens->exportRoots] = std::vector<VtValue>();
+        d[UsdMayaJobExportArgsTokens->exportSelected] = false;
         d[UsdMayaJobExportArgsTokens->exportSkin] = UsdMayaJobExportArgsTokens->none.GetString();
         d[UsdMayaJobExportArgsTokens->exportSkels] = UsdMayaJobExportArgsTokens->none.GetString();
         d[UsdMayaJobExportArgsTokens->exportBlendShapes] = false;
@@ -980,9 +1144,12 @@ const VtDictionary& UsdMayaJobExportArgs::GetDefaultDictionary()
             = UsdMayaJobExportArgsTokens->automatic.GetString();
         d[UsdMayaJobExportArgsTokens->exportVisibility] = true;
         d[UsdMayaJobExportArgsTokens->exportComponentTags] = true;
+        d[UsdMayaJobExportArgsTokens->exportStagesAsRefs] = true;
         d[UsdMayaJobExportArgsTokens->file] = std::string();
         d[UsdMayaJobExportArgsTokens->filterTypes] = std::vector<VtValue>();
         d[UsdMayaJobExportArgsTokens->ignoreWarnings] = false;
+        d[UsdMayaJobExportArgsTokens->includeEmptyTransforms] = true;
+        d[UsdMayaJobExportArgsTokens->isDuplicating] = false;
         d[UsdMayaJobExportArgsTokens->kind] = std::string();
         d[UsdMayaJobExportArgsTokens->disableModelKindProcessor] = false;
         d[UsdMayaJobExportArgsTokens->materialCollectionsPath] = std::string();
@@ -993,7 +1160,11 @@ const VtDictionary& UsdMayaJobExportArgs::GetDefaultDictionary()
         d[UsdMayaJobExportArgsTokens->normalizeNurbs] = false;
         d[UsdMayaJobExportArgsTokens->preserveUVSetNames] = false;
         d[UsdMayaJobExportArgsTokens->writeDefaults] = false;
-        d[UsdMayaJobExportArgsTokens->parentScope] = std::string();
+        d[UsdMayaJobExportArgsTokens->parentScope] = std::string(); // Deprecated
+        d[UsdMayaJobExportArgsTokens->rootPrim] = std::string();
+        d[UsdMayaJobExportArgsTokens->rootPrimType] = UsdMayaJobExportArgsTokens->scope.GetString();
+        d[UsdMayaJobExportArgsTokens->upAxis] = UsdMayaJobExportArgsTokens->mayaPrefs.GetString();
+        d[UsdMayaJobExportArgsTokens->unit] = UsdMayaJobExportArgsTokens->mayaPrefs.GetString();
         d[UsdMayaJobExportArgsTokens->pythonPerFrameCallback] = std::string();
         d[UsdMayaJobExportArgsTokens->pythonPostCallback] = std::string();
         d[UsdMayaJobExportArgsTokens->renderableOnly] = false;
@@ -1014,6 +1185,7 @@ const VtDictionary& UsdMayaJobExportArgs::GetDefaultDictionary()
         d[UsdMayaJobExportArgsTokens->customLayerData] = std::vector<VtValue>();
         d[UsdMayaJobExportArgsTokens->metersPerUnit] = 0.0;
         d[UsdMayaJobExportArgsTokens->excludeExportTypes] = std::vector<VtValue>();
+        d[UsdMayaJobExportArgsTokens->defaultPrim] = std::string();
 
         // plugInfo.json site defaults.
         // The defaults dict should be correctly-typed, so enable
@@ -1061,6 +1233,9 @@ const VtDictionary& UsdMayaJobExportArgs::GetGuideDictionary()
         d[UsdMayaJobExportArgsTokens->eulerFilter] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportCollectionBasedBindings] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportColorSets] = _boolean;
+        d[UsdMayaJobExportArgsTokens->exportMaterials] = _boolean;
+        d[UsdMayaJobExportArgsTokens->exportAssignedMaterials] = _boolean;
+        d[UsdMayaJobExportArgsTokens->legacyMaterialScope] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportDisplayColor] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportDistanceUnit] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportInstances] = _boolean;
@@ -1069,15 +1244,19 @@ const VtDictionary& UsdMayaJobExportArgs::GetGuideDictionary()
         d[UsdMayaJobExportArgsTokens->exportRefsAsInstanceable] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportRoots] = _stringVector;
         d[UsdMayaJobExportArgsTokens->exportSkin] = _string;
+        d[UsdMayaJobExportArgsTokens->exportSelected] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportSkels] = _string;
         d[UsdMayaJobExportArgsTokens->exportBlendShapes] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportUVs] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportRelativeTextures] = _string;
         d[UsdMayaJobExportArgsTokens->exportVisibility] = _boolean;
         d[UsdMayaJobExportArgsTokens->exportComponentTags] = _boolean;
+        d[UsdMayaJobExportArgsTokens->exportStagesAsRefs] = _boolean;
         d[UsdMayaJobExportArgsTokens->file] = _string;
         d[UsdMayaJobExportArgsTokens->filterTypes] = _stringVector;
         d[UsdMayaJobExportArgsTokens->ignoreWarnings] = _boolean;
+        d[UsdMayaJobExportArgsTokens->includeEmptyTransforms] = _boolean;
+        d[UsdMayaJobExportArgsTokens->isDuplicating] = _boolean;
         d[UsdMayaJobExportArgsTokens->kind] = _string;
         d[UsdMayaJobExportArgsTokens->disableModelKindProcessor] = _boolean;
         d[UsdMayaJobExportArgsTokens->materialCollectionsPath] = _string;
@@ -1088,7 +1267,11 @@ const VtDictionary& UsdMayaJobExportArgs::GetGuideDictionary()
         d[UsdMayaJobExportArgsTokens->normalizeNurbs] = _boolean;
         d[UsdMayaJobExportArgsTokens->preserveUVSetNames] = _boolean;
         d[UsdMayaJobExportArgsTokens->writeDefaults] = _boolean;
-        d[UsdMayaJobExportArgsTokens->parentScope] = _string;
+        d[UsdMayaJobExportArgsTokens->parentScope] = _string; // Deprecated
+        d[UsdMayaJobExportArgsTokens->rootPrim] = _string;
+        d[UsdMayaJobExportArgsTokens->rootPrimType] = _string;
+        d[UsdMayaJobExportArgsTokens->upAxis] = _string;
+        d[UsdMayaJobExportArgsTokens->unit] = _string;
         d[UsdMayaJobExportArgsTokens->pythonPerFrameCallback] = _string;
         d[UsdMayaJobExportArgsTokens->pythonPostCallback] = _string;
         d[UsdMayaJobExportArgsTokens->renderableOnly] = _boolean;
@@ -1103,6 +1286,7 @@ const VtDictionary& UsdMayaJobExportArgs::GetGuideDictionary()
         d[UsdMayaJobExportArgsTokens->staticSingleSample] = _boolean;
         d[UsdMayaJobExportArgsTokens->geomSidedness] = _string;
         d[UsdMayaJobExportArgsTokens->excludeExportTypes] = _stringVector;
+        d[UsdMayaJobExportArgsTokens->defaultPrim] = _string;
     });
 
     return d;
@@ -1127,6 +1311,35 @@ std::string UsdMayaJobExportArgs::GetResolvedFileName() const
     }
 
     return file;
+}
+
+static bool isExcluded(const UsdMayaJobExportArgs& args, const TfToken* tokens, size_t count)
+{
+    for (size_t i = 0; i < count; ++i)
+        if (args.excludeExportTypes.count(tokens[i]) > 0)
+            return true;
+    return false;
+}
+
+bool UsdMayaJobExportArgs::isExportingMeshes() const
+{
+    static const TfToken meshTokens[]
+        = { TfToken("Meshes"), TfToken("meshes"), TfToken("Mesh"), TfToken("mesh") };
+    return !isExcluded(*this, meshTokens, sizeof(meshTokens) / sizeof(meshTokens[0]));
+}
+
+bool UsdMayaJobExportArgs::isExportingCameras() const
+{
+    static const TfToken meshTokens[]
+        = { TfToken("Cameras"), TfToken("cameras"), TfToken("Camera"), TfToken("camera") };
+    return !isExcluded(*this, meshTokens, sizeof(meshTokens) / sizeof(meshTokens[0]));
+}
+
+bool UsdMayaJobExportArgs::isExportingLights() const
+{
+    static const TfToken meshTokens[]
+        = { TfToken("Lights"), TfToken("lights"), TfToken("Light"), TfToken("light") };
+    return !isExcluded(*this, meshTokens, sizeof(meshTokens) / sizeof(meshTokens[0]));
 }
 
 UsdMayaJobImportArgs::UsdMayaJobImportArgs(
@@ -1162,6 +1375,15 @@ UsdMayaJobImportArgs::UsdMayaJobImportArgs(
             UsdMayaJobImportArgsTokens->absolute,
             UsdMayaJobImportArgsTokens->relative,
             UsdMayaJobImportArgsTokens->none }))
+    , axisAndUnitMethod(extractToken(
+          userArgs,
+          UsdMayaJobImportArgsTokens->axisAndUnitMethod,
+          UsdMayaJobImportArgsTokens->rotateScale,
+          { UsdMayaJobImportArgsTokens->rotateScale,
+            UsdMayaJobImportArgsTokens->addTransform,
+            UsdMayaJobImportArgsTokens->overwritePrefs }))
+    , upAxis(extractBoolean(userArgs, UsdMayaJobImportArgsTokens->upAxis))
+    , unit(extractBoolean(userArgs, UsdMayaJobImportArgsTokens->unit))
     , importInstances(extractBoolean(userArgs, UsdMayaJobImportArgsTokens->importInstances))
     , useAsAnimationCache(extractBoolean(userArgs, UsdMayaJobImportArgsTokens->useAsAnimationCache))
     , importWithProxyShapes(importWithProxyShapes)
@@ -1171,6 +1393,7 @@ UsdMayaJobImportArgs::UsdMayaJobImportArgs(
     , timeInterval(timeInterval)
     , chaserNames(extractVector<std::string>(userArgs, UsdMayaJobImportArgsTokens->chaser))
     , allChaserArgs(_ChaserArgs(userArgs, UsdMayaJobImportArgsTokens->chaserArgs))
+    , remapUVSetsTo(_UVSetRemaps(userArgs, UsdMayaJobImportArgsTokens->remapUVSetsTo))
 {
 }
 
@@ -1185,17 +1408,44 @@ UsdMayaJobImportArgs UsdMayaJobImportArgs::CreateFromDictionary(
     const bool          importWithProxyShapes,
     const GfInterval&   timeInterval)
 {
-    VtDictionary allUserArgs = VtDictionaryOver(userArgs, GetDefaultDictionary());
-    VtDictionary allContextArgs;
+    const bool         isExport = false;
+    const VtDictionary allArgs = _MergeAllArguments(isExport, userArgs, GetDefaultDictionary());
 
-    if (_MergeJobContexts(false, userArgs, allContextArgs)) {
-        allUserArgs = VtDictionaryOver(allContextArgs, allUserArgs);
-    } else {
-        MGlobal::displayWarning(
-            "Errors while processing import contexts. Using base import options.");
+    return UsdMayaJobImportArgs(allArgs, importWithProxyShapes, timeInterval);
+}
+
+/* static */
+MStatus UsdMayaJobImportArgs::GetDictionaryFromEncodedOptions(
+    const MString& optionsString,
+    VtDictionary*  toFill)
+{
+    if (!toFill)
+        return MS::kFailure;
+
+    VtDictionary& userArgs = *toFill;
+
+    // Get the options
+    if (optionsString.length() > 0) {
+        MStringArray optionList;
+        std::string  argName;
+        MString      argValue;
+        optionsString.split(';', optionList);
+        for (unsigned int i = 0; i < optionList.length(); ++i) {
+            if (!_GetEncodedArg(optionList[i], argName, argValue))
+                continue;
+
+            // Note: when round-tripping settings, some extra settings are not part
+            //       of the guiding dictionary. Ignore them.
+            const static bool reportError = false;
+            userArgs[argName] = UsdMayaUtil::ParseArgumentValue(
+                argName,
+                argValue.asChar(),
+                UsdMayaJobImportArgs::GetGuideDictionary(),
+                reportError);
+        }
     }
 
-    return UsdMayaJobImportArgs(allUserArgs, importWithProxyShapes, timeInterval);
+    return MS::kSuccess;
 }
 
 /* static */
@@ -1222,11 +1472,16 @@ const VtDictionary& UsdMayaJobImportArgs::GetDefaultDictionary()
         d[UsdMayaJobImportArgsTokens->importUSDZTexturesFilePath] = "";
         d[UsdMayaJobImportArgsTokens->importRelativeTextures]
             = UsdMayaJobImportArgsTokens->none.GetString();
+        d[UsdMayaJobImportArgsTokens->axisAndUnitMethod]
+            = UsdMayaJobImportArgsTokens->rotateScale.GetString();
+        d[UsdMayaJobImportArgsTokens->upAxis] = true;
+        d[UsdMayaJobImportArgsTokens->unit] = true;
         d[UsdMayaJobImportArgsTokens->pullImportStage] = UsdStageRefPtr();
         d[UsdMayaJobImportArgsTokens->useAsAnimationCache] = false;
         d[UsdMayaJobImportArgsTokens->preserveTimeline] = false;
-        d[UsdMayaJobExportArgsTokens->chaser] = std::vector<VtValue>();
-        d[UsdMayaJobExportArgsTokens->chaserArgs] = std::vector<VtValue>();
+        d[UsdMayaJobImportArgsTokens->chaser] = std::vector<VtValue>();
+        d[UsdMayaJobImportArgsTokens->chaserArgs] = std::vector<VtValue>();
+        d[UsdMayaJobImportArgsTokens->remapUVSetsTo] = std::vector<VtValue>();
         d[UsdMayaJobImportArgsTokens->applyEulerFilter] = false;
 
         // plugInfo.json site defaults.
@@ -1285,9 +1540,9 @@ const VtDictionary& UsdMayaJobImportArgs::GetGuideDictionary()
         const auto _usdStageRefPtr = VtValue(nullptr);
         const auto _string = VtValue(std::string());
         const auto _stringVector = VtValue(std::vector<VtValue>({ _string }));
-        const auto _stringTuplet = VtValue(std::vector<VtValue>({ _string, _string, _string }));
+        const auto _stringPair = VtValue(std::vector<VtValue>({ _string, _string }));
+        const auto _stringPairVector = VtValue(std::vector<VtValue>({ _stringPair }));
         const auto _stringTriplet = VtValue(std::vector<VtValue>({ _string, _string, _string }));
-        const auto _stringTupletVector = VtValue(std::vector<VtValue>({ _stringTuplet }));
         const auto _stringTripletVector = VtValue(std::vector<VtValue>({ _stringTriplet }));
 
         // Provide guide types for the parser:
@@ -1297,17 +1552,21 @@ const VtDictionary& UsdMayaJobImportArgs::GetGuideDictionary()
         d[UsdMayaJobImportArgsTokens->excludePrimvarNamespace] = _stringVector;
         d[UsdMayaJobImportArgsTokens->jobContext] = _stringVector;
         d[UsdMayaJobImportArgsTokens->metadata] = _stringVector;
-        d[UsdMayaJobImportArgsTokens->shadingMode] = _stringTupletVector;
+        d[UsdMayaJobImportArgsTokens->shadingMode] = _stringTripletVector;
         d[UsdMayaJobImportArgsTokens->preferredMaterial] = _string;
         d[UsdMayaJobImportArgsTokens->importInstances] = _boolean;
         d[UsdMayaJobImportArgsTokens->importUSDZTextures] = _boolean;
         d[UsdMayaJobImportArgsTokens->importUSDZTexturesFilePath] = _string;
         d[UsdMayaJobImportArgsTokens->importRelativeTextures] = _string;
+        d[UsdMayaJobImportArgsTokens->axisAndUnitMethod] = _string;
+        d[UsdMayaJobImportArgsTokens->upAxis] = _boolean;
+        d[UsdMayaJobImportArgsTokens->unit] = _boolean;
         d[UsdMayaJobImportArgsTokens->pullImportStage] = _usdStageRefPtr;
         d[UsdMayaJobImportArgsTokens->useAsAnimationCache] = _boolean;
         d[UsdMayaJobImportArgsTokens->preserveTimeline] = _boolean;
-        d[UsdMayaJobExportArgsTokens->chaser] = _stringVector;
-        d[UsdMayaJobExportArgsTokens->chaserArgs] = _stringTripletVector;
+        d[UsdMayaJobImportArgsTokens->chaser] = _stringVector;
+        d[UsdMayaJobImportArgsTokens->chaserArgs] = _stringTripletVector;
+        d[UsdMayaJobImportArgsTokens->remapUVSetsTo] = _stringPairVector;
         d[UsdMayaJobImportArgsTokens->applyEulerFilter] = _boolean;
     });
 
@@ -1392,6 +1651,9 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobImportArgs& importAr
         << "importUSDZTextures: " << TfStringify(importArgs.importUSDZTextures) << std::endl
         << "importUSDZTexturesFilePath: " << TfStringify(importArgs.importUSDZTexturesFilePath)
         << "importRelativeTextures: " << TfStringify(importArgs.importRelativeTextures) << std::endl
+        << "axisAndUnitMethod: " << TfStringify(importArgs.axisAndUnitMethod) << std::endl
+        << "upAxis: " << TfStringify(importArgs.upAxis) << std::endl
+        << "unit: " << TfStringify(importArgs.unit) << std::endl
         << "pullImportStage: " << TfStringify(importArgs.pullImportStage) << std::endl
         << std::endl
         << "timeInterval: " << importArgs.timeInterval << std::endl
@@ -1419,6 +1681,11 @@ std::ostream& operator<<(std::ostream& out, const UsdMayaJobImportArgs& importAr
             out << "        Arg Name: " << argIter.first << ", Value: " << argIter.second
                 << std::endl;
         }
+    }
+
+    out << "remapUVSetsTo (" << importArgs.remapUVSetsTo.size() << ")" << std::endl;
+    for (const auto& remapIt : importArgs.remapUVSetsTo) {
+        out << "    " << remapIt.first << " -> " << remapIt.second << std::endl;
     }
 
     return out;

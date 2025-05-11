@@ -21,13 +21,14 @@ target_link_libraries(${PXR_PACKAGE}
     AL_EventSystem
     AL_USDMayaUtils
     AL_MayaUtils
-    mayaUsdUtils
+    usdUfe
     AL_USDMaya
     ${MAYA_LIBRARIES}
 )
 
 target_include_directories(${PXR_PACKAGE}
     PRIVATE
+        ${PXR_INCLUDE_DIRS}
         ${MAYA_INCLUDE_DIRS}
         "../../lib/AL_USDMaya"
 )

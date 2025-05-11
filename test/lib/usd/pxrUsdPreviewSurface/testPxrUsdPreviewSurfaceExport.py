@@ -48,7 +48,7 @@ class testPxrUsdPreviewSurfaceExport(unittest.TestCase):
 
         cmds.loadPlugin('mayaUsdPlugin', quiet=True)
         cmds.file(usdFilePath, force=True,
-                  options="shadingMode=useRegistry;mergeTransformAndShape=1",
+                  options="shadingMode=useRegistry;mergeTransformAndShape=1;legacyMaterialScope=0;defaultPrim=None",
                   typ="USD Export", pr=True, ea=True)
 
         cmds.file(defaultExtensions=defaultExtSetting)
@@ -63,9 +63,7 @@ class testPxrUsdPreviewSurfaceExport(unittest.TestCase):
         self.assertTrue(self.stage)
 
     def _GetUsdMaterial(self, materialName):
-        modelPrimPath = Sdf.Path.absoluteRootPath.AppendChild(
-            'PxrUsdPreviewSurfaceExportTest')
-        materialsRootPrimPath = modelPrimPath.AppendChild(
+        materialsRootPrimPath = Sdf.Path.absoluteRootPath.AppendChild(
             UsdUtils.GetMaterialsScopeName())
         materialPrimPath = materialsRootPrimPath.AppendChild(materialName)
         materialPrim = self.stage.GetPrimAtPath(materialPrimPath)

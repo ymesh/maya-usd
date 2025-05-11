@@ -77,6 +77,7 @@ target_compile_definitions(${TARGET_NAME}
 target_include_directories(${TARGET_NAME}
     PRIVATE
         ${GTEST_INCLUDE_DIRS}
+        ${PXR_INCLUDE_DIRS}
         ${MAYA_INCLUDE_DIRS}
         "../../lib/AL_USDMaya"
         "../../schemas"
@@ -88,7 +89,7 @@ target_link_libraries(${TARGET_NAME}
         AL_EventSystem
         AL_USDMayaUtils
         AL_MayaUtils
-        mayaUsdUtils
+        usdUfe
         AL_USDMaya   #Adding this recursively pulls in lots of things
         AL_MayaTest
         AL_USDMayaSchemas

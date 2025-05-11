@@ -36,16 +36,11 @@ public:
     MayaUsdUIInfoHandler();
     ~MayaUsdUIInfoHandler() override;
 
-    // Delete the copy/move constructors assignment operators.
-    MayaUsdUIInfoHandler(const MayaUsdUIInfoHandler&) = delete;
-    MayaUsdUIInfoHandler& operator=(const MayaUsdUIInfoHandler&) = delete;
-    MayaUsdUIInfoHandler(MayaUsdUIInfoHandler&&) = delete;
-    MayaUsdUIInfoHandler& operator=(MayaUsdUIInfoHandler&&) = delete;
-
     //! Create a MayaUsdUIInfoHandler.
     static MayaUsdUIInfoHandler::Ptr create();
 
     UsdUfe::UsdUIInfoHandler::SupportedTypesMap getSupportedIconTypes() const override;
+    Ufe::UIInfoHandler::Icon treeViewIcon(const Ufe::SceneItem::Ptr& item) const override;
 
 private:
     void updateInvisibleColor();
@@ -54,7 +49,7 @@ private:
     //       to be compatible with MMessage callback API.
     static void onColorChanged(void*);
 
-    MCallbackId fColorChangedCallbackId = 0;
+    MCallbackId _colorChangedCallbackId = 0;
 }; // MayaUsdUIInfoHandler
 
 } // namespace ufe

@@ -16,9 +16,13 @@
 
 #include "UsdUndoClearPayloadsCommand.h"
 
+#include <usdUfe/utils/editRouterContext.h>
+
 #include <pxr/usd/usd/payloads.h>
 
 namespace USDUFE_NS_DEF {
+
+USDUFE_VERIFY_CLASS_SETUP(UsdUndoableCommand<Ufe::UndoableCommand>, UsdUndoClearPayloadsCommand);
 
 UsdUndoClearPayloadsCommand::UsdUndoClearPayloadsCommand(const PXR_NS::UsdPrim& prim)
     : _prim(prim)
@@ -29,6 +33,8 @@ void UsdUndoClearPayloadsCommand::executeImplementation()
 {
     if (!_prim.IsValid())
         return;
+
+    PrimMetadataEditRouterContext ctx(_prim, SdfFieldKeys->Payload);
 
     _prim.GetPayloads().ClearPayloads();
 }

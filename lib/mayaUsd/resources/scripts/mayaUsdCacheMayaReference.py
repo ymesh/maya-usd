@@ -39,7 +39,7 @@ _cacheExportOptions = None
 
 # The options string that we pass to mayaUsdTranslatorExport.
 # By default we want to expand/collapse certain sections.
-kTranslatorExportOptions = 'all;!output-parentscope;output:expanded;geometry:collapsed;materials:collapsed;animation:collapsed;advanced:collapsed'
+kTranslatorExportOptions = 'all;!output-rootPrim;output:expanded;geometry:collapsed;materials:collapsed;animation:collapsed;advanced:collapsed'
 
 # Dag path corresponding to pulled prim.  This is a Maya transform node that is
 # not in the Maya reference itself, but is its parent.
@@ -212,7 +212,7 @@ def fileOptionsTabPage(tabLayout):
     fileOptionsScroll = cmds.columnLayout('fileOptionsScroll')
     optionsText = mayaUsdOptions.convertOptionsDictToText(cacheToUsd.loadCacheCreationOptions())
     optionsText = mayaUsdOptions.setAnimateOption(_mayaRefDagPath, optionsText)
-    mel.eval('mayaUsdTranslatorExport("fileOptionsScroll", "post={exportOpts}", "{cacheOpts}", "")'.format(exportOpts=kTranslatorExportOptions, cacheOpts=optionsText))
+    mel.eval('mayaUsdTranslatorExport("fileOptionsScroll", "post={exportOpts};cacheToUSD", "{cacheOpts}", "")'.format(exportOpts=kTranslatorExportOptions, cacheOpts=optionsText))
 
     cacheFileUsdHierarchyOptions(topForm)
 

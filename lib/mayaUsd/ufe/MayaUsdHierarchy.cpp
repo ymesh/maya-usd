@@ -16,6 +16,7 @@
 #include "MayaUsdHierarchy.h"
 
 #include <mayaUsd/fileio/primUpdaterManager.h>
+#include <mayaUsd/ufe/Utils.h>
 
 #include <ufe/pathString.h>
 
@@ -24,15 +25,15 @@
 namespace MAYAUSD_NS_DEF {
 namespace ufe {
 
-MayaUsdHierarchy::MayaUsdHierarchy(const UsdSceneItem::Ptr& item)
+MAYAUSD_VERIFY_CLASS_SETUP(UsdUfe::UsdHierarchy, MayaUsdHierarchy);
+
+MayaUsdHierarchy::MayaUsdHierarchy(const UsdUfe::UsdSceneItem::Ptr& item)
     : UsdUfe::UsdHierarchy(item)
 {
 }
 
-MayaUsdHierarchy::~MayaUsdHierarchy() { }
-
 /*static*/
-MayaUsdHierarchy::Ptr MayaUsdHierarchy::create(const UsdSceneItem::Ptr& item)
+MayaUsdHierarchy::Ptr MayaUsdHierarchy::create(const UsdUfe::UsdSceneItem::Ptr& item)
 {
     return std::make_shared<MayaUsdHierarchy>(item);
 }
@@ -46,14 +47,31 @@ bool MayaUsdHierarchy::childrenHook(
     Ufe::SceneItemList&    children,
     bool                   filterInactive) const
 {
-    return mayaUsdHierarchyChildrenHook(child, children, filterInactive);
+    return mayaUsdHierarchyChildrenHook(sceneItem(), child, children, filterInactive);
 }
 
 bool mayaUsdHierarchyChildrenHook(
-    const PXR_NS::UsdPrim& child,
-    Ufe::SceneItemList&    children,
-    bool                   filterInactive)
+    const Ufe::SceneItem::Ptr& item,
+    const PXR_NS::UsdPrim&     child,
+    Ufe::SceneItemList&        children,
+    bool                       filterInactive)
 {
+    const PXR_NS::SdfPath primPath = getProxyShapePrimPath(item->path());
+    if (primPath.IsEmpty()) {
+        // An empty primPath means we're in a bad state.  We'll return true here
+        // without populating children.
+        return true;
+    }
+
+    const PXR_NS::SdfPath& childPath = child.GetPath();
+    const bool             isAncestorOrDescendant
+        = childPath.HasPrefix(primPath) || primPath.HasPrefix(childPath);
+    if (!isAncestorOrDescendant) {
+        // If it is not an ancestor or a descendent, we exclude it from the
+        // children list.
+        return true;
+    }
+
     std::string dagPathStr;
     if (MayaUsd::readPullInformation(child, dagPathStr)) {
         auto item = Ufe::Hierarchy::createItem(Ufe::PathString::path(dagPathStr));

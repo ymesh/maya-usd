@@ -23,6 +23,9 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace USDUFE_NS_DEF {
 
+USDUFE_VERIFY_CLASS_NOT_MOVE_OR_COPY(UsdUndoManager);
+USDUFE_VERIFY_CLASS_NOT_MOVE_OR_COPY(UsdUndoManagerAccessor);
+
 UsdUndoManager& UsdUndoManager::instance()
 {
     static UsdUndoManager undoManager;
@@ -50,10 +53,16 @@ void UsdUndoManager::addInverse(UsdUndoableItem::InvertFunc func)
     _invertFuncs.emplace_back(func);
 }
 
-void UsdUndoManager::transferEdits(UsdUndoableItem& undoableItem)
+void UsdUndoManager::transferEdits(UsdUndoableItem& undoableItem, bool extraEdits)
 {
     // transfer the edits
-    undoableItem._invertFuncs = std::move(_invertFuncs);
+    if (extraEdits) {
+        undoableItem._invertFuncs.insert(
+            undoableItem._invertFuncs.begin(), _invertFuncs.begin(), _invertFuncs.end());
+        _invertFuncs.clear();
+    } else {
+        undoableItem._invertFuncs = std::move(_invertFuncs);
+    }
 }
 
 } // namespace USDUFE_NS_DEF

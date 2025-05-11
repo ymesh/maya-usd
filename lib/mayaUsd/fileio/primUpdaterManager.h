@@ -42,6 +42,7 @@ class PrimUpdaterManager : public PXR_NS::TfWeakBase
 {
 public:
     MAYAUSD_CORE_PUBLIC
+    MAYAUSD_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(PrimUpdaterManager);
     ~PrimUpdaterManager();
 
     /// \brief merges edited Maya data into its corresponding USD stage.
@@ -63,10 +64,27 @@ public:
     MAYAUSD_CORE_PUBLIC
     bool discardEdits(const MDagPath& dagPath);
 
-    /// \brief Copy USD data into USD or Maya data.
+    /// \brief Copy Maya nodes to USD data or USD data to Maya nodes.
+    /// \return list of destination paths.
     MAYAUSD_CORE_PUBLIC
-    bool duplicate(
+    std::vector<Ufe::Path> duplicate(
         const Ufe::Path&    srcPath,
+        const Ufe::Path&    dstPath,
+        const VtDictionary& userArgs = VtDictionary());
+
+    /// \brief Copy USD data to Maya nodes.
+    /// \return list of destination paths.
+    MAYAUSD_CORE_PUBLIC
+    std::vector<Ufe::Path> duplicateToMaya(
+        const Ufe::Path&    srcPath,
+        const Ufe::Path&    dstPath,
+        const VtDictionary& userArgs = VtDictionary());
+
+    /// \brief Copy Maya nodes to USD data.
+    /// \return list of destination paths.
+    MAYAUSD_CORE_PUBLIC
+    std::vector<Ufe::Path> duplicateToUsd(
+        const MObject&      mayaObject,
         const Ufe::Path&    dstPath,
         const VtDictionary& userArgs = VtDictionary());
 
@@ -86,9 +104,6 @@ public:
 
 private:
     PrimUpdaterManager();
-
-    PrimUpdaterManager(PrimUpdaterManager&) = delete;
-    PrimUpdaterManager(PrimUpdaterManager&&) = delete;
 
     bool discardPrimEdits(const Ufe::Path& pulledPath);
     bool discardOrphanedEdits(const MDagPath& dagPath, const Ufe::Path& pulledPath);

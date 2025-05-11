@@ -24,11 +24,13 @@
 #include "exportTranslator.h"
 #include "geomNode.h"
 #include "importTranslator.h"
+#include "mayaUsdInfoCommand.h"
 
 #include <mayaUsd/base/api.h>
 #include <mayaUsd/commands/editTargetCommand.h>
 #include <mayaUsd/commands/layerEditorCommand.h>
 #include <mayaUsd/commands/layerEditorWindowCommand.h>
+#include <mayaUsd/commands/schemaCommand.h>
 #include <mayaUsd/fileio/shaderReaderRegistry.h>
 #include <mayaUsd/fileio/shaderWriterRegistry.h>
 #include <mayaUsd/listeners/notice.h>
@@ -49,10 +51,14 @@
 
 #include <maya/MDrawRegistry.h>
 #include <maya/MFnPlugin.h>
+#include <maya/MGlobal.h>
 #include <maya/MStatus.h>
 #include <ufe/runTimeMgr.h>
 
 #include <basePxrUsdPreviewSurface/usdPreviewSurfacePlugin.h>
+#if HAS_LOOKDEVXUSD
+#include <lookdevXUsd/LookdevXUsd.h>
+#endif // HAS_LOOKDEVXUSD
 
 #include <sstream>
 
@@ -83,9 +89,9 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 
-const MTypeId MayaUsdPreviewSurface_typeId(0x58000096);
-const MString MayaUsdPreviewSurface_typeName("usdPreviewSurface");
-const MString MayaUsdPreviewSurface_registrantId("mayaUsdPlugin");
+const MTypeId kMayaUsdPreviewSurface_typeId(0x58000096);
+const MString kMayaUsdPreviewSurface_typeName("usdPreviewSurface");
+const MString kMayaUsdPreviewSurface_registrantId("mayaUsdPlugin");
 
 template <typename T> void registerCommandCheck(MFnPlugin& plugin)
 {
@@ -116,11 +122,11 @@ MStatus registerStringResources()
 
 TF_REGISTRY_FUNCTION(UsdMayaShaderReaderRegistry)
 {
-    PxrMayaUsdPreviewSurfacePlugin::RegisterPreviewSurfaceReader(MayaUsdPreviewSurface_typeName);
+    PxrMayaUsdPreviewSurfacePlugin::RegisterPreviewSurfaceReader(kMayaUsdPreviewSurface_typeName);
 };
 TF_REGISTRY_FUNCTION(UsdMayaShaderWriterRegistry)
 {
-    PxrMayaUsdPreviewSurfacePlugin::RegisterPreviewSurfaceWriter(MayaUsdPreviewSurface_typeName);
+    PxrMayaUsdPreviewSurfacePlugin::RegisterPreviewSurfaceWriter(kMayaUsdPreviewSurface_typeName);
 };
 
 MAYAUSD_PLUGIN_PUBLIC
@@ -163,6 +169,8 @@ MStatus initializePlugin(MObject obj)
     registerCommandCheck<MayaUsd::ADSKMayaUSDImportCommand>(plugin);
     registerCommandCheck<MayaUsd::EditTargetCommand>(plugin);
     registerCommandCheck<MayaUsd::LayerEditorCommand>(plugin);
+    registerCommandCheck<MayaUsd::SchemaCommand>(plugin);
+    registerCommandCheck<MayaUsd::MayaUsdInfoCommand>(plugin);
 #if defined(WANT_QT_BUILD)
     registerCommandCheck<MayaUsd::LayerEditorWindowCommand>(plugin);
 #endif
@@ -181,6 +189,13 @@ MStatus initializePlugin(MObject obj)
         MayaUsd::MayaUsdUndoBlockCmd::commandName, MayaUsd::MayaUsdUndoBlockCmd::creator);
     CHECK_MSTATUS(status);
 
+    MGlobal::executePythonCommand(
+        "try:\n"
+        "    from ufe_ae.usd.nodes.usdschemabase import collectionMayaHost\n"
+        "    collectionMayaHost.registerCommands('mayaUsdPlugin')\n"
+        "except:\n"
+        "    pass\n");
+
     status = MayaUsdProxyShapePlugin::initialize(plugin);
     CHECK_MSTATUS(status);
 
@@ -188,6 +203,10 @@ MStatus initializePlugin(MObject obj)
     if (!status) {
         status.perror("mayaUsdPlugin: unable to initialize ufe.");
     }
+
+#if HAS_LOOKDEVXUSD
+    LookdevXUsd::initialize();
+#endif // HAS_LOOKDEVXUSD
 
     status = plugin.registerShape(
         MayaUsd::ProxyShape::typeName,
@@ -225,16 +244,16 @@ MStatus initializePlugin(MObject obj)
     status = MayaUsd::USDImportDialogCmd::initialize(plugin);
     if (!status) {
         MString err("registerCommand");
-        err += MayaUsd::USDImportDialogCmd::fsName;
+        err += MayaUsd::USDImportDialogCmd::name;
         status.perror(err);
     }
 #endif
 
     status = PxrMayaUsdPreviewSurfacePlugin::initialize(
         plugin,
-        MayaUsdPreviewSurface_typeName,
-        MayaUsdPreviewSurface_typeId,
-        MayaUsdPreviewSurface_registrantId);
+        kMayaUsdPreviewSurface_typeName,
+        kMayaUsdPreviewSurface_typeId,
+        kMayaUsdPreviewSurface_registrantId);
     CHECK_MSTATUS(status);
 
     plugin.registerUI(
@@ -242,6 +261,11 @@ MStatus initializePlugin(MObject obj)
         "mayaUsd_pluginUIDeletion",
         "mayaUsd_pluginBatchLoad",
         "mayaUsd_pluginBatchUnload");
+
+    // Register to file path editor
+    status = MGlobal::executeCommand("filePathEditor -registerType \"mayaUsdProxyShape.filePath\" "
+                                     "-typeLabel \"mayaUsdProxyShape.filePath\" -temporary");
+    CHECK_MSTATUS(status);
 
     // As of 2-Aug-2019, these PlugPlugin translators are not loaded
     // automatically.  To be investigated.  A duplicate of this code is in the
@@ -293,9 +317,9 @@ MStatus uninitializePlugin(MObject obj)
 
     status = PxrMayaUsdPreviewSurfacePlugin::finalize(
         plugin,
-        MayaUsdPreviewSurface_typeName,
-        MayaUsdPreviewSurface_typeId,
-        MayaUsdPreviewSurface_registrantId);
+        kMayaUsdPreviewSurface_typeName,
+        kMayaUsdPreviewSurface_typeId,
+        kMayaUsdPreviewSurface_registrantId);
     CHECK_MSTATUS(status);
 
     status = UsdMayaUndoHelperCommand::finalize(plugin);
@@ -311,7 +335,7 @@ MStatus uninitializePlugin(MObject obj)
     status = MayaUsd::USDImportDialogCmd::finalize(plugin);
     if (!status) {
         MString err("deregisterCommand");
-        err += MayaUsd::USDImportDialogCmd::fsName;
+        err += MayaUsd::USDImportDialogCmd::name;
         status.perror(err);
     }
 #endif
@@ -331,6 +355,8 @@ MStatus uninitializePlugin(MObject obj)
     deregisterCommandCheck<MayaUsd::ADSKMayaUSDImportCommand>(plugin);
     deregisterCommandCheck<MayaUsd::EditTargetCommand>(plugin);
     deregisterCommandCheck<MayaUsd::LayerEditorCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::SchemaCommand>(plugin);
+    deregisterCommandCheck<MayaUsd::MayaUsdInfoCommand>(plugin);
 #if defined(WANT_QT_BUILD)
     deregisterCommandCheck<MayaUsd::LayerEditorWindowCommand>(plugin);
     MayaUsd::LayerEditorWindowCommand::cleanupOnPluginUnload();
@@ -360,6 +386,25 @@ MStatus uninitializePlugin(MObject obj)
 
     status = plugin.deregisterCommand(MayaUsd::MayaUsdUndoBlockCmd::commandName);
     CHECK_MSTATUS(status);
+
+    MGlobal::executePythonCommand(
+        "try:\n"
+        "    from ufe_ae.usd.nodes.usdschemabase import collectionMayaHost\n"
+        "    collectionMayaHost.deregisterCommands('mayaUsdPlugin')\n"
+        "except:\n"
+        "    pass\n");
+
+    // Deregister from file path editor
+    status
+        = MGlobal::executeCommand("filePathEditor -deregisterType \"mayaUsdProxyShape.filePath\" "
+                                  "-typeLabel \"mayaUsdProxyShape.filePath\" -temporary");
+    CHECK_MSTATUS(status);
+
+    MGlobal::executeCommand("mayaUSDUnregisterStrings()");
+
+#if HAS_LOOKDEVXUSD
+    LookdevXUsd::uninitialize();
+#endif // HAS_LOOKDEVXUSD
 
     status = MayaUsd::ufe::finalize();
     CHECK_MSTATUS(status);

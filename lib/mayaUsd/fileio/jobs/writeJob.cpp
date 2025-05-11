@@ -25,7 +25,6 @@
 #include <pxr/usd/ar/resolver.h>
 #include <pxr/usd/kind/registry.h>
 #include <pxr/usd/sdf/layer.h>
-#include <pxr/usd/sdf/primSpec.h>
 
 #include <maya/MAnimControl.h>
 #include <maya/MComputation.h>
@@ -35,13 +34,11 @@
 #include <maya/MGlobal.h>
 #include <maya/MItDag.h>
 #include <maya/MObjectArray.h>
-#include <maya/MPxNode.h>
 #include <maya/MStatus.h>
 #include <maya/MUuid.h>
 
 #include <limits>
 #include <map>
-#include <unordered_set>
 // Needed for directly removing a UsdVariant via Sdf
 //   Remove when UsdVariantSet::RemoveVariant() is exposed
 //   XXX [bug 75864]
@@ -50,19 +47,17 @@
 #include <mayaUsd/fileio/jobs/jobArgs.h>
 #include <mayaUsd/fileio/jobs/modelKindProcessor.h>
 #include <mayaUsd/fileio/primWriter.h>
-#include <mayaUsd/fileio/primWriterRegistry.h>
 #include <mayaUsd/fileio/shading/shadingModeExporterContext.h>
 #include <mayaUsd/fileio/transformWriter.h>
 #include <mayaUsd/fileio/translators/translatorMaterial.h>
+#include <mayaUsd/utils/autoUndoCommands.h>
 #include <mayaUsd/utils/progressBarScope.h>
 #include <mayaUsd/utils/util.h>
 
 #include <pxr/usd/sdf/variantSetSpec.h>
-#include <pxr/usd/sdf/variantSpec.h>
 #include <pxr/usd/usd/editContext.h>
 #include <pxr/usd/usd/modelAPI.h>
 #include <pxr/usd/usd/primRange.h>
-#include <pxr/usd/usd/usdcFileFormat.h>
 #include <pxr/usd/usd/variantSets.h>
 #include <pxr/usd/usdGeom/metrics.h>
 #include <pxr/usd/usdGeom/xform.h>
@@ -112,6 +107,172 @@ static TfToken _GetFallbackExtension(const TfToken& compatibilityMode)
     return UsdMayaTranslatorTokens->UsdFileExtensionDefault;
 }
 
+/// Class to automatically change and restore the up-axis and units of the Maya scene.
+class AutoUpAxisAndUnitsChanger : public MayaUsd::AutoUndoCommands
+{
+public:
+    AutoUpAxisAndUnitsChanger(
+        const PXR_NS::UsdStageRefPtr& stage,
+        const PXR_NS::TfToken&        upAxisOption,
+        const PXR_NS::TfToken&        unitsOption)
+        : AutoUndoCommands(
+            "change up-axis and units",
+            _prepareCommands(stage, upAxisOption, unitsOption))
+    {
+    }
+
+private:
+    static double _convertOptionUnitsToUSDUnits(const TfToken& unitsOption)
+    {
+        static std::map<TfToken, double> unitsConversionMap
+            = { { UsdMayaJobExportArgsTokens->nm, UsdGeomLinearUnits::nanometers },
+                { UsdMayaJobExportArgsTokens->um, UsdGeomLinearUnits::micrometers },
+                { UsdMayaJobExportArgsTokens->mm, UsdGeomLinearUnits::millimeters },
+                { UsdMayaJobExportArgsTokens->cm, UsdGeomLinearUnits::centimeters },
+                // Note: there is no official USD decimeter units, we have to roll our own.
+                { UsdMayaJobExportArgsTokens->dm, 0.1 },
+                { UsdMayaJobExportArgsTokens->m, UsdGeomLinearUnits::meters },
+                { UsdMayaJobExportArgsTokens->km, UsdGeomLinearUnits::kilometers },
+                { UsdMayaJobExportArgsTokens->lightyear, UsdGeomLinearUnits::lightYears },
+                { UsdMayaJobExportArgsTokens->inch, UsdGeomLinearUnits::inches },
+                { UsdMayaJobExportArgsTokens->foot, UsdGeomLinearUnits::feet },
+                { UsdMayaJobExportArgsTokens->yard, UsdGeomLinearUnits::yards },
+                { UsdMayaJobExportArgsTokens->mile, UsdGeomLinearUnits::miles } };
+
+        const auto iter = unitsConversionMap.find(unitsOption);
+        if (iter == unitsConversionMap.end())
+            return UsdGeomLinearUnits::centimeters;
+        return iter->second;
+    }
+
+    static TfToken _convertMayaUnitsToOptionUnits(MDistance::Unit mayaUnits)
+    {
+        static std::map<MDistance::Unit, TfToken> unitsConversionMap
+            = { { MDistance::kMillimeters, UsdMayaJobExportArgsTokens->mm },
+                { MDistance::kCentimeters, UsdMayaJobExportArgsTokens->cm },
+                { MDistance::kMeters, UsdMayaJobExportArgsTokens->m },
+                { MDistance::kKilometers, UsdMayaJobExportArgsTokens->km },
+                { MDistance::kInches, UsdMayaJobExportArgsTokens->inch },
+                { MDistance::kFeet, UsdMayaJobExportArgsTokens->foot },
+                { MDistance::kYards, UsdMayaJobExportArgsTokens->yard },
+                { MDistance::kMiles, UsdMayaJobExportArgsTokens->mile } };
+
+        const auto iter = unitsConversionMap.find(mayaUnits);
+        if (iter == unitsConversionMap.end())
+            return UsdMayaJobExportArgsTokens->cm;
+        return iter->second;
+    }
+
+    static std::string
+    _prepareUnitsCommands(const UsdStageRefPtr& stage, const TfToken& unitsOption)
+    {
+        // If the user don't want to author the unit, we won't need to change the Maya unit.
+        if (unitsOption == UsdMayaJobExportArgsTokens->none)
+            return {};
+
+        // If the user want the unit authored in USD, well, author it.
+        const bool    wantMayaPrefs = (unitsOption == UsdMayaJobExportArgsTokens->mayaPrefs);
+        const TfToken mayaUIUnits = _convertMayaUnitsToOptionUnits(MDistance::uiUnit());
+        const TfToken mayaDataUnits = _convertMayaUnitsToOptionUnits(MDistance::internalUnit());
+        const TfToken wantedUnits = wantMayaPrefs ? mayaUIUnits : unitsOption;
+        const double  usdMetersPerUnit = _convertOptionUnitsToUSDUnits(wantedUnits);
+        UsdGeomSetStageMetersPerUnit(stage, usdMetersPerUnit);
+
+        // If the Maya data unit is already the right one, we dont have to modify the Maya scene.
+        if (wantedUnits == mayaDataUnits)
+            return {};
+
+        static const char scalingCommandsFormat[]
+            = "scale -relative -pivot 0 0 0 -scaleXYZ %f %f %f $groupName;\n";
+
+        const double mayaMetersPerUnit = _convertOptionUnitsToUSDUnits(mayaDataUnits);
+        const double requiredScale = mayaMetersPerUnit / usdMetersPerUnit;
+
+        return TfStringPrintf(scalingCommandsFormat, requiredScale, requiredScale, requiredScale);
+    }
+
+    static std::string
+    _prepareUpAxisCommands(const PXR_NS::UsdStageRefPtr& stage, const PXR_NS::TfToken& upAxisOption)
+    {
+        // If the user don't want to author the up-axis, we won't need to change the Maya up-axis.
+        if (upAxisOption == UsdMayaJobExportArgsTokens->none)
+            return {};
+
+        // If the user want the up-axis authored in USD, well, author it.
+        const bool wantMayaPrefs = (upAxisOption == UsdMayaJobExportArgsTokens->mayaPrefs);
+        const bool isMayaUpAxisZ = MGlobal::isZAxisUp();
+        const bool wantUpAxisZ
+            = (wantMayaPrefs && isMayaUpAxisZ) || (upAxisOption == UsdMayaJobExportArgsTokens->z);
+        UsdGeomSetStageUpAxis(stage, wantUpAxisZ ? UsdGeomTokens->z : UsdGeomTokens->y);
+
+        // If the Maya up-axis is already the right one, we dont have to modify the Maya scene.
+        if (wantUpAxisZ == isMayaUpAxisZ)
+            return {};
+
+        static const char rotationCommandsFormat[] =
+            // Rotate the group to align with the desired axis.
+            //
+            //    - Use relative rotation since we want to rotate the group as it is already
+            //    positioned
+            //    - Use -euler to make the angle be relative to the current angle
+            //    - Use forceOrderXYZ to force the rotation to be relative to world
+            //    - Use -pivot to make sure we are rotating relative to the origin
+            //      (The group is positioned at the center of all sub-object, so we need to
+            //      specify the pivot)
+            "rotate -relative -euler -pivot 0 0 0 -forceOrderXYZ %d 0 0 $groupName;\n";
+
+        const int angleYtoZ = 90;
+        const int angleZtoY = -90;
+        const int rotationAngle = wantUpAxisZ ? angleYtoZ : angleZtoY;
+
+        return TfStringPrintf(rotationCommandsFormat, rotationAngle);
+    }
+
+    static std::string _prepareCommands(
+        const PXR_NS::UsdStageRefPtr& stage,
+        const PXR_NS::TfToken&        upAxisOption,
+        const PXR_NS::TfToken&        unitsOption)
+    {
+        // These commands wrap the scene-changing commands by providing:
+        //
+        //     - the list of root names as the variable $rootNodeNames
+        //     - a group containing all those nodes named $groupName
+        //     -
+        //
+        // The scene-changing commands should mofify the group, so that ungrouping
+        // these node while preserving transform changes were done on the group will
+        // modify each root node individually.
+
+        static const char scriptPrefix[] =
+            // Preserve the selection. Grouping and ungrouping changes it.
+            "string $selection[] = `ls -selection`;\n"
+            // Find all root nodes.
+            "string $rootNodeNames[] = `ls -assemblies`;\n"
+            // Group all root node under a new group:
+            //
+            //    - Use -absolute to keep the grouped node world positions
+            //    - Use -world to create the group under the root ofthe scene
+            //      if the import was done at the root of the scene
+            //    - Capture the new group name in a MEL variable called $groupName
+            "string $groupName = `group -absolute -world $rootNodeNames`;\n";
+
+        static const char scriptSuffix[] = // Ungroup while preserving the rotation.
+            "ungroup -absolute $groupName;\n"
+            // Restore the selection.
+            "select -replace $selection;\n";
+
+        const std::string upAxisCommands = _prepareUpAxisCommands(stage, upAxisOption);
+        const std::string unitsCommands = _prepareUnitsCommands(stage, unitsOption);
+
+        // If both are empty, we don't need to do anything.
+        if (upAxisCommands.empty() && unitsCommands.empty())
+            return {};
+
+        const std::string fullScript = scriptPrefix + upAxisCommands + unitsCommands + scriptSuffix;
+        return fullScript;
+    }
+};
+
 bool UsdMaya_WriteJob::Write(const std::string& fileName, bool append)
 {
     const std::vector<double>& timeSamples = mJobCtx.mArgs.timeSamples;
@@ -159,13 +320,88 @@ bool UsdMaya_WriteJob::Write(const std::string& fileName, bool append)
     if (!_FinishWriting()) {
         return false;
     }
+
     progressBar.advance();
+
     return true;
+}
+
+static MStringArray GetExportDefaultPrimCandidates(const UsdMayaJobExportArgs& exportArgs)
+{
+    MStringArray roots;
+
+    // If the user provided a root prim, used it as the default prim.
+    if (!exportArgs.rootPrim.IsEmpty()) {
+        roots.append(exportArgs.rootPrim.GetName().c_str());
+        return roots;
+    }
+
+    // If the user provided export roots, used them to select the default prim.
+    if (exportArgs.exportRoots.size() > 0) {
+        for (const std::string& root : exportArgs.exportRoots) {
+            if (root.empty())
+                continue;
+            roots.append(root.c_str());
+        }
+        if (roots.length() > 0)
+            return roots;
+    }
+
+    // Note: we reuse the same logic used for the UI so that the logic stay in sync.
+    //       This is called only once during an export, so calling a Python command
+    //       is not an issue in regard to performance.
+    MString cmd;
+
+    static const MString getAllRoots("updateDefaultPrimCandidates");
+    static const MString getSelRoots("updateDefaultPrimCandidatesFromSelection");
+
+    const MString getRoots = exportArgs.exportSelected ? getSelRoots : getAllRoots;
+
+    static const MString pyTrue("True");
+    static const MString pyFalse("False");
+
+    // Note: the booleans all represent exclusion while the job arguments are all inclusion,
+    //       so we pass False when something is included.
+    const MString excludeMesh = exportArgs.isExportingMeshes() ? pyFalse : pyTrue;
+    const MString excludeLight = exportArgs.isExportingLights() ? pyFalse : pyTrue;
+    const MString excludeCamera = exportArgs.isExportingCameras() ? pyFalse : pyTrue;
+    const MString excludeStage = exportArgs.exportStagesAsRefs ? pyFalse : pyTrue;
+
+    cmd.format(
+        "import mayaUsd_exportHelpers; mayaUsd_exportHelpers.^1s(^2s, ^3s, ^4s, ^5s)",
+        getRoots,
+        excludeMesh,
+        excludeLight,
+        excludeCamera,
+        excludeStage);
+
+    MGlobal::executePythonCommand(cmd, roots);
+
+    return roots;
 }
 
 bool UsdMaya_WriteJob::_BeginWriting(const std::string& fileName, bool append)
 {
     MayaUsd::ProgressBarScope progressBar(8);
+
+    // If no default prim for the exported root layer was given, select one from
+    // the available root nodes of the Maya scene in order for materials to be
+    // parented correctly. We take into account the excluded node types based on
+    // the export job arguments. This is not required if using the legacy
+    // material scope.
+    if (!mJobCtx.mArgs.legacyMaterialScope) {
+        if (mJobCtx.mArgs.defaultPrim.empty()) {
+            MStringArray roots = GetExportDefaultPrimCandidates(mJobCtx.mArgs);
+            if (roots.length() > 0) {
+                mJobCtx.mArgs.defaultPrim = roots[0].asChar();
+            }
+        }
+    }
+
+    if (!mJobCtx.mArgs.defaultPrim.empty()) {
+        mJobCtx.mArgs.defaultPrim = UsdMayaUtil::MayaNodeNameToPrimName(
+            mJobCtx.mArgs.defaultPrim, mJobCtx.mArgs.stripNamespaces);
+    }
 
     // Check for DAG nodes that are a child of an already specified DAG node to export
     // if that's the case, report the issue and skip the export
@@ -259,6 +495,10 @@ bool UsdMaya_WriteJob::_BeginWriting(const std::string& fileName, bool append)
         mJobCtx.mStage->SetTimeCodesPerSecond(UsdMayaUtil::GetSceneMTimeUnitAsDouble());
         mJobCtx.mStage->SetFramesPerSecond(UsdMayaUtil::GetSceneMTimeUnitAsDouble());
     }
+
+    // Temporarily change Maya's up-axis if needed.
+    _autoAxisAndUnitsChanger = std::make_unique<AutoUpAxisAndUnitsChanger>(
+        mJobCtx.mStage, mJobCtx.mArgs.upAxis, mJobCtx.mArgs.unit);
 
     // Set the customLayerData on the layer
     if (!mJobCtx.mArgs.customLayerData.empty()) {
@@ -488,7 +728,7 @@ bool UsdMaya_WriteJob::_WriteFrame(double iFrame)
 
 bool UsdMaya_WriteJob::_FinishWriting()
 {
-    MayaUsd::ProgressBarScope progressBar(6);
+    MayaUsd::ProgressBarScope progressBar(7);
 
     UsdPrimSiblingRange usdRootPrims = mJobCtx.mStage->GetPseudoRoot().GetChildren();
 
@@ -525,16 +765,6 @@ bool UsdMaya_WriteJob::_FinishWriting()
     }
     progressBar.advance();
 
-    // Unfortunately, MGlobal::isZAxisUp() is merely session state that does
-    // not get recorded in Maya files, so we cannot rely on it being set
-    // properly.  Since "Y" is the more common upAxis, we'll just use
-    // isZAxisUp as an override to whatever our pipeline is configured for.
-    TfToken upAxis = UsdGeomGetFallbackUpAxis();
-    if (MGlobal::isZAxisUp()) {
-        upAxis = UsdGeomTokens->z;
-    }
-    UsdGeomSetStageUpAxis(mJobCtx.mStage, upAxis);
-
     // XXX Currently all distance values are written directly to USD, and will
     // be in centimeters (Maya's internal unit) despite what the users UIUnit
     // preference is.
@@ -542,8 +772,7 @@ bool UsdMaya_WriteJob::_FinishWriting()
     MDistance::Unit mayaInternalUnit = MDistance::internalUnit();
     auto            mayaInternalUnitLinear
         = UsdMayaUtil::ConvertMDistanceUnitToUsdGeomLinearUnit(mayaInternalUnit);
-    if (mayaInternalUnit != MDistance::uiUnit()
-        || mJobCtx.mArgs.metersPerUnit != mayaInternalUnitLinear) {
+    if (mJobCtx.mArgs.metersPerUnit != mayaInternalUnitLinear) {
         TF_WARN(
             "Support for Distance unit conversion is evolving. "
             "All distance units will be written in %s except where conversion is supported "
@@ -556,7 +785,12 @@ bool UsdMaya_WriteJob::_FinishWriting()
         UsdGeomSetStageMetersPerUnit(mJobCtx.mStage, mJobCtx.mArgs.metersPerUnit);
     }
 
-    if (usdRootPrim) {
+    if (!mJobCtx.mArgs.defaultPrim.empty()) {
+        defaultPrim = TfToken(mJobCtx.mArgs.defaultPrim);
+        if (defaultPrim != TfToken("None")) {
+            mJobCtx.mStage->GetRootLayer()->SetDefaultPrim(defaultPrim);
+        }
+    } else if (usdRootPrim) {
         // We have already decided above that 'usdRootPrim' is the important
         // prim for the export... usdVariantRootPrimPath
         mJobCtx.mStage->GetRootLayer()->SetDefaultPrim(defaultPrim);
@@ -571,17 +805,32 @@ bool UsdMaya_WriteJob::_FinishWriting()
         primWriterLoop.loopAdvance();
     }
 
+    _extrasPrimsPaths.clear();
+
     // Run post export function on the chasers.
     MayaUsd::ProgressBarLoopScope chasersLoop(mChasers.size());
     for (const UsdMayaExportChaserRefPtr& chaser : mChasers) {
         if (!chaser->PostExport()) {
             return false;
         }
+
+        // Collect extra prims paths from chasers
+        _extrasPrimsPaths.insert(
+            _extrasPrimsPaths.end(),
+            chaser->GetExtraPrimsPaths().begin(),
+            chaser->GetExtraPrimsPaths().end());
+
         chasersLoop.loopAdvance();
     }
 
     _PostCallback();
     progressBar.advance();
+
+    _PruneEmpties();
+    progressBar.advance();
+
+    // Restore Maya's up-axis if needed.
+    _autoAxisAndUnitsChanger.reset();
 
     TF_STATUS("Saving stage");
     if (mJobCtx.mStage->GetRootLayer()->PermissionToSave()) {
@@ -615,7 +864,7 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
 {
     // Some notes about the expected structure that this function will create:
 
-    // Suppose we have a maya scene, that, with no parentScope path, and
+    // Suppose we have a maya scene, that, with no rootPrim path, and
     // without renderLayerMode='modelingVariant', would give these prims:
     //
     //  /mayaRoot
@@ -623,7 +872,7 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
     //  /mayaRoot/Geom/Cube1
     //  /mayaRoot/Geom/Cube2
     //
-    // If you have parentScope='foo', you would instead get:
+    // If you have rootPrim='foo', you would instead get:
     //
     //  /foo/mayaRoot
     //  /foo/mayaRoot/Geom
@@ -641,7 +890,7 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
     //  /mayaRoot [reference to => /_BaseModel_]
     //     [variants w/ render layer overrides]
     //
-    // If you have both parentScope='foo' and renderLayerMode='modelingVariant',
+    // If you have both rootPrim='foo' and renderLayerMode='modelingVariant',
     // then you will get:
     //
     //  /_BaseModel_
@@ -657,7 +906,7 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
     std::string defaultModelingVariant;
 
     SdfPath usdVariantRootPrimPath;
-    if (mJobCtx.mParentScopePath.IsEmpty()) {
+    if (mJobCtx.mRootPrimPath.IsEmpty()) {
         // Get the usdVariantRootPrimPath (optionally filter by renderLayer prefix)
         UsdMayaPrimWriterSharedPtr firstPrimWriterPtr = *mJobCtx.mMayaPrimWriterList.begin();
         std::string                firstPrimWriterPathStr(
@@ -670,9 +919,9 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
             '_'); // replace namespace ":" with "_"
         usdVariantRootPrimPath = SdfPath(firstPrimWriterPathStr).GetPrefixes()[0];
     } else {
-        // If they passed a parentScope, then use that for our new top-level
+        // If they passed a rootPrim, then use that for our new top-level
         // variant-switcher prim
-        usdVariantRootPrimPath = mJobCtx.mParentScopePath;
+        usdVariantRootPrimPath = mJobCtx.mRootPrimPath;
     }
 
     // Create a new usdVariantRootPrim and reference the Base Model UsdRootPrim
@@ -775,6 +1024,81 @@ TfToken UsdMaya_WriteJob::_WriteVariants(const UsdPrim& usdRootPrim)
         modelingVariantSet.SetVariantSelection(defaultModelingVariant);
     }
     return defaultPrim;
+}
+
+namespace {
+bool isEmptyPrim(const UsdPrim& prim)
+{
+    // Note: prim might have been removed previously.
+    if (!prim.IsValid())
+        return false;
+
+    static std::set<TfToken> emptyTypes = std::set<TfToken>({ TfToken("Xform"), TfToken("Scope") });
+    TfToken                  primTypeName = prim.GetTypeName();
+    if (emptyTypes.count(primTypeName) == 0)
+        return false;
+
+    if (!prim.GetAllChildren().empty())
+        return false;
+
+    if (prim.HasAuthoredPayloads())
+        return false;
+
+    if (prim.HasAuthoredReferences())
+        return false;
+
+    return true;
+}
+
+bool isEmptyPrim(const UsdStageRefPtr& stage, const SdfPath& path)
+{
+    return isEmptyPrim(stage->GetPrimAtPath(path));
+}
+
+std::vector<SdfPath>
+removeEmptyPrims(const UsdStageRefPtr& stage, const std::vector<SdfPath>& toRemove)
+{
+    // Once we start removing empties, we need to re-check their parents.
+    std::vector<SdfPath> toRecheck;
+
+    for (const SdfPath& path : toRemove) {
+        stage->RemovePrim(path);
+        toRecheck.emplace_back(path.GetParentPath());
+    }
+    return toRecheck;
+}
+} // namespace
+
+void UsdMaya_WriteJob::_PruneEmpties()
+{
+    if (mJobCtx.mArgs.includeEmptyTransforms)
+        return;
+
+    SdfPath defaultPrimPath;
+    if (mJobCtx.mArgs.defaultPrim.size() > 0) {
+        if (mJobCtx.mArgs.defaultPrim[0] != '/')
+            defaultPrimPath = SdfPath(std::string("/") + mJobCtx.mArgs.defaultPrim);
+        else
+            defaultPrimPath = SdfPath(mJobCtx.mArgs.defaultPrim);
+    }
+
+    std::vector<SdfPath> toRemove;
+
+    for (UsdPrim prim : mJobCtx.mStage->Traverse()) {
+        if (defaultPrimPath != prim.GetPath())
+            if (isEmptyPrim(prim))
+                toRemove.emplace_back(prim.GetPath());
+    }
+
+    while (toRemove.size()) {
+        std::vector<SdfPath> toRecheck = removeEmptyPrims(mJobCtx.mStage, toRemove);
+        toRemove.clear();
+
+        for (const SdfPath& path : toRecheck)
+            if (defaultPrimPath != path)
+                if (isEmptyPrim(mJobCtx.mStage, path))
+                    toRemove.emplace_back(path);
+    }
 }
 
 void UsdMaya_WriteJob::_CreatePackage() const

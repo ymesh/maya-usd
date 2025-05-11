@@ -45,11 +45,15 @@ public:
     static constexpr auto kDefaultMeshSchemeFlag = "dms";
     static constexpr auto kDefaultUSDFormatFlag = "duf";
     static constexpr auto kExportColorSetsFlag = "cls";
+    static constexpr auto kExportMaterialsFlag = "mat";
+    static constexpr auto kExportAssignedMaterialsFlag = "ama";
+    static constexpr auto kLegacyMaterialScopeFlag = "lms";
     static constexpr auto kExportUVsFlag = "uvs";
     static constexpr auto kExportRelativeTexturesFlag = "rtx";
     static constexpr auto kEulerFilterFlag = "ef";
     static constexpr auto kExportVisibilityFlag = "vis";
     static constexpr auto kExportComponentTagsFlag = "tag";
+    static constexpr auto kExportStagesAsRefsFlag = "sar";
     static constexpr auto kIgnoreWarningsFlag = "ign";
     static constexpr auto kExportInstancesFlag = "ein";
     static constexpr auto kWriteDefaults = "wd";
@@ -72,7 +76,11 @@ public:
     static constexpr auto kExportSkelsFlag = "skl";
     static constexpr auto kExportSkinFlag = "skn";
     static constexpr auto kExportBlendShapesFlag = "ebs";
-    static constexpr auto kParentScopeFlag = "psc";
+    static constexpr auto kParentScopeFlag = "psc"; // deprecated
+    static constexpr auto kRootPrimFlag = "rpm";
+    static constexpr auto kRootPrimTypeFlag = "rpt";
+    static constexpr auto kUpAxisFlag = "upa";
+    static constexpr auto kUnitFlag = "unt";
     static constexpr auto kRenderableOnlyFlag = "ro";
     static constexpr auto kDefaultCamerasFlag = "dc";
     static constexpr auto kRenderLayerModeFlag = "rlm";
@@ -94,6 +102,8 @@ public:
     static constexpr auto kCustomLayerData = "cld";
     static constexpr auto kMetersPerUnit = "mpu";
     static constexpr auto kExcludeExportTypesFlag = "eet";
+    static constexpr auto kDefaultPrimFlag = "dp";
+    static constexpr auto kIncludeEmptyTransformsFlag = "iet";
 
     // Short and Long forms of flags defined by this command itself:
     static constexpr auto kAppendFlag = "a";

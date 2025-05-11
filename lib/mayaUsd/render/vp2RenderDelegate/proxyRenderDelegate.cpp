@@ -15,10 +15,10 @@
 //
 #include "proxyRenderDelegate.h"
 
-#include "draw_item.h"
+#include "drawItem.h"
 #include "material.h"
 #include "mayaPrimCommon.h"
-#include "render_delegate.h"
+#include "renderDelegate.h"
 #include "tokens.h"
 
 #include <mayaUsd/base/tokens.h>
@@ -215,7 +215,7 @@ void PopulateSelection(
     }
 
     // Filter out non-USD items.
-    auto usdItem = std::dynamic_pointer_cast<UsdUfe::UsdSceneItem>(item);
+    auto usdItem = UsdUfe::downcast(item);
     if (!usdItem) {
         return;
     }
@@ -539,6 +539,8 @@ bool _DrawItemFilterPredicate(const SdfPath& rprimID, const void* predicateParam
     return (passedRenderTagFilter && passedMaterialTagFilter);
 }
 #endif
+
+bool _longDurationRendering = false;
 
 } // namespace
 
@@ -888,6 +890,12 @@ void ProxyRenderDelegate::_UpdateSceneDelegate()
     }
 }
 
+void ProxyRenderDelegate::_PopulateCleanup()
+{
+    // Get rid of shaders no longer in use.
+    HdVP2ShaderUniquePtr::cleanupDeadShaders();
+}
+
 InstancePrototypePath ProxyRenderDelegate::GetPathInPrototype(const SdfPath& id)
 {
     HdInstancerContext instancerContext;
@@ -1202,6 +1210,8 @@ void ProxyRenderDelegate::_Execute(const MHWRender::MFrameContext& frameContext)
     }
 }
 
+void ProxyRenderDelegate::setLongDurationRendering() { _longDurationRendering = true; }
+
 //! \brief  Main update entry from subscene override.
 void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameContext& frameContext)
 {
@@ -1213,6 +1223,16 @@ void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameCont
     // Without a proxy shape we can't do anything
     if (_proxyShapeData->ProxyShape() == nullptr)
         return;
+
+    // If the rendering was flagged as possibly taking a long time,
+    // show the wait cursor.
+    //
+    // Note: using the wait cursor sets the long duration flag,
+    //       so reset the flag after setting up the cursor, otherwise
+    //       once one rendering would be long-duration, all of them
+    //       would be flagged afterward.
+    UsdUfe::WaitCursor waitCursor(_longDurationRendering);
+    _longDurationRendering = false;
 
 #ifdef MAYA_NEW_POINT_SNAPPING_SUPPORT
     const MSelectionInfo* selectionInfo = frameContext.getSelectionInfo();
@@ -1250,6 +1270,7 @@ void ProxyRenderDelegate::update(MSubSceneContainer& container, const MFrameCont
     if (_Populate()) {
         _UpdateSceneDelegate();
         _Execute(frameContext);
+        _PopulateCleanup();
     }
 
     _currentFrameContext = nullptr;
@@ -1329,6 +1350,37 @@ SdfPath ProxyRenderDelegate::GetScenePrimPath(const SdfPath& rprimId, int instan
     return usdPath;
 }
 
+static std::vector<int> fillInstanceIds(unsigned int instanceCount)
+{
+    std::vector<int> usdInstanceIds;
+    usdInstanceIds.reserve(instanceCount);
+    for (unsigned int usdInstanceId = 0; usdInstanceId < instanceCount; usdInstanceId++)
+        usdInstanceIds.emplace_back(usdInstanceId);
+    return usdInstanceIds;
+}
+
+SdfPathVector
+ProxyRenderDelegate::GetScenePrimPaths(const SdfPath& rprimId, unsigned int instanceCount) const
+{
+    return GetScenePrimPaths(rprimId, fillInstanceIds(instanceCount));
+}
+
+SdfPathVector ProxyRenderDelegate::GetScenePrimPaths(
+    const SdfPath&   rprimId,
+    std::vector<int> instanceIndexes) const
+{
+#if defined(USD_IMAGING_API_VERSION) && USD_IMAGING_API_VERSION >= 17
+    return _sceneDelegate->GetScenePrimPaths(rprimId, instanceIndexes);
+#else
+    SdfPathVector usdPaths;
+    usdPaths.reserve(instanceIndexes.size());
+    for (int instanceIndex : instanceIndexes) {
+        usdPaths.emplace_back(GetScenePrimPath(rprimId, instanceIndex));
+    }
+    return usdPaths;
+#endif
+}
+
 //! \brief  Selection for both instanced and non-instanced cases.
 bool ProxyRenderDelegate::getInstancedSelectionPath(
     const MHWRender::MRenderItem&   renderItem,
@@ -1381,7 +1433,7 @@ bool ProxyRenderDelegate::getInstancedSelectionPath(
         topLevelInstanceIndex = instancerContext.front().second;
     }
 #else
-    SdfPath usdPath = GetScenePrimPath(rprimId, instanceIndex);
+    SdfPath      usdPath = GetScenePrimPath(rprimId, instanceIndex);
 #endif
 
     // If update for selection is enabled, we can query the Maya selection list

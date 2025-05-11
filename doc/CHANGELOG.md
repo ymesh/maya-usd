@@ -1,5 +1,423 @@
 # Changelog
 
+## [v0.31.0] - 2025-03-07
+
+**Build:**
+* Update reference images for a fix in OpenPBR native [#4051](https://github.com/Autodesk/maya-usd/pull/4051)
+* Ignore Clang Format for LookdevXUsd folder [#4042](https://github.com/Autodesk/maya-usd/pull/4042)
+* Re-enable light test for USD 24.11 [#4038](https://github.com/Autodesk/maya-usd/pull/4038)
+* Removing deprecated renderman attributes from test .ma file [#4035](https://github.com/Autodesk/maya-usd/pull/4035)
+* Disable new light test on USD 24.11 [#4033](https://github.com/Autodesk/maya-usd/pull/4033)
+* Support for USD v24.11
+  * Initial support for USD v24.11 [#4024](https://github.com/Autodesk/maya-usd/pull/4024) [#4021](https://github.com/Autodesk/maya-usd/pull/4021) [#3992](https://github.com/Autodesk/maya-usd/pull/3992)
+* Fix IOR image test [#4019](https://github.com/Autodesk/maya-usd/pull/4019)
+* Fixes an AL Plugin test due to a node name change [#3977](https://github.com/Autodesk/maya-usd/pull/3977)
+* Make unit test scene file names unique [#3970](https://github.com/Autodesk/maya-usd/pull/3970)
+* Fix bad merge in string resources [#3964](https://github.com/Autodesk/maya-usd/pull/3964)
+* Fix Cmake configure overwriting plugInfo.json [#3958](https://github.com/Autodesk/maya-usd/pull/3958)
+
+**Translation Framework:**
+* Removing some readers for Renderman-for-Maya lights [#4049](https://github.com/Autodesk/maya-usd/pull/4049)
+* Expose export job args to Python [#4041](https://github.com/Autodesk/maya-usd/pull/4041)
+* Fix export roots when no default prim is specified [#3993](https://github.com/Autodesk/maya-usd/pull/3993)
+* Implement OpenPBR import/export [#3990](https://github.com/Autodesk/maya-usd/pull/3990)
+* Namespace in USD default prim export argument [#3989](https://github.com/Autodesk/maya-usd/pull/3989)
+* No save during export [#3982](https://github.com/Autodesk/maya-usd/pull/3982)
+* Add support for decimeters in export [#3976](https://github.com/Autodesk/maya-usd/pull/3976)
+* Automatically close prefs when changing units [#3960](https://github.com/Autodesk/maya-usd/pull/3960)
+* Units prefs during import [#3956](https://github.com/Autodesk/maya-usd/pull/3956)
+
+**Workflow:**
+* Make job context UI registeration be order-neutral [#4054](https://github.com/Autodesk/maya-usd/pull/4054)
+* Better support for grouping prims with references [#4048](https://github.com/Autodesk/maya-usd/pull/4048)
+* EMSUSD_1917 lock layer should preserve the selection [#4044](https://github.com/Autodesk/maya-usd/pull/4044)
+* Fix UsdMayaPrimWriter and UsdMayaPrimReader Python Wrappings [#4037](https://github.com/Autodesk/maya-usd/pull/4037)
+* Update change processing code [#4036](https://github.com/Autodesk/maya-usd/pull/4036)
+* Explicitly add required export arg [#4034](https://github.com/Autodesk/maya-usd/pull/4034)
+* Add textured mode handling to topo grapher [#4031](https://github.com/Autodesk/maya-usd/pull/4031)
+* Shorter nice names [#4029](https://github.com/Autodesk/maya-usd/pull/4029)
+* Don't dirty stage when loading [#4028](https://github.com/Autodesk/maya-usd/pull/4028)
+* LayerManager: Prevent unintended overwriting of unmodified USD layers at Maya save [#4027](https://github.com/Autodesk/maya-usd/pull/4027)
+* Fix crashes when saving layers to USD files in specific edge cases [#4018](https://github.com/Autodesk/maya-usd/pull/4018)
+* Make the collection widget support all collections [#4017](https://github.com/Autodesk/maya-usd/pull/4017)
+* Disable EditAsMaya for cylinder, disk and dome light [#4011](https://github.com/Autodesk/maya-usd/pull/4011)
+* Make group names more unique [#4010](https://github.com/Autodesk/maya-usd/pull/4010)
+* Improve stage edit target updates with refreshSystemLock callbacks [#4009](https://github.com/Autodesk/maya-usd/pull/4009)
+* Remove schema from prims [#4008](https://github.com/Autodesk/maya-usd/pull/4008)
+* Shader parameter sections should be expanded [#4006](https://github.com/Autodesk/maya-usd/pull/4006)
+* Manipulate prim schemas [#4004](https://github.com/Autodesk/maya-usd/pull/4004)
+* Add a class-prims filter to USD UFE [#3987](https://github.com/Autodesk/maya-usd/pull/3987)
+* Camera Performance Fix Backport [#3986](https://github.com/Autodesk/maya-usd/pull/3986)
+* Fix node origin detection [#3984](https://github.com/Autodesk/maya-usd/pull/3984)
+* Correct matrix manipulation [#3966](https://github.com/Autodesk/maya-usd/pull/3966)
+* Find the correct layer manager node [#3965](https://github.com/Autodesk/maya-usd/pull/3965)
+* No metadata on read-only layers [#3962](https://github.com/Autodesk/maya-usd/pull/3962)
+* Attribute Editor
+  * Fix AE extra attribute section [#4025](https://github.com/Autodesk/maya-usd/pull/4025)
+  * Fix custom AE callbacks [#4002](https://github.com/Autodesk/maya-usd/pull/4002)
+  * Fix crash in Attribute Editor when renaming a prim with pulled descendants [#3979](https://github.com/Autodesk/maya-usd/pull/3979)
+  * Modify AE section order [#3975](https://github.com/Autodesk/maya-usd/pull/3975)
+  * Support custom callback for primitives AE template [#3972](https://github.com/Autodesk/maya-usd/pull/3972)
+  * Refactor AE template [#3969](https://github.com/Autodesk/maya-usd/pull/3969)
+* Axis and Units
+  * Adjust axis and units section indent [#3983](https://github.com/Autodesk/maya-usd/pull/3983)
+  * Author metadata only on anonymous root layers [#3974](https://github.com/Autodesk/maya-usd/pull/3974)
+
+**Render:**
+* Do not contaminate HdStorm libraries with lobe pruning [#4066](https://github.com/Autodesk/maya-usd/pull/4066)
+* Lobe pruning shader optimization [#4016](https://github.com/Autodesk/maya-usd/pull/4016)
+* Add option to fallback to mayaDefaultStandardSurface shader fragment [#3957](https://github.com/Autodesk/maya-usd/pull/3957)
+* Optimize VP2 rendering of USD objects with geometric cut-outs [#3952](https://github.com/Autodesk/maya-usd/pull/3952)
+* Fix VP2 rendering of UsdPreviewSurface with opacityThreshold [#3947](https://github.com/Autodesk/maya-usd/pull/3947)
+* Material
+  * Optimize material libraries [#4055](https://github.com/Autodesk/maya-usd/pull/4055)
+  * Adjust test following renaming of the default OpenPBR material [#4005](https://github.com/Autodesk/maya-usd/pull/4005)
+  * Copies nodegraph input defaultgeomprop values during TopoNeutralGraph construction [#3980](https://github.com/Autodesk/maya-usd/pull/3980)
+  * Adds support for defaultgeomprop values on nodegraph inputs [#3968](https://github.com/Autodesk/maya-usd/pull/3968)
+
+**Shared Components:**
+* Implement theme scale in Maya Host [#4075](https://github.com/Autodesk/maya-usd/pull/4075)
+* Report error for invalid include and exclude [#4074](https://github.com/Autodesk/maya-usd/pull/4074)
+* Collection tab look [#4072](https://github.com/Autodesk/maya-usd/pull/4072)
+* Bring light linking changes from the shared repo [#4071](https://github.com/Autodesk/maya-usd/pull/4071)
+* Light linking undo and redo [#4067](https://github.com/Autodesk/maya-usd/pull/4067)
+* Fix expression UI [#4065](https://github.com/Autodesk/maya-usd/pull/4065)
+* Bring changes back from other light linking repo [#4064](https://github.com/Autodesk/maya-usd/pull/4064)
+* Collections: add option to remove all includes and excludes [#4058](https://github.com/Autodesk/maya-usd/pull/4058)
+* Refactor collection UI [#4053](https://github.com/Autodesk/maya-usd/pull/4053)
+* Fix minimum size and mouse scroll issue [#4052](https://github.com/Autodesk/maya-usd/pull/4052)
+* Light linking sync [#4046](https://github.com/Autodesk/maya-usd/pull/4046)
+* Drag and drop one or more scene objects from the outliner into the include or exclude list [#4030](https://github.com/Autodesk/maya-usd/pull/4030)
+* Add filtering search to the collection widget [#4023](https://github.com/Autodesk/maya-usd/pull/4023)
+* Support viewing and set the expansion rule of the collection [#4022](https://github.com/Autodesk/maya-usd/pull/4022)
+* Determine whether a collection includes all objects by default or not [#3988](https://github.com/Autodesk/maya-usd/pull/3988)
+
+**Documentation:**
+* Document how to get nice undo labels [#4070](https://github.com/Autodesk/maya-usd/pull/4070)
+* Update README.md [#4032](https://github.com/Autodesk/maya-usd/pull/4032)
+* Update maya-usd Readme.md [#4026](https://github.com/Autodesk/maya-usd/pull/4026)
+
+**Miscellaneous:**
+* Fix fatal error exit [#4043](https://github.com/Autodesk/maya-usd/pull/4043)
+* Adds LookdevXUsd Extension [#4040](https://github.com/Autodesk/maya-usd/pull/4040)
+* Fix warnings about the layer manager attribute [#3994](https://github.com/Autodesk/maya-usd/pull/3994)
+* Prevent warnings when reloading the plugin [#3959](https://github.com/Autodesk/maya-usd/pull/3959)
+
+## [v0.30.0] - 2024-10-16
+
+**Build:**
+* Trim down the UsdUfe linking to only what is needed [#3909](https://github.com/Autodesk/maya-usd/pull/3909)
+* Preparing for USD v24.08 build (with OneTBB)
+  * Build USD v24.08 (with oneTBB) [#3908](https://github.com/Autodesk/maya-usd/pull/3908)
+  * Build with USD v24.08 [#3891](https://github.com/Autodesk/maya-usd/pull/3891)
+* Unit test for multi export chasers with multi job contexts [#3897](https://github.com/Autodesk/maya-usd/pull/3897)
+* Updating callsites to use new NdrSdfTypeIndicator class [#3890](https://github.com/Autodesk/maya-usd/pull/3890)
+* Add required includes explicitly [#3862](https://github.com/Autodesk/maya-usd/pull/3862)
+* Remove unused ghc include [#3848](https://github.com/Autodesk/maya-usd/pull/3848)
+* Explicitly setting legacyMaterialScope arg in tests [#3819](https://github.com/Autodesk/maya-usd/pull/3819)
+
+**Translation Framework:**
+* Support relative references when export stages [#3900](https://github.com/Autodesk/maya-usd/pull/3900)
+* USD Support for Maya Dual Quaternion skinned shapes [#3886](https://github.com/Autodesk/maya-usd/pull/3886)
+* Generate material scope to be under the default prim that gets automatically determined [#3867](https://github.com/Autodesk/maya-usd/pull/3867)
+* Improve curve import sanity checking [#3858](https://github.com/Autodesk/maya-usd/pull/3858)
+* Fix the bug that default prim does not retain [#3849](https://github.com/Autodesk/maya-usd/pull/3849)
+* Fixed accessing JobExportArgs TfToken arguments in Python [#3845](https://github.com/Autodesk/maya-usd/pull/3845)
+* Save before export [#3843](https://github.com/Autodesk/maya-usd/pull/3843)
+* Export stages as references [#3839](https://github.com/Autodesk/maya-usd/pull/3839)
+* Export of Maya skeleton as USD comes in as a stage in the wrong place [#3820](https://github.com/Autodesk/maya-usd/pull/3820)
+
+**Workflow:**
+* Fix copying grouped meshes [#3906](https://github.com/Autodesk/maya-usd/pull/3906)
+* Save and restore non local edit target layer and anonymous layer  [#3904](https://github.com/Autodesk/maya-usd/pull/3904)
+* Update MaterialX node UInames [#3903](https://github.com/Autodesk/maya-usd/pull/3903)
+* Merge job context arguments with user arguments [#3899](https://github.com/Autodesk/maya-usd/pull/3899)
+* USD Lights:
+  * Add more light shapes supports in the viewport [#3896](https://github.com/Autodesk/maya-usd/pull/3896)
+  * Add fallback light type for unsupported lights [#3883](https://github.com/Autodesk/maya-usd/pull/3883)
+* Update AE interface for Pxr Reference Assembly nodes [#3889](https://github.com/Autodesk/maya-usd/pull/3889)
+* Support selection in duplicate to USD [#3884](https://github.com/Autodesk/maya-usd/pull/3884)
+* Duplicate materials without meshes [#3876](https://github.com/Autodesk/maya-usd/pull/3876)
+* Fix multi-layer parenting [#3874](https://github.com/Autodesk/maya-usd/pull/3874)
+* Improve UI name generation [#3871](https://github.com/Autodesk/maya-usd/pull/3871)
+* Don't set kind when editing as Maya [#3868](https://github.com/Autodesk/maya-usd/pull/3868)
+* Fix outliner set text colour on prims [#3853](https://github.com/Autodesk/maya-usd/pull/3853)
+* Support users naming node "world"
+  * Nothing prevents users from naming nodes "world" [#3852](https://github.com/Autodesk/maya-usd/pull/3852)
+  * Adapt to Maya Ufe world node change [#3842](https://github.com/Autodesk/maya-usd/pull/3842) 
+* Improve Maya pivot support [#3851](https://github.com/Autodesk/maya-usd/pull/3851)
+* Add Reload References Command [#3844](https://github.com/Autodesk/maya-usd/pull/3844)
+* Write Autodesk metadata to the session layer [#3841](https://github.com/Autodesk/maya-usd/pull/3841)
+* API implementation of UFE SceneSegmentHandler getter method for the dcc root path [#3834](https://github.com/Autodesk/maya-usd/pull/3834)
+* Push/pull: pushing skel data back to USD can put objects in wrong position [#3826](https://github.com/Autodesk/maya-usd/pull/3826)
+* Fix display layer loss when merging/duplicating to USD [#3807](https://github.com/Autodesk/maya-usd/pull/3807)
+
+**Render:**
+* Fix transmission issues [#3857](https://github.com/Autodesk/maya-usd/pull/3857)
+* Fixing renamed parameters [#3833](https://github.com/Autodesk/maya-usd/pull/3833)
+* Fix diffuse lighting with aiAreaLight [#3830](https://github.com/Autodesk/maya-usd/pull/3830)
+
+**Miscellaneous:**
+* Fix materials options retention [#3894](https://github.com/Autodesk/maya-usd/pull/3894)
+* Remove matrix multiply operator overloads that potentially lose [#3888](https://github.com/Autodesk/maya-usd/pull/3888)
+* Changed tsverify to manual nullptr check [#3875](https://github.com/Autodesk/maya-usd/pull/3875)
+* MayaUsdAPI - enhance with missing functions required for LookdevX [#3869](https://github.com/Autodesk/maya-usd/pull/3869)
+* Default prim tooltip [#3863](https://github.com/Autodesk/maya-usd/pull/3863)
+* Same-name Python edit routers [#3856](https://github.com/Autodesk/maya-usd/pull/3856)
+* UsdUfe: Move Ufe::Transform3d interface implementation [#3828](https://github.com/Autodesk/maya-usd/pull/3828)
+
+## [v0.29.0] - 2024-07-31
+
+**Build:**
+* MayaUsd: Code cleanup - No pragma once [#3811](https://github.com/Autodesk/maya-usd/pull/3811)
+* Fix tests that are modifying source folder [#3802](https://github.com/Autodesk/maya-usd/pull/3802)
+* Update googletest & gulrak (filesystem) [#3800](https://github.com/Autodesk/maya-usd/pull/3800)
+* Remove "using namespace UsdUfe" from api.h [#3770](https://github.com/Autodesk/maya-usd/pull/3770)
+* Fix all test that relied on syncolor [#3763](https://github.com/Autodesk/maya-usd/pull/3763)
+* UsdUfe: create standalone builds for MaxUsd [#3757](https://github.com/Autodesk/maya-usd/pull/3757)
+* Fix Pixar plugin for USD v24.03 [#3689](https://github.com/Autodesk/maya-usd/pull/3689)
+
+**Translation Framework:**
+* Export Material:
+  * Suport legacy metarial scope mode [#3810](https://github.com/Autodesk/maya-usd/pull/3810)
+  * Material scope as default prim [#3801](https://github.com/Autodesk/maya-usd/pull/3801)
+  * Export assigned materials [#3786](https://github.com/Autodesk/maya-usd/pull/3786)
+  * Export materials without meshes [#3785](https://github.com/Autodesk/maya-usd/pull/3785)
+  * Export material scope [#3774](https://github.com/Autodesk/maya-usd/pull/3774)
+  * Export materials checkbox [#3768](https://github.com/Autodesk/maya-usd/pull/3768)
+* Add remapUVSetsTo option to UsdImport [#3776](https://github.com/Autodesk/maya-usd/pull/3776)
+* Add support to import Usd Blendshape as Maya blendshapes [#3775](https://github.com/Autodesk/maya-usd/pull/3775)
+* Add support for env var expansions in file node writers [#3769](https://github.com/Autodesk/maya-usd/pull/3769)
+* Only contain rootprim in defaultprim list if its available [#3759](https://github.com/Autodesk/maya-usd/pull/3759)
+* Add flag to export empty transform [#3741](https://github.com/Autodesk/maya-usd/pull/3741)
+* Fixed an issue exporting USD skel with new root option [#3729](https://github.com/Autodesk/maya-usd/pull/3729)
+* Fix blendshape names by using parent node instead of mesh shape[#3703](https://github.com/Autodesk/maya-usd/pull/3703)
+
+**Workflow:**
+* Copy Paste: 
+  * Cut a prim and not have it paste if the cut is restricted [#3793](https://github.com/Autodesk/maya-usd/pull/3793)
+  * Support copy and then paste a prim as a sibling [#3791](https://github.com/Autodesk/maya-usd/pull/3791)
+  * Pasted prims should be selected [#3777](https://github.com/Autodesk/maya-usd/pull/3777)
+  * MayaUSD clipboard error messages when opening up preferences window [#3758](https://github.com/Autodesk/maya-usd/pull/3758)
+  * Implement Copy\paste capabilities on USD Data [#3661](https://github.com/Autodesk/maya-usd/pull/3661)
+* Fix rotation when prim already single-axis rotation [#3756](https://github.com/Autodesk/maya-usd/pull/3756)
+* Fix center pivot command [#3755](https://github.com/Autodesk/maya-usd/pull/3755)
+* Fast Python routing [#3753](https://github.com/Autodesk/maya-usd/pull/3753)
+* Fix the position of the Maya manipulators when USD pivot are used instead of Maya pivots. [#3752](https://github.com/Autodesk/maya-usd/pull/3752)
+* Extend the delete cmd edit routing [#3747](https://github.com/Autodesk/maya-usd/pull/3747)
+* Edit routing for transform commands [#3746](https://github.com/Autodesk/maya-usd/pull/3746)
+* Material binding strength in AE [#3736](https://github.com/Autodesk/maya-usd/pull/3736)
+* Material custom control for AE [#3731](https://github.com/Autodesk/maya-usd/pull/3731)
+* Repaint layer editor when layer muting changes [#3725](https://github.com/Autodesk/maya-usd/pull/3725)
+* Fix layer editor refresh when reloading from AE [#3722](https://github.com/Autodesk/maya-usd/pull/3722)
+* Add default value concept to USD datamodel for UFE [#3721](https://github.com/Autodesk/maya-usd/pull/3721)
+* Filter items hidden in the outliner [#3719](https://github.com/Autodesk/maya-usd/pull/3719)
+* Payload command undo to restore payload rules [#3714](https://github.com/Autodesk/maya-usd/pull/3714)
+* Support EditRouter in delete command [#3695](https://github.com/Autodesk/maya-usd/pull/3695)
+
+**Render:**
+* Backport MaterialX 1.39 fix for source code node [#3795](https://github.com/Autodesk/maya-usd/pull/3795)
+* Fix UDIMs for custom textures [#3787](https://github.com/Autodesk/maya-usd/pull/3787)
+* Remove down cast of world space hit point in HdxPickHit [#3754](https://github.com/Autodesk/maya-usd/pull/3754)
+* Instance selection highlight [#3744](https://github.com/Autodesk/maya-usd/pull/3744)
+
+**Documentation:**
+* Create SECURITY.md [#3806](https://github.com/Autodesk/maya-usd/pull/3806)
+* Improve the undo/redo documentation [#3764](https://github.com/Autodesk/maya-usd/pull/3764)
+* Minor fixes on AL migration guide, updated the Maya doc links to be 2025 [#3738](https://github.com/Autodesk/maya-usd/pull/3738)
+* Migration guide from AL_USDMaya to Autodesk's MayaUSD [#3735](https://github.com/Autodesk/maya-usd/pull/3735)
+
+**Miscellaneous:**
+* Hides ramp attributes in AE Template [#3812](https://github.com/Autodesk/maya-usd/pull/3812)
+* Disable material in sync with meshes when duplicating [#3805](https://github.com/Autodesk/maya-usd/pull/3805)
+* Don't depend on MayaUSD if not using it [#3794](https://github.com/Autodesk/maya-usd/pull/3794)
+* Add tooltip for lookdevx button in material section in AE [#3788](https://github.com/Autodesk/maya-usd/pull/3788)
+* Update for a change in MaterialX 1.38.10 [#3771](https://github.com/Autodesk/maya-usd/pull/3771)
+* Graph the material in LookdevX [#3740](https://github.com/Autodesk/maya-usd/pull/3740)
+* UsdUfe: Move Ufe::Attributes interface implementation [#3737](https://github.com/Autodesk/maya-usd/pull/3737)
+* Early out of fn if the required 'pxrUsd' plugin isn't loaded [#3724](https://github.com/Autodesk/maya-usd/pull/3724)
+* Wrap the 'unilinearizeColors' parameter [#3723](https://github.com/Autodesk/maya-usd/pull/3723)
+* Fix incorrect version check in test [#3720](https://github.com/Autodesk/maya-usd/pull/3720)
+
+## [v0.28.0] - 2024-05-23
+
+**Build:**
+* Update for USD v24.03 [#3684](https://github.com/Autodesk/maya-usd/pull/3684)
+* Fixup UFE_PREVIEW_NUM to use better Ufe cmake checks [#3673](https://github.com/Autodesk/maya-usd/pull/3673)
+* Update testMayaUsdInfoCommand.py [#3670](https://github.com/Autodesk/maya-usd/pull/3670)
+* Stage loading problems using MEL proc [#3667](https://github.com/Autodesk/maya-usd/pull/3667)
+* Use the Using Directive macro [#3628](https://github.com/Autodesk/maya-usd/pull/3628)
+* Minimal API needed by LookdevX to decouple from mayaUsd [#3608](https://github.com/Autodesk/maya-usd/pull/3608)
+* Link against mayaUsdAPI to preload it for other plugins [#3606](https://github.com/Autodesk/maya-usd/pull/3606)
+* Maya is no longer using a Preview Release number [#3602](https://github.com/Autodesk/maya-usd/pull/3602)
+* Enable "Implicit Namespace Packages" feature [#3581](https://github.com/Autodesk/maya-usd/pull/3581)
+
+**Translation Framework:**
+* Root Prim and Root Prim Type:
+    * Add the feature to set the root prim type on export [#3630](https://github.com/Autodesk/maya-usd/pull/3630)
+    * Disable root prim type UI when no root prim entered [#3708](https://github.com/Autodesk/maya-usd/pull/3708)
+    * Make rootPrimType persistent through exports [#3699](https://github.com/Autodesk/maya-usd/pull/3699)
+    * Make root prim persistent and update default prim accordingly [#3641](https://github.com/Autodesk/maya-usd/pull/3641)
+* Default Prim:
+    * Persist the default prim selection if its available [#3705](https://github.com/Autodesk/maya-usd/pull/3705)
+    * Expose all export options to chasers [#3698](https://github.com/Autodesk/maya-usd/pull/3698)
+    * Keep rootprim in default prim list when export options change [#3692](https://github.com/Autodesk/maya-usd/pull/3692)
+* Import/Export Plugin Configuration
+    * Hide unwanted export plugin options [#3710](https://github.com/Autodesk/maya-usd/pull/3710)
+    * Created import plugin config UI [#3676](https://github.com/Autodesk/maya-usd/pull/3676)
+    * Updated the export plugin configuration UI [#3655](https://github.com/Autodesk/maya-usd/pull/3655)
+* Support exporting a joint hierarchy inside a node tree to the root level [#3681](https://github.com/Autodesk/maya-usd/pull/3681)
+* Fix the issue caused duplicate as USD failed [#3601](https://github.com/Autodesk/maya-usd/pull/3601)
+* Call CanExport() per object instead of per export [#3592](https://github.com/Autodesk/maya-usd/pull/3592)
+
+**Workflow:**
+* Layer Locking:
+    * Prevent unlocking system-locked layer when unlocking parents [#3706](https://github.com/Autodesk/maya-usd/pull/3706)
+    * Update layer editor lock status after adding a layer [#3704](https://github.com/Autodesk/maya-usd/pull/3704)
+    * Adds a callback for RefreshSystemLock when a layer's lock status is changed [#3671](https://github.com/Autodesk/maya-usd/pull/3671)
+    * Fixed saving vs locked layers [#3669](https://github.com/Autodesk/maya-usd/pull/3669)
+    * Un-shared stage and its sublayers will appear as system lock [#3654](https://github.com/Autodesk/maya-usd/pull/3654)
+    * Fixes the issue where the lock state isn't applied from Maya file when the layer is both locked and muted [#3650](https://github.com/Autodesk/maya-usd/pull/3650)
+    * Adds the ability to lock layers and sublayers at once [#3646](https://github.com/Autodesk/maya-usd/pull/3646)
+    * Locked layer status persists between Maya sessions [#3638](https://github.com/Autodesk/maya-usd/pull/3638)
+    * Adds write permission checks to layer system-locking [#3626](https://github.com/Autodesk/maya-usd/pull/3626)
+    * Adds the ability to System-lock a layer [#3619](https://github.com/Autodesk/maya-usd/pull/3619)
+    * Added Locking mechanism to layers [#3595](https://github.com/Autodesk/maya-usd/pull/3595)
+* Allow deleting prims carrying a loaded payload [#3712](https://github.com/Autodesk/maya-usd/pull/3712)
+* When opening a file dependency in the AE, the dialog doesn't open to that path [#3709](https://github.com/Autodesk/maya-usd/pull/3709)
+* Layer Editor UI:
+    * Updates Layer Editor color visuals [#3685](https://github.com/Autodesk/maya-usd/pull/3685)
+    * Improve Layer Eidtor UI [#3649](https://github.com/Autodesk/maya-usd/pull/3649)
+    * Update the look of the Layer Editor [#3643](https://github.com/Autodesk/maya-usd/pull/3643)
+* Implement Ufe::Camera::renderable() for Maya Master (2026) [#3683](https://github.com/Autodesk/maya-usd/pull/3683)
+* Clear the selected stage layer database attribute when no stage selected [#3680](https://github.com/Autodesk/maya-usd/pull/3680)
+* Remove lingering invalid prims after adding prim under prim that is deactivated [#3679](https://github.com/Autodesk/maya-usd/pull/3679)
+* Targets the session layer when no other layers are modifiable [#3665](https://github.com/Autodesk/maya-usd/pull/3665)
+* Add support for getting native type via metadata [#3648](https://github.com/Autodesk/maya-usd/pull/3648)
+* Restrict UFE nodes according to proxyNode's primPath [#3640](https://github.com/Autodesk/maya-usd/pull/3640)
+* Better universal manipulator undo redo [#3615](https://github.com/Autodesk/maya-usd/pull/3615)
+* Keep Maya Ref valid after saving [#3609](https://github.com/Autodesk/maya-usd/pull/3609)
+* Fix the crash when editing as Maya an instanced object and then undoing the edit-as-Maya [#3593](https://github.com/Autodesk/maya-usd/pull/3593)
+
+**Render:**
+* Fix crash due to invalid shader [#3702](https://github.com/Autodesk/maya-usd/pull/3702)
+* Fix reading past the end of the buffer causing incorrect rendering and crash later on [#3663](https://github.com/Autodesk/maya-usd/pull/3663)
+* Add support for doubleSided attribute on USD prims in VP2 delegate [#3656](https://github.com/Autodesk/maya-usd/pull/3656)
+* Remember unknown color spaces [#3652](https://github.com/Autodesk/maya-usd/pull/3652)
+* Fix performance of instanceable prims [#3607](https://github.com/Autodesk/maya-usd/pull/3607)
+* Allowing meshes with insufficient primvars data size [#3586](https://github.com/Autodesk/maya-usd/pull/3586)
+
+**Documentation:**
+* Adding a C++ export plugin example [#3688](https://github.com/Autodesk/maya-usd/pull/3688)
+* Publish USD Branches [#3645](https://github.com/Autodesk/maya-usd/pull/3645)
+* Improve the undo/redo documentation [#3644](https://github.com/Autodesk/maya-usd/pull/3644)
+* Update codingGuidelines.md [#3633](https://github.com/Autodesk/maya-usd/pull/3633)
+
+**Miscellaneous:**
+* Layer editor icon scaling [#3715](https://github.com/Autodesk/maya-usd/pull/3715)
+* Fix the crash when attempting to save a USD file from USD Layer Editor [#3697](https://github.com/Autodesk/maya-usd/pull/3697)
+* Author references but do not have the UsdStage compose [#3696](https://github.com/Autodesk/maya-usd/pull/3696)
+* Fix image file attribute detection [#3693](https://github.com/Autodesk/maya-usd/pull/3693)
+* Dope Sheet : Error when right-click on channel set if USD plugin installed [#3691](https://github.com/Autodesk/maya-usd/pull/3691)
+* Fix conflict in shaders with MaterialX 1.38.9 [#3678](https://github.com/Autodesk/maya-usd/pull/3678)
+* Fix mistake in command name [#3668](https://github.com/Autodesk/maya-usd/pull/3668)
+* Allow Raw colorspace aliases in file texture validation [#3653](https://github.com/Autodesk/maya-usd/pull/3653)
+
+## [v0.27.0] - 2024-02-06
+
+**Build:**
+* Refactor duplication code [#3573](https://github.com/Autodesk/maya-usd/pull/3573)
+* Fix broken CXX ABI detection [#3562](https://github.com/Autodesk/maya-usd/pull/3562)
+* Add Unit test for parent to selection [#3558](https://github.com/Autodesk/maya-usd/pull/3558)
+* Updated workflow for running preflight [#3545](https://github.com/Autodesk/maya-usd/pull/3545)
+* Add explicit boost/optional include [#3540](https://github.com/Autodesk/maya-usd/pull/3540)
+* Restore OpenEXR test [#3532](https://github.com/Autodesk/maya-usd/pull/3532)
+* Deprecate boost optional for sdf copy spec [#3522](https://github.com/Autodesk/maya-usd/pull/3522)
+* Update usage of the Hydra API [#3521](https://github.com/Autodesk/maya-usd/pull/3521)
+* Add versioning comments [#3520](https://github.com/Autodesk/maya-usd/pull/3520)
+* MayaUSD : Bump UFE version to v5.0 [#3514](https://github.com/Autodesk/maya-usd/pull/3514)
+* Allow specializing the topo neutral graph generator [#3503](https://github.com/Autodesk/maya-usd/pull/3503)
+* Run more of the Pixar plugin tests [#3479](https://github.com/Autodesk/maya-usd/pull/3479)
+* Build USD v23.11 with Python 3.11/OSD 3.6 and update ecg-maya-usd [#3459](https://github.com/Autodesk/maya-usd/pull/3459)
+* Add missing include [#3455](https://github.com/Autodesk/maya-usd/pull/3455)
+* Support for USD v23.11 [#3447](https://github.com/Autodesk/maya-usd/pull/3447)
+
+**Translation Framework:**
+* Set the default prim on export [#3572](https://github.com/Autodesk/maya-usd/pull/3572)
+* Export MaterialX path for extra nodes [#3516](https://github.com/Autodesk/maya-usd/pull/3516)
+* Fix copying the proxy shape node [#3489](https://github.com/Autodesk/maya-usd/pull/3489)
+* Provide access to the Export Selected options [#3488](https://github.com/Autodesk/maya-usd/pull/3488)
+* Register USD data in the Maya File Path Editor [#3482](https://github.com/Autodesk/maya-usd/pull/3482)
+* Fix errors when trying to cache a rig with merge transforms ON and namespaces OFF [#3474](https://github.com/Autodesk/maya-usd/pull/3474)
+* Determine how to read UsdLux prims with an envvar [#3385](https://github.com/Autodesk/maya-usd/pull/3385)
+
+**Workflow:**
+* Attribute Editor:
+    * Fix AE flashing when adding many attributes [#3579](https://github.com/Autodesk/maya-usd/pull/3579)
+    * Fix AE tooltip and status bar message [#3571](https://github.com/Autodesk/maya-usd/pull/3571)
+    * Tooltips are not formatted correctly [#3536](https://github.com/Autodesk/maya-usd/pull/3536)
+* Add unit test for circular relationships [#3574](https://github.com/Autodesk/maya-usd/pull/3574)
+* Recognize NodeGraph EnumString attributes [#3568](https://github.com/Autodesk/maya-usd/pull/3568)
+* Fix copying node with Arnold material [#3566](https://github.com/Autodesk/maya-usd/pull/3566)
+* Layer Editor's "Revert to File" menu item is renamed to "Reload" [#3565](https://github.com/Autodesk/maya-usd/pull/3565)
+* Allow creating custom types at NodeGraph boundaries [#3564](https://github.com/Autodesk/maya-usd/pull/3564)
+* Fix prettify name routine when all caps name has a number at the end [#3557](https://github.com/Autodesk/maya-usd/pull/3557)
+* Fixes a bug with UsdAttributeEnumString that have token values [#3550](https://github.com/Autodesk/maya-usd/pull/3550)
+* Duplicate-to-USD support relationship targets [#3537](https://github.com/Autodesk/maya-usd/pull/3537)
+* Don't show set-as-default prim when already default [#3533](https://github.com/Autodesk/maya-usd/pull/3533)
+* Use uimin if uisoftmin is missing [#3531](https://github.com/Autodesk/maya-usd/pull/3531)
+* Bulk Editing:
+    * Make the bulk menu look modern and up to date with VXD [#3528](https://github.com/Autodesk/maya-usd/pull/3528)
+    * Add bulk editing support for unload and load with descendants [#3496](https://github.com/Autodesk/maya-usd/pull/3496)
+* Allow parenting under a stronger layer [#3526](https://github.com/Autodesk/maya-usd/pull/3526)
+* Fixes an out of range crash that only occurs in Debug mode [#3519](https://github.com/Autodesk/maya-usd/pull/3519)
+* Use proper API to set color space in USD [#3515](https://github.com/Autodesk/maya-usd/pull/3515)
+* Fix edit target after layer clear [#3508](https://github.com/Autodesk/maya-usd/pull/3508)
+* From LookdevX bring over UINodeGraphNode new virtual functions [#3506](https://github.com/Autodesk/maya-usd/pull/3506)
+* Allow saving locked layers [#3504](https://github.com/Autodesk/maya-usd/pull/3504)
+* Fix crash when duplicating a proxy shape [#3449](https://github.com/Autodesk/maya-usd/pull/3449)
+* Fix finding strongest layer [#3498](https://github.com/Autodesk/maya-usd/pull/3498)
+* Support relative cache to USD in anon layers [#3495](https://github.com/Autodesk/maya-usd/pull/3495)
+* Add a third party naming convention for shader outliner icons [#3494](https://github.com/Autodesk/maya-usd/pull/3494)
+* Send subtree invalidate on undo mark instanceable [#3484](https://github.com/Autodesk/maya-usd/pull/3484)
+* Apply restrictions for activation and instanceable [#3463](https://github.com/Autodesk/maya-usd/pull/3463)
+* Fixes Edit As Maya Options Convert Instances Not Retaining From Session to Session [#3443](https://github.com/Autodesk/maya-usd/pull/3443)
+
+**Render:**
+* Fix crash in topo handler [#3570](https://github.com/Autodesk/maya-usd/pull/3570)
+* Wait cursor during long VP2 updates [#3563](https://github.com/Autodesk/maya-usd/pull/3563)
+* Fix incorrect tangent fixup [#3559](https://github.com/Autodesk/maya-usd/pull/3559)
+* Fix the transform nodes crash [#3552](https://github.com/Autodesk/maya-usd/pull/3552)
+* Do not bail out after a failed validate call [#3546](https://github.com/Autodesk/maya-usd/pull/3546)
+* Fix instanceable prims not rendered in Hydra [#3534](https://github.com/Autodesk/maya-usd/pull/3534)
+* Fix multiple NodeGraph connections [#3509](https://github.com/Autodesk/maya-usd/pull/3509)
+* Update OCIO code to handle new Hydra colorspace info [#3507](https://github.com/Autodesk/maya-usd/pull/3507)
+* Use new Hd MtlxStdLibraries API [#3493](https://github.com/Autodesk/maya-usd/pull/3493)
+* Fix legacy CM nodes affected by MaterialX 1.38.8 [#3481](https://github.com/Autodesk/maya-usd/pull/3481)
+* Get watch list of traversed nodes [#3462](https://github.com/Autodesk/maya-usd/pull/3462)
+* Implemented MaterialX Topo Handler [#3445](https://github.com/Autodesk/maya-usd/pull/3445)
+
+**Documentation:**
+* Update CONTRIBUTING.md to point to coding guidelines [#3556](https://github.com/Autodesk/maya-usd/pull/3556)
+* Update README.md with a link to the release page [#3524](https://github.com/Autodesk/maya-usd/pull/3524)
+* Update helpTableMayaUSD [#3453](https://github.com/Autodesk/maya-usd/pull/3453)
+* Update USD links [#3452](https://github.com/Autodesk/maya-usd/pull/3452)
+
+**Miscellaneous:**
+* Fix slow scene load performance [#3576](https://github.com/Autodesk/maya-usd/pull/3576)
+* Resource Identifier warning on first launch of MayaUSD [#3561](https://github.com/Autodesk/maya-usd/pull/3561)
+* USD Prefs: "Use Display Color" preferences are maintained when user cancels change [#3553](https://github.com/Autodesk/maya-usd/pull/3553)
+* Make New layers collapsed [#3549](https://github.com/Autodesk/maya-usd/pull/3549)
+* Expand and collapse all layer items [#3544](https://github.com/Autodesk/maya-usd/pull/3544)
+* Fixes USDZ extension not being accepted in prim hierarchy view [#3530](https://github.com/Autodesk/maya-usd/pull/3530)
+* Remove the load payloads proxy shape attribute [#3523](https://github.com/Autodesk/maya-usd/pull/3523)
+* Fix reloading scene with layers saved in the Maya scene [#3518](https://github.com/Autodesk/maya-usd/pull/3518)
+* Fix Linux icon paths [#3517](https://github.com/Autodesk/maya-usd/pull/3517)
+* Use wait cursor for payload commands [#3513](https://github.com/Autodesk/maya-usd/pull/3513)
+* Integrated UsdSceneItemMetaData Into UsdSceneItem [#3505](https://github.com/Autodesk/maya-usd/pull/3505)
+* Support custom display name for USD attributes [#3499](https://github.com/Autodesk/maya-usd/pull/3499)
+* Pipe UsdStage data and Complexity to proxy nodes [#3492](https://github.com/Autodesk/maya-usd/pull/3492)
+
 ## [v0.26.0] - 2023-11-21
 
 **Build:**

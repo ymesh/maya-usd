@@ -135,6 +135,12 @@ public:
         const VtVec3fArray& bbox,
         const UsdTimeCode&  timeSample);
 
+    // Add the path to an exported material.
+    void AddMaterialPath(const SdfPath& matPath) { _materialPaths.emplace_back(matPath); }
+
+    // Retrieve all exported material paths.
+    const std::vector<SdfPath>& GetMaterialPaths() { return _materialPaths; }
+
 protected:
     /// Opens the stage with the given \p filename for writing.
     /// If \p append is \c true, the file must already exist.
@@ -209,7 +215,7 @@ private:
     std::map<MObjectHandle, std::pair<size_t, size_t>, MObjectHandleComp> _objectsToMasterWriters;
 
     UsdPrim mInstancesPrim;
-    SdfPath mParentScopePath;
+    SdfPath mRootPrimPath;
 
     std::unique_ptr<UsdMaya_SkelBindingsProcessor> _skelBindingsProcessor;
 
@@ -218,6 +224,8 @@ private:
     // some types not resolved by the UsdMayaPrimWriterRegistry will get
     // resolved in this map).
     std::map<std::string, UsdMayaPrimWriterRegistry::WriterFactoryFn> mWriterFactoryCache;
+
+    std::vector<SdfPath> _materialPaths;
 
     // UsdMaya_InstancedNodeWriter is in a separate file, but functions as
     // an internal helper for UsdMayaWriteJobContext.

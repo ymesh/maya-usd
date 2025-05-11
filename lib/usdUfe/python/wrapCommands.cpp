@@ -19,14 +19,15 @@
 #include <usdUfe/ufe/UsdUndoClearPayloadsCommand.h>
 #include <usdUfe/ufe/UsdUndoClearReferencesCommand.h>
 #include <usdUfe/ufe/UsdUndoPayloadCommand.h>
+#include <usdUfe/ufe/UsdUndoReloadRefCommand.h>
 #include <usdUfe/ufe/UsdUndoSetDefaultPrimCommand.h>
+#include <usdUfe/ufe/UsdUndoSetKindCommand.h>
 #include <usdUfe/ufe/UsdUndoToggleActiveCommand.h>
 #include <usdUfe/ufe/UsdUndoToggleInstanceableCommand.h>
 
-#include <boost/python.hpp>
-#include <boost/python/def.hpp>
+#include <pxr_python.h>
 
-using namespace boost::python;
+using namespace PXR_BOOST_PYTHON_NAMESPACE;
 
 namespace {
 
@@ -52,6 +53,10 @@ UsdUfe::UsdUndoClearReferencesCommand* ClearReferencesCommandInit(const PXR_NS::
     return new UsdUfe::UsdUndoClearReferencesCommand(prim);
 }
 
+UsdUfe::UsdUndoReloadRefCommand* ReloadReferenceCommand(const PXR_NS::UsdPrim& prim)
+{
+    return new UsdUfe::UsdUndoReloadRefCommand(prim);
+}
 UsdUfe::UsdUndoToggleActiveCommand* ToggleActiveCommandInit(const PXR_NS::UsdPrim& prim)
 {
     return new UsdUfe::UsdUndoToggleActiveCommand(prim);
@@ -60,6 +65,12 @@ UsdUfe::UsdUndoToggleActiveCommand* ToggleActiveCommandInit(const PXR_NS::UsdPri
 UsdUfe::UsdUndoToggleInstanceableCommand* ToggleInstanceableCommandInit(const PXR_NS::UsdPrim& prim)
 {
     return new UsdUfe::UsdUndoToggleInstanceableCommand(prim);
+}
+
+UsdUfe::UsdUndoSetKindCommand*
+SetKindCommandInit(const PXR_NS::UsdPrim& prim, const PXR_NS::TfToken& kind)
+{
+    return new UsdUfe::UsdUndoSetKindCommand(prim, kind);
 }
 
 UsdUfe::UsdUndoLoadPayloadCommand*
@@ -90,7 +101,7 @@ void wrapCommands()
 {
     {
         using This = UsdUfe::UsdUndoClearDefaultPrimCommand;
-        class_<This, boost::noncopyable>("ClearDefaultPrimCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ClearDefaultPrimCommand", no_init)
             .def("__init__", make_constructor(ClearDefaultPrimCommandInit))
             .def("execute", &UsdUfe::UsdUndoClearDefaultPrimCommand::execute)
             .def("undo", &UsdUfe::UsdUndoClearDefaultPrimCommand::undo)
@@ -98,7 +109,7 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoSetDefaultPrimCommand;
-        class_<This, boost::noncopyable>("SetDefaultPrimCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("SetDefaultPrimCommand", no_init)
             .def("__init__", make_constructor(SetDefaultPrimCommandInit))
             .def("execute", &UsdUfe::UsdUndoSetDefaultPrimCommand::execute)
             .def("undo", &UsdUfe::UsdUndoSetDefaultPrimCommand::undo)
@@ -106,7 +117,7 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoAddPayloadCommand;
-        class_<This, boost::noncopyable>("AddPayloadCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("AddPayloadCommand", no_init)
             .def("__init__", make_constructor(AddPayloadCommandInit))
             .def("execute", &UsdUfe::UsdUndoAddPayloadCommand::execute)
             .def("undo", &UsdUfe::UsdUndoAddPayloadCommand::undo)
@@ -114,7 +125,7 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoClearPayloadsCommand;
-        class_<This, boost::noncopyable>("ClearPayloadsCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ClearPayloadsCommand", no_init)
             .def("__init__", make_constructor(ClearPayloadsCommandInit))
             .def("execute", &UsdUfe::UsdUndoClearPayloadsCommand::execute)
             .def("undo", &UsdUfe::UsdUndoClearPayloadsCommand::undo)
@@ -122,7 +133,7 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoAddReferenceCommand;
-        class_<This, boost::noncopyable>("AddReferenceCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("AddReferenceCommand", no_init)
             .def("__init__", make_constructor(AddReferenceCommandInit))
             .def("execute", &UsdUfe::UsdUndoAddReferenceCommand::execute)
             .def("undo", &UsdUfe::UsdUndoAddReferenceCommand::undo)
@@ -130,15 +141,23 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoClearReferencesCommand;
-        class_<This, boost::noncopyable>("ClearReferencesCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ClearReferencesCommand", no_init)
             .def("__init__", make_constructor(ClearReferencesCommandInit))
             .def("execute", &UsdUfe::UsdUndoClearReferencesCommand::execute)
             .def("undo", &UsdUfe::UsdUndoClearReferencesCommand::undo)
             .def("redo", &UsdUfe::UsdUndoClearReferencesCommand::redo);
     }
     {
+        using This = UsdUfe::UsdUndoReloadRefCommand;
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ReloadReferenceCommand", no_init)
+            .def("__init__", make_constructor(ReloadReferenceCommand))
+            .def("execute", &UsdUfe::UsdUndoReloadRefCommand::execute)
+            .def("undo", &UsdUfe::UsdUndoReloadRefCommand::undo)
+            .def("redo", &UsdUfe::UsdUndoReloadRefCommand::redo);
+    }
+    {
         using This = UsdUfe::UsdUndoToggleActiveCommand;
-        class_<This, boost::noncopyable>("ToggleActiveCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ToggleActiveCommand", no_init)
             .def("__init__", make_constructor(ToggleActiveCommandInit))
             .def("execute", &UsdUfe::UsdUndoToggleActiveCommand::execute)
             .def("undo", &UsdUfe::UsdUndoToggleActiveCommand::undo)
@@ -146,15 +165,23 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoToggleInstanceableCommand;
-        class_<This, boost::noncopyable>("ToggleInstanceableCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("ToggleInstanceableCommand", no_init)
             .def("__init__", make_constructor(ToggleInstanceableCommandInit))
             .def("execute", &UsdUfe::UsdUndoToggleInstanceableCommand::execute)
             .def("undo", &UsdUfe::UsdUndoToggleInstanceableCommand::undo)
             .def("redo", &UsdUfe::UsdUndoToggleInstanceableCommand::redo);
     }
     {
+        using This = UsdUfe::UsdUndoSetKindCommand;
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("SetKindCommand", no_init)
+            .def("__init__", make_constructor(SetKindCommandInit))
+            .def("execute", &UsdUfe::UsdUndoSetKindCommand::execute)
+            .def("undo", &UsdUfe::UsdUndoSetKindCommand::undo)
+            .def("redo", &UsdUfe::UsdUndoSetKindCommand::redo);
+    }
+    {
         using This = UsdUfe::UsdUndoLoadPayloadCommand;
-        class_<This, boost::noncopyable>("LoadPayloadCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("LoadPayloadCommand", no_init)
             .def("__init__", make_constructor(LoadPayloadCommandInit))
             .def("execute", &UsdUfe::UsdUndoLoadPayloadCommand::execute)
             .def("undo", &UsdUfe::UsdUndoLoadPayloadCommand::undo)
@@ -162,7 +189,7 @@ void wrapCommands()
     }
     {
         using This = UsdUfe::UsdUndoUnloadPayloadCommand;
-        class_<This, boost::noncopyable>("UnloadPayloadCommand", no_init)
+        class_<This, PXR_BOOST_PYTHON_NAMESPACE::noncopyable>("UnloadPayloadCommand", no_init)
             .def("__init__", make_constructor(UnloadPayloadCommandInit))
             .def("execute", &UsdUfe::UsdUndoUnloadPayloadCommand::execute)
             .def("undo", &UsdUfe::UsdUndoUnloadPayloadCommand::undo)

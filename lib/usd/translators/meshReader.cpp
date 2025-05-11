@@ -79,10 +79,11 @@ bool MayaUsdPrimReaderMesh::Read(UsdMayaPrimReaderContext& context)
 
     auto    parentNode = context.GetMayaNode(prim.GetPath().GetParentPath(), true);
     MObject transformObj;
-    // Note: in prototype instances, we don't need an intermediary transform node.
+    // Note: in prototype instances, we don't need an intermediary transform node,
+    //       unless the prim has transforms that need to be preserved.
     //       See: EMSUSD-80
     const bool inPrototype = UsdPrim::IsPathInPrototype(prim.GetPath());
-    if (inPrototype) {
+    if (inPrototype && !UsdMayaTranslatorUtil::HasXformOps(prim)) {
         transformObj = parentNode;
     } else {
         bool retStatus = UsdMayaTranslatorUtil::CreateTransformNode(
@@ -136,7 +137,8 @@ bool MayaUsdPrimReaderMesh::Read(UsdMayaPrimReaderContext& context)
         mesh,
         meshRead.meshObject(),
         _GetArgs().GetExcludePrimvarNames(),
-        _GetArgs().GetExcludePrimvarNamespaces());
+        _GetArgs().GetExcludePrimvarNamespaces(),
+        _GetArgs().GetUVSetNameRemappings());
 
     // assign invisible faces
     UsdMayaMeshReadUtils::assignInvisibleFaces(mesh, meshRead.meshObject());

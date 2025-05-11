@@ -22,11 +22,9 @@
 #include <pxr/pxr.h>
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/pyConversions.h>
+#include <pxr_python.h>
 
-#include <boost/python/class.hpp>
-#include <boost/python/def.hpp>
-
-using namespace boost::python;
+using namespace PXR_BOOST_PYTHON_NAMESPACE;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -52,6 +50,11 @@ std::string ensureUSDFileExtension(const std::string& fileToCheck)
     return ret;
 }
 
+void updatePostponedPaths(const PXR_NS::SdfLayerHandle& layer)
+{
+    UsdMayaUtilFileSystem::updatePostponedRelativePaths(layer);
+}
+
 } // namespace
 
 void wrapUtil()
@@ -59,8 +62,6 @@ void wrapUtil()
     scope s
         = class_<UsdMayaUtilScope>("Util", no_init)
               .def("IsAuthored", UsdMayaUtil::IsAuthored)
-              .def("prettifyName", &UsdMayaUtil::prettifyName)
-              .staticmethod("prettifyName")
               .def("getDictionaryFromEncodedOptions", getDictionaryFromEncodedOptions)
               .def(
                   "getPathRelativeToMayaSceneFile",
@@ -69,6 +70,7 @@ void wrapUtil()
               .def(
                   "handleAssetPathThatMaybeRelativeToLayer",
                   UsdMayaUtilFileSystem::handleAssetPathThatMaybeRelativeToLayer)
+              .def("updatePostponedRelativePaths", updatePostponedPaths)
               .def("ensureUSDFileExtension", ensureUSDFileExtension)
               .staticmethod("getPathRelativeToMayaSceneFile");
 }

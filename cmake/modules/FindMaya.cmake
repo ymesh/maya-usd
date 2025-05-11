@@ -12,11 +12,11 @@
 # MAYA_API_VERSION    Maya API version (6-8 digits) - defined in MTypes.h
 # MAYA_APP_VERSION    Maya app version (4 digits) - either from MTypes.h or first 4 digits of MAYA_API_VERSION
 # MAYA_LIGHTAPI_VERSION Maya light API version (1 or 2 or 3)
-# MAYA_PREVIEW_RELEASE_VERSION Preview Release number (3 or more digits) in preview releases, 0 in official releases
 #
 # Cache variables:
 # MAYA_HAS_DEFAULT_MATERIAL_API Presence of a default material API on MRenderItem.
 # MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API Maya API provides color management support
+# MAYA_HAS_OPENPBR_SURFACE_SHADER Maya has an OpenPBR shader
 # MAYA_NEW_POINT_SNAPPING_SUPPORT Presence of point new snapping support.
 # MAYA_CURRENT_UFE_CAMERA_SUPPORT Presence of MFrameContext::getCurrentUfeCameraPath.
 # MAYA_HAS_CRASH_DETECTION Presence of isInCrashHandler API
@@ -211,11 +211,6 @@ set(MAYA_LIBS_TO_FIND
     cgGL
     clew
 )
-if (CMAKE_BUILD_TYPE MATCHES Debug)
-    list(APPEND MAYA_LIBS_TO_FIND tbb_debug)
-else()
-    list(APPEND MAYA_LIBS_TO_FIND tbb)
-endif()
 
 foreach(MAYA_LIB ${MAYA_LIBS_TO_FIND})
     find_library(MAYA_${MAYA_LIB}_LIBRARY
@@ -258,15 +253,6 @@ if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MTypes.h")
         string(REGEX MATCHALL "[0-9]+" MAYA_APP_VERSION ${MAYA_APP_VERSION})
     else()
         string(SUBSTRING ${MAYA_API_VERSION} "0" "4" MAYA_APP_VERSION)
-    endif()
-endif()
-
-if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MDefines.h")
-    file(STRINGS ${MAYA_INCLUDE_DIR}/maya/MDefines.h MAYA_PREVIEW_RELEASE_VERSION REGEX "#define MAYA_PREVIEW_RELEASE_VERSION.*$")
-    if(MAYA_PREVIEW_RELEASE_VERSION)
-        string(REGEX MATCHALL "[0-9]+" MAYA_PREVIEW_RELEASE_VERSION ${MAYA_PREVIEW_RELEASE_VERSION})
-    else()
-        set(MAYA_PREVIEW_RELEASE_VERSION 0)
     endif()
 endif()
 
@@ -363,6 +349,12 @@ if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFragmentManager.h")
         set(MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API TRUE CACHE INTERNAL "getColorManagementFragmentInfo")
         message(STATUS "Maya has getColorManagementFragmentInfo API")
     endif()
+endif()
+
+set(MAYA_HAS_OPENPBR_SURFACE_SHADER FALSE CACHE INTERNAL "OpenPBRSurfaceShader")
+if(MAYA_INCLUDE_DIRS AND EXISTS "${MAYA_INCLUDE_DIR}/maya/MFnOpenPBRSurfaceShader.h")
+    set(MAYA_HAS_OPENPBR_SURFACE_SHADER TRUE CACHE INTERNAL "OpenPBRSurfaceShader")
+    message(STATUS "Maya has OpenPBR Surface Shader")
 endif()
 
 set(MAYA_NEW_POINT_SNAPPING_SUPPORT FALSE CACHE INTERNAL "snapToActive")
@@ -478,7 +470,7 @@ if(IS_LINUX AND MAYA_Foundation_LIBRARY)
     # If yes, then MayaUsd MUST also be built with new ABI.
     execute_process(
         COMMAND
-            nm "${MAYA_Foundation_LIBRARY}"
+            nm -D "${MAYA_Foundation_LIBRARY}"
         COMMAND
             grep findVariableReplacement
         COMMAND

@@ -31,6 +31,7 @@
 PXR_NAMESPACE_OPEN_SCOPE
 
 class UsdMaya_ModelKindProcessor;
+class AutoUpAxisAndUnitsChanger;
 
 class UsdMaya_WriteJob
 {
@@ -55,6 +56,14 @@ public:
     MAYAUSD_CORE_PUBLIC
     const UsdMayaUtil::MDagPathMap<SdfPath>& GetDagPathToUsdPathMap() const;
 
+    // Retrieve all exported material paths.
+    MAYAUSD_CORE_PUBLIC
+    const std::vector<SdfPath>& GetMaterialPaths() { return mJobCtx.GetMaterialPaths(); }
+
+    // Cached prims paths from chasers
+    MAYAUSD_CORE_PUBLIC
+    const std::vector<SdfPath>& GetExtraPrimsPaths() { return _extrasPrimsPaths; }
+
 private:
     /// Begins constructing the USD stage, writing out the values at the default
     /// time. Returns \c true if the stage can be created successfully.
@@ -72,6 +81,9 @@ private:
 
     /// Writes the root prim variants based on the Maya render layers.
     TfToken _WriteVariants(const UsdPrim& usdRootPrim);
+
+    /// Remove empty xform and scope recursively if the options to include them is off.
+    void _PruneEmpties();
 
     /// Creates a usdz package from the write job's current USD stage.
     void _CreatePackage() const;
@@ -95,6 +107,9 @@ private:
 
     UsdMayaUtil::MDagPathMap<SdfPath> mDagPathToUsdPathMap;
 
+    // Array to track any extra prims created chasers
+    std::vector<SdfPath> _extrasPrimsPaths;
+
     // Currently only used if stripNamespaces is on, to ensure we don't have clashes
     TfHashMap<SdfPath, MDagPath, SdfPath::Hash> mUsdPathToDagPathMap;
 
@@ -103,6 +118,7 @@ private:
     UsdMayaWriteJobContext mJobCtx;
 
     std::unique_ptr<UsdMaya_ModelKindProcessor> _modelKindProcessor;
+    std::unique_ptr<AutoUpAxisAndUnitsChanger>  _autoAxisAndUnitsChanger;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -14,39 +14,15 @@ target_sources(${PROJECT_NAME}
         ProxyShapeHandler.cpp
         ProxyShapeHierarchy.cpp
         ProxyShapeHierarchyHandler.cpp
-        RotationUtils.cpp
-        UsdAttribute.cpp
-        UsdAttributeHolder.cpp
-        UsdAttributes.cpp
-        UsdAttributesHandler.cpp
-        UsdPointInstanceOrientationModifier.cpp
-        UsdPointInstancePositionModifier.cpp
-        UsdPointInstanceScaleModifier.cpp
-        UsdRotatePivotTranslateUndoableCommand.cpp
-        UsdRotateUndoableCommand.cpp
-        UsdScaleUndoableCommand.cpp
         UsdSceneItemOps.cpp
         UsdSceneItemOpsHandler.cpp
-        UsdSetXformOpUndoableCommandBase.cpp
         UsdStageMap.cpp
-        UsdTRSUndoableCommandBase.cpp
-        UsdTransform3dBase.cpp
-        UsdTransform3dCommonAPI.cpp
-        UsdTransform3dFallbackMayaXformStack.cpp
-        UsdTransform3dMatrixOp.cpp
-        UsdTransform3dMayaXformStack.cpp
-        UsdTransform3dPointInstance.cpp
-        UsdTransform3dReadImpl.cpp
-        UsdTransform3dSetObjectMatrix.cpp
-        UsdTransform3dUndoableCommands.cpp
-        UsdTranslateUndoableCommand.cpp
         UsdUIUfeObserver.cpp
         UsdUndoDeleteCommand.cpp
         UsdUndoDuplicateCommand.cpp
         UsdUndoMaterialCommands.cpp
         UsdUndoRenameCommand.cpp
         Utils.cpp
-        XformOpUtils.cpp
         moduleDeps.cpp
 )
 
@@ -76,6 +52,12 @@ if (UFE_LIGHTS_SUPPORT)
     PRIVATE
         UFE_LIGHTS_SUPPORT=1
     )
+    if (UFE_VOLUME_LIGHTS_SUPPORT)
+        target_compile_definitions(${PROJECT_NAME}
+    	    PRIVATE
+                UFE_VOLUME_LIGHTS_SUPPORT=1
+        )
+    endif()
 endif()
 
 if (UFE_MATERIALS_SUPPORT)
@@ -89,6 +71,13 @@ if (UFE_MATERIALS_SUPPORT)
     PRIVATE
         UFE_MATERIALS_SUPPORT=1
     )
+
+    if (UFE_MATERIAL_HAS_HASMATERIAL)
+        target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+            UFE_MATERIAL_HAS_HASMATERIAL=1
+        )
+    endif()
 endif()
 
 if (UFE_SCENE_SEGMENT_SUPPORT)
@@ -110,10 +99,17 @@ if (UFE_UINODEGRAPHNODE_HAS_SIZE)
     )
 endif()
 
-if (UFE_ATTRIBUTES_GET_ENUMS)
+if (UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR)
     target_compile_definitions(${PROJECT_NAME}
     PRIVATE
-        UFE_ATTRIBUTES_GET_ENUMS=1
+        UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR=1
+    )
+endif()
+
+if (UFE_CONTEXTOPS_HAS_OPTIONBOX)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_CONTEXTOPS_HAS_OPTIONBOX=1
     )
 endif()
 
@@ -144,21 +140,45 @@ if(CodeWrapperHandler IN_LIST UFE_PREVIEW_FEATURES)
     )
 endif()
 
+
+if (UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH=1
+    )
+endif()
+
+if (NOT MAYA_APP_VERSION VERSION_GREATER 2025)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        MAYAUSD_NEED_OUTLINER_FILTER_FIX=1
+    )
+endif()
+
+if (UFE_CAMERAHANDLER_HAS_FINDALL)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_CAMERAHANDLER_HAS_FINDALL=1
+    )
+endif()
+
+if(UFE_CAMERAHANDLER_HAS_FINDALL)
+    target_sources(${PROJECT_NAME}
+        PRIVATE
+            ProxyShapeCameraHandler.cpp
+    )
+endif()
+
 if(CMAKE_UFE_V4_FEATURES_AVAILABLE)
     target_sources(${PROJECT_NAME}
         PRIVATE
             UsdShaderNodeDef.cpp
             UsdShaderNodeDefHandler.cpp
-            UsdShaderAttributeDef.cpp
-            UsdShaderAttributeHolder.cpp
             UsdUndoCreateFromNodeDefCommand.cpp
-            ProxyShapeCameraHandler.cpp
             UsdConnections.cpp
             UsdConnectionHandler.cpp
             UsdUINodeGraphNode.cpp
             UsdUINodeGraphNodeHandler.cpp
-            UsdUndoAttributesCommands.cpp
-            UsdTransform3dRead.cpp
             UsdUndoConnectionCommands.cpp
             UsdUndoCreateStageWithNewLayerCommand.cpp
     )
@@ -176,41 +196,15 @@ set(HEADERS
     ProxyShapeHandler.h
     ProxyShapeHierarchy.h
     ProxyShapeHierarchyHandler.h
-    RotationUtils.h
-    UsdAttribute.h
-    UsdAttributeHolder.h
-    UsdAttributes.h
-    UsdAttributesHandler.h
-    UsdPointInstanceModifierBase.h
-    UsdPointInstanceOrientationModifier.h
-    UsdPointInstancePositionModifier.h
-    UsdPointInstanceScaleModifier.h
-    UsdPointInstanceUndoableCommands.h
-    UsdRotatePivotTranslateUndoableCommand.h
-    UsdRotateUndoableCommand.h
-    UsdScaleUndoableCommand.h
     UsdSceneItemOps.h
     UsdSceneItemOpsHandler.h
-    UsdSetXformOpUndoableCommandBase.h
     UsdStageMap.h
-    UsdTRSUndoableCommandBase.h
-    UsdTransform3dBase.h
-    UsdTransform3dCommonAPI.h
-    UsdTransform3dFallbackMayaXformStack.h
-    UsdTransform3dMatrixOp.h
-    UsdTransform3dMayaXformStack.h
-    UsdTransform3dPointInstance.h
-    UsdTransform3dReadImpl.h
-    UsdTransform3dSetObjectMatrix.h
-    UsdTransform3dUndoableCommands.h
-    UsdTranslateUndoableCommand.h
     UsdUIUfeObserver.h
     UsdUndoDeleteCommand.h
     UsdUndoDuplicateCommand.h
     UsdUndoMaterialCommands.h
     UsdUndoRenameCommand.h
     Utils.h
-    XformOpUtils.h
 )
 
 if(CMAKE_UFE_V3_FEATURES_AVAILABLE)
@@ -261,24 +255,27 @@ if(CodeWrapperHandler IN_LIST UFE_PREVIEW_FEATURES)
     )
 endif()
 
+if(UFE_CAMERAHANDLER_HAS_FINDALL)
+    list(APPEND HEADERS
+        ProxyShapeCameraHandler.h
+    )
+endif()
+       
 if(CMAKE_UFE_V4_FEATURES_AVAILABLE)
     list(APPEND HEADERS
         UsdShaderNodeDef.h
         UsdShaderNodeDefHandler.h
-        UsdShaderAttributeDef.h
-        UsdShaderAttributeHolder.h
         UsdUndoCreateFromNodeDefCommand.h
-        ProxyShapeCameraHandler.h
         UsdConnections.h
         UsdConnectionHandler.h
         UsdUINodeGraphNode.h
         UsdUINodeGraphNodeHandler.h
-        UsdUndoAttributesCommands.h
-        UsdTransform3dRead.h
         UsdUndoConnectionCommands.h
         UsdUndoCreateStageWithNewLayerCommand.h
     )
 endif()
+
+add_subdirectory(trf)
 
 # -----------------------------------------------------------------------------
 # promote headers

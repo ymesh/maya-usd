@@ -52,12 +52,12 @@ class testUsdExportImportUDIM(unittest.TestCase):
         usd_file = os.path.abspath('UsdExportUDIMTest.usda')
         cmds.mayaUSDExport(mergeTransformAndShape=True, file=usd_file,
             shadingMode='useRegistry', convertMaterialsTo=['UsdPreviewSurface'],
-            materialsScopeName='Materials')
+            materialsScopeName='Materials', legacyMaterialScope=False, defaultPrim='None')
 
         stage = Usd.Stage.Open(usd_file)
         self.assertTrue(stage)
 
-        shader_prim = stage.GetPrimAtPath('/pPlane1/Materials/lambert2SG/file1')
+        shader_prim = stage.GetPrimAtPath('/Materials/lambert2SG/file1')
         self.assertTrue(shader_prim)
 
         shader = UsdShade.Shader(shader_prim)

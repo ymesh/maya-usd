@@ -20,21 +20,12 @@ set(USDUFE_VERSION "${USDUFE_MAJOR_VERSION}.${USDUFE_MINOR_VERSION}.${USDUFE_PAT
 
 add_library(${PROJECT_NAME} SHARED)
 
-#------------------------------------------------------------------------------
-# Modules and definitions
-#------------------------------------------------------------------------------
-if(NOT DEFINED ENV{BOOST_ROOT})
-    set(ENV{BOOST_ROOT} ${PXR_USD_LOCATION})
-endif()
-if(MAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG)
-    set(Boost_USE_DEBUG_PYTHON ON)
-endif()
-
 # -----------------------------------------------------------------------------
 # Compiler configuration
 # -----------------------------------------------------------------------------
 target_compile_definitions(${PROJECT_NAME}
     PUBLIC
+        $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:TBB_USE_DEBUG>
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_DEBUG_PYTHON>
         $<$<STREQUAL:${CMAKE_BUILD_TYPE},Debug>:BOOST_LINKING_PYTHON>
         $<$<BOOL:${MAYA_ENABLE_NEW_PRIM_DELETE}>:MAYA_ENABLE_NEW_PRIM_DELETE>
@@ -65,11 +56,42 @@ if (USD_HAS_COLOR4_SDR_SUPPORT)
     )
 endif()
 
+message(STATUS "USD_HAS_NAMESPACE_EDIT is ${USD_HAS_NAMESPACE_EDIT}")
+if (USD_HAS_NAMESPACE_EDIT)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+        USD_HAS_NAMESPACE_EDIT=1
+    )
+endif()
+
 message(STATUS "MAYA_HAS_DISPLAY_LAYER_API is ${MAYA_HAS_DISPLAY_LAYER_API}")
 if (MAYA_HAS_DISPLAY_LAYER_API)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
             MAYA_HAS_DISPLAY_LAYER_API=1
+    )
+endif()
+
+message(STATUS "UFE_SCENEITEM_HAS_METADATA is ${UFE_SCENEITEM_HAS_METADATA}")
+if (UFE_SCENEITEM_HAS_METADATA)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_SCENEITEM_HAS_METADATA=1
+    )
+endif()
+
+if (UFE_HAS_DISPLAY_NAME)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_HAS_DISPLAY_NAME=1
+    )
+endif()
+
+
+if (UFE_DEFAULT_VALUE_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+    PRIVATE
+        UFE_DEFAULT_VALUE_SUPPORT=1
     )
 endif()
 
@@ -98,27 +120,14 @@ target_include_directories(${PROJECT_NAME}
 # -----------------------------------------------------------------------------
 target_link_libraries(${PROJECT_NAME}
     PUBLIC
-        ar
         gf
-        hd
-        hdx
-        js
-        kind
-        plug
         sdf
         tf
-        trace
         usd
         usdGeom
         usdImaging
-        usdImagingGL
-        usdLux
-        usdRender
-        usdRi
         usdShade
-        usdSkel
         usdUtils
-        usdUI
         vt
         ${UFE_LIBRARY}
 )

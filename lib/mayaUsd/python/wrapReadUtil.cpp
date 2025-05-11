@@ -21,14 +21,12 @@
 #include <pxr/pxr.h>
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/usd/usd/pyConversions.h>
+#include <pxr_python.h>
 
 #include <maya/MFnDependencyNode.h>
 #include <maya/MObject.h>
 
-#include <boost/python/class.hpp>
-#include <boost/python/def.hpp>
-
-using namespace boost::python;
+using namespace PXR_BOOST_PYTHON_NAMESPACE;
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -62,7 +60,7 @@ std::string _FindOrCreateMayaAttr(
     return attrPath;
 }
 
-bool _SetMayaAttr(const std::string& attrPath, const VtValue& newValue)
+bool _SetMayaAttr(const std::string& attrPath, const VtValue& newValue, bool unlinearizeColors)
 {
     // Optional muting in case we are not being called with a undo item recorder.
     MayaUsd::OpUndoItemMuting muting;
@@ -74,7 +72,7 @@ bool _SetMayaAttr(const std::string& attrPath, const VtValue& newValue)
         return false;
     }
 
-    return UsdMayaReadUtil::SetMayaAttr(plug, newValue);
+    return UsdMayaReadUtil::SetMayaAttr(plug, newValue, unlinearizeColors);
 }
 
 void _SetMayaAttrKeyableState(const std::string& attrPath, const SdfVariability variability)
@@ -126,7 +124,10 @@ void wrapReadUtil()
              arg("attrName"),
              arg("attrNiceName") = std::string()))
         .staticmethod("FindOrCreateMayaAttr")
-        .def("SetMayaAttr", _SetMayaAttr)
+        .def(
+            "SetMayaAttr",
+            _SetMayaAttr,
+            (arg("attrPath"), arg("newValue"), arg("unlinearizeColors") = true))
         .staticmethod("SetMayaAttr")
         .def("SetMayaAttrKeyableState", _SetMayaAttrKeyableState)
         .staticmethod("SetMayaAttrKeyableState")

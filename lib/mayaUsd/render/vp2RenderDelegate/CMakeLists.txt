@@ -6,7 +6,7 @@ target_sources(${PROJECT_NAME}
         basisCurves.cpp
         bboxGeom.cpp
         debugCodes.cpp
-        draw_item.cpp
+        drawItem.cpp
         extComputation.cpp
         instancer.cpp
         material.cpp
@@ -15,8 +15,9 @@ target_sources(${PROJECT_NAME}
         meshViewportCompute.cpp
         points.cpp
         proxyRenderDelegate.cpp
-        render_delegate.cpp
-        render_param.cpp
+        colorManagementPreferences.cpp
+        renderDelegate.cpp
+        renderParam.cpp
         sampler.cpp
         shader.cpp
         tokens.cpp
@@ -24,6 +25,7 @@ target_sources(${PROJECT_NAME}
 
 set(HEADERS
     proxyRenderDelegate.h
+    colorManagementPreferences.h
 )
 
 # -----------------------------------------------------------------------------

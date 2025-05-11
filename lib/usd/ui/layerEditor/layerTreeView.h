@@ -20,6 +20,11 @@
 #include "layerTreeViewStyle.h"
 #include "sessionState.h"
 
+#include <usdUfe/utils/uiCallback.h>
+
+#include <pxr/base/tf/weakBase.h>
+#include <pxr/usd/usd/notice.h>
+
 #include <QtCore/QPointer>
 #include <QtWidgets/QTreeView>
 
@@ -60,18 +65,23 @@ private:
     };
 
     std::map<ItemId, ItemState> _itemsState;
+    int                         _horizontalScrollbarPosition { 0 };
+    int                         _verticalScrollbarPosition { 0 };
 };
 
 /**
  * @brief Implements the Qt TreeView for USD layers. This widget is owned by the LayerEditorWidget.
  *
  */
-class LayerTreeView : public QTreeView
+class LayerTreeView
+    : public QTreeView
+    , public PXR_NS::TfWeakBase
 {
     Q_OBJECT
 public:
     typedef QTreeView PARENT_CLASS;
     LayerTreeView(SessionState* in_sessionState, QWidget* in_parent);
+    ~LayerTreeView() override;
 
     // get properly typed item
     LayerTreeItem* layerItemFromIndex(const QModelIndex& index) const;
@@ -92,14 +102,16 @@ public:
     // calls a given method on all items in the selection, with the given string as the undo chunk
     // name
     void callMethodOnSelection(const QString& undoName, simpleLayerMethod method);
+    void callMethodOnSelectionNoDelay(const QString& undoName, simpleLayerMethod method);
 
     // menu callbacks
     void onAddParentLayer(const QString& undoName) const;
     void onMuteLayer(const QString& undoName) const;
+    void onLockLayer(const QString& undoName) const;
+    void onLockLayerAndSublayers(const QString& undoName, bool includeSublayers) const;
 
     // QWidgets overrides
     virtual void paintEvent(QPaintEvent* event) override;
-    virtual bool event(QEvent* event) override;
     virtual void keyPressEvent(QKeyEvent* event) override;
     virtual void mousePressEvent(QMouseEvent* event) override;
     virtual void mouseMoveEvent(QMouseEvent* event) override;
@@ -107,11 +119,23 @@ public:
     virtual void leaveEvent(QEvent* event) override;
 
 protected:
+    void updateMouseCursor();
+
     // slot:
     void onModelAboutToBeReset();
     void onModelReset();
     void onItemDoubleClicked(const QModelIndex& index);
+    void onExpanded(const QModelIndex& index);
+    void onCollapsed(const QModelIndex& index);
     void onMuteLayerButtonPushed();
+    void onLockLayerButtonPushed();
+
+    // Notice listener method for layer muting changes.
+    void onLayerMutingChanged(const UsdNotice::LayerMutingChanged& notice);
+
+    bool shouldExpandOrCollapseAll() const;
+    void expandChildren(const QModelIndex& index);
+    void collapseChildren(const QModelIndex& index);
 
     // delayed signal to select a layer on idle
     void selectLayerRquest(const QModelIndex& index);
@@ -119,10 +143,11 @@ protected:
     LayerTreeViewStyle       _treeViewStyle;
     QPointer<LayerTreeModel> _model;
     LayerTreeItemDelegate*   _delegate;
+    TfNotice::Key            _layerMutingNoticeKey;
 
     std::unique_ptr<LayerViewMemento> _cachedModelState;
 
-    void handleTooltips(QHelpEvent* event);
+    UsdUfe::UICallback::Ptr _refreshCallback;
 
     // the mute button area has a different implementation than
     // the target button. It is based on Maya's renderSetup

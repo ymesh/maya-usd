@@ -23,7 +23,7 @@ from maya.api import OpenMaya as OM
 
 from pxr import Gf, Sdf, Tf, Usd, UsdGeom, UsdSkel, UsdUtils, Vt
 
-import fixturesUtils
+import fixturesUtils, testUtils
 
 class testUsdExportSkeleton(unittest.TestCase):
 
@@ -165,8 +165,12 @@ class testUsdExportSkeleton(unittest.TestCase):
             Vt.Matrix4dArray([Gf.Matrix4d(1.0)]))
         self.assertEqual(skeleton.GetJointsAttr().Get(),
             Vt.TokenArray(['joint1']))
-        self.assertEqual(skeleton.GetRestTransformsAttr().Get(),
-            Vt.Matrix4dArray([Gf.Matrix4d(1.0)]))
+        self.assertEqual(
+            skeleton.GetRestTransformsAttr().Get(),
+            Vt.Matrix4dArray([
+                Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (5, 5, 0, 1) )
+            ])
+        )
 
         self.assertTrue(skeleton.GetPrim().HasAPI(UsdSkel.BindingAPI))
         skelBindingAPI = UsdSkel.BindingAPI(skeleton)
@@ -237,15 +241,19 @@ class testUsdExportSkeleton(unittest.TestCase):
             ])
         )
 
-        self.assertEqual(
-            skeleton.GetRestTransformsAttr().Get(),
-            Vt.Matrix4dArray([
-                Gf.Matrix4d( (-1, 0, 0, 0), (0, 1, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1) ),
-                Gf.Matrix4d( (0, -1, 0, 0), (1, 0, 0, 0), (0, 0, 1, 0), (-3, 0, 0, 1) ),
-                Gf.Matrix4d( (1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 2, 1) ),
-                Gf.Matrix4d( (1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 2, 0, 1) ),
+        expectedRestMatrix = Vt.Matrix4dArray([
+                Gf.Matrix4d((0.5000000000000001, 0, -0.8660254037844386, 0), (0, 1, 0, 0), (0.8660254037844386, 0, 0.5000000000000001, 0), (-8, 1, 7, 1)),
+                Gf.Matrix4d((1, 0, 0, 0), (2.7755575615628914e-17, 0.8660254037844387, 0.4999999999999999, 0), (0, -0.49999999999999994, 0.8660254037844388, 0), (-3, 0, 1.2300000000000004, 1)),
+                Gf.Matrix4d((0.7071067811865475, 0.7071067811865476, 2.7755575615628914e-17, 0), (-0.4999999999999999, 0.4999999999999999, 0.7071067811865475, 0), (0.5, -0.4999999999999999, 0.7071067811865475, 0), (-5.0000000000000036, 5, 13.000000000000004, 1)),
+                Gf.Matrix4d((0.9999999999999999, -5.551115123125783e-17, -1.3877787807814457e-17, 0), (5.551115123125783e-17, -2.7755575615628914e-17, 0.9999999999999998, 0), (5.551115123125783e-17, -1, 2.7755575615628914e-17, 0), (-1.7763568394002505e-15, 2, 4.440892098500626e-16, 1)),
             ])
-        )        
+
+        actualRestMatrix = skeleton.GetRestTransformsAttr().Get()
+
+        self.assertTrue(Gf.IsClose(expectedRestMatrix[0], actualRestMatrix[0], 1e-5))
+        self.assertTrue(Gf.IsClose(expectedRestMatrix[1], actualRestMatrix[1], 1e-5))
+        self.assertTrue(Gf.IsClose(expectedRestMatrix[2], actualRestMatrix[2], 1e-5))
+        self.assertTrue(Gf.IsClose(expectedRestMatrix[3], actualRestMatrix[3], 1e-5))
 
     def testSkelWithJointsAtSceneRoot(self):
         """
@@ -261,6 +269,57 @@ class testUsdExportSkeleton(unittest.TestCase):
             cmds.usdExport(mergeTransformAndShape=True, file=usdFile,
                            shadingMode='none', exportSkels='auto')
 
+    def testSkelExportWithNewRoot(self):
+        """
+        It is possible to export joints at scene root level if a new Xform root is created when exporting.
+        The new stage root will then be converted to a SkelRoot
+        """
+        mayaFile = os.path.join(self.inputPath, "UsdExportSkeletonTest", "UsdExportSkeletonAtSceneRoot.ma")
+        cmds.file(mayaFile, force=True, open=True)
+
+        usdFile = os.path.abspath('UsdExportSkeletonNewRootTest.usda')
+
+        cmds.usdExport(mergeTransformAndShape=True, file=usdFile, rootPrimType='xform', exportSkin='auto',
+            exportSkels="auto", rootPrim="testSkel", defaultPrim="testSkel")
+
+        stage = Usd.Stage.Open(usdFile)
+
+        skelRoot = UsdSkel.Root.Get(stage, '/testSkel')
+        self.assertTrue(skelRoot)
+
+        meshPrim = stage.GetPrimAtPath('/testSkel/pCube1')
+        self.assertTrue(meshPrim)
+
+        binding = UsdSkel.BindingAPI.Get(stage, meshPrim.GetPath())
+        self.assertTrue(binding)
+
+        skeleton = UsdSkel.Skeleton.Get(stage, '/testSkel/joint1')
+        self.assertTrue(skeleton)
+
+    @unittest.skipUnless(Usd.GetVersion() > (0, 22, 11), 'SkinningMethod requires USD version 23 and above')
+    def testSkelExportSkinningMethod(self):
+        """
+        Test if we correctly exported the proper skinned method for mesh
+        """
+        mayaFile = os.path.join(self.inputPath, "UsdExportSkeletonTest", "UsdExportSkeletonAtSceneRoot.ma")
+        cmds.file(mayaFile, force=True, open=True)
+
+        # change the skinning method, so that it can be tested in usd
+        skinClusterName="skinCluster1"
+        selectionList = OM.MSelectionList()
+        selectionList.add(skinClusterName)
+        skinCluster = OM.MFnDependencyNode(selectionList.getDependNode(0))
+        cmds.setAttr("%s.skinningMethod"%skinClusterName, 1) # 1 == dual quaternion
+
+        usdFile = os.path.abspath('UsdExportSkinningMethodTest.usda')
+        cmds.usdExport(mergeTransformAndShape=True, file=usdFile, rootPrimType='xform', exportSkin='auto',
+            exportSkels="auto", rootPrim="testSkel", defaultPrim="testSkel")
+
+        stage = Usd.Stage.Open(usdFile)
+
+        meshPrim = stage.GetPrimAtPath('/testSkel/pCube1')
+        self.assertTrue(meshPrim)
+        self.assertTrue(meshPrim.GetAttribute("primvars:skel:skinningMethod").Get() == "dualQuaternion")
 
     def testSkelForSegfault(self):
         """
@@ -296,14 +355,43 @@ class testUsdExportSkeleton(unittest.TestCase):
         stage = Usd.Stage.Open(usdFile)
 
         skeleton = UsdSkel.Skeleton.Get(stage, '/joint_grp/joint1')
-        self.assertEqual(skeleton.GetRestTransformsAttr().Get(),
+        self.assertEqual(skeleton.GetBindTransformsAttr().Get(),
             Vt.Matrix4dArray(
                 # If we're not correlating using logical indices correctly, we may get this
                 # matrix in here somehwere (which we shouldn't):
                 # Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (777, 888, 999, 1) ),
                 [Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 2, 1) ),
-                 Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 3, 0, 1) ),
-                 Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (5, 0, 0, 1) )]))
+                 Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 3, 2, 1) ),
+                 Gf.Matrix4d( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (5, 3, 2, 1) )]))
+    
+    def testPartialSkeletonExport(self):
+        """
+        Test exporting only selected joints inside a hierarchy.
+        """
+        mayaFile = os.path.join(self.inputPath, "UsdExportSkeletonTest", "UsdExportPartialSkeleton.ma")
+        cmds.file(mayaFile, force=True, open=True)
+
+        with testUtils.TemporaryDirectory(prefix='UsdExportPartialSkeleton') as testDir:
+            pathToSave = "{}/partialJoints.usda".format(testDir)
+            
+            cmds.select("jointsGrp", r=True)
+            kwargs = {
+                "f": pathToSave,
+                "sl": True,
+                "worldspace": True,
+                "stripNamespaces" : True,
+                "shadingMode":"none",
+                "exportRoots":("jointsGrp",),
+                "exportSkels":"auto"
+            }
+            cmds.mayaUSDExport(**kwargs)
+                
+            cmds.file(new=True, force=True)
+            cmds.mayaUSDImport(f=pathToSave)
+            
+            self.assertEqual(cmds.ls("jointsGrp", l=True),  ['|jointsGrp'])
+            self.assertEqual(cmds.listRelatives('|jointsGrp', ad=True),  ['joint3', 'joint2', 'joint1', 'aJoint'])
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -17,16 +17,6 @@ project(mayaUsd)
 
 add_library(${PROJECT_NAME} SHARED)
 
-#------------------------------------------------------------------------------
-# modules and definitions
-#------------------------------------------------------------------------------
-if(NOT DEFINED ENV{BOOST_ROOT})
-    set(ENV{BOOST_ROOT} ${PXR_USD_LOCATION})
-endif()
-if(MAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG)
-    set(Boost_USE_DEBUG_PYTHON ON)
-endif()
-
 # -----------------------------------------------------------------------------
 # compiler configuration
 # -----------------------------------------------------------------------------
@@ -76,6 +66,13 @@ if (MAYA_HAS_COLOR_MANAGEMENT_SUPPORT_API)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
         HAS_COLOR_MANAGEMENT_SUPPORT_API=1
+    )
+endif()
+
+if (MAYA_HAS_OPENPBR_SURFACE_SHADER)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+        MAYA_HAS_OPENPBR_SURFACE_SHADER=1
     )
 endif()
 
@@ -143,11 +140,11 @@ if (MAYA_HAS_GET_MEMBER_PATHS)
     )
 endif()
 
-message(STATUS "USD_HAS_COLOR4_SDR_SUPPORT is ${USD_HAS_COLOR4_SDR_SUPPORT}")
-if (USD_HAS_COLOR4_SDR_SUPPORT)
+message(STATUS "USD_HAS_TRACKER_INSTANCE_COUNT is ${USD_HAS_TRACKER_INSTANCE_COUNT}")
+if (USD_HAS_TRACKER_INSTANCE_COUNT)
     target_compile_definitions(${PROJECT_NAME}
         PRIVATE
-        USD_HAS_COLOR4_SDR_SUPPORT=1
+        USD_HAS_TRACKER_INSTANCE_COUNT=1
     )
 endif()
 
@@ -182,6 +179,13 @@ if (MAYA_LIGHTAPI_VERSION GREATER_EQUAL 2)
     )
 endif()
 
+if (UFE_CLIPBOARD_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME}
+        PRIVATE
+            UFE_CLIPBOARD_SUPPORT=1
+    )
+endif()
+
 # Some of the UFE classes are exporting STL classes which causes this warning.
 if(MSVC)
     target_compile_options(${PROJECT_NAME}
@@ -212,16 +216,14 @@ mayaUsd_compile_config(${PROJECT_NAME})
 # include directories
 # -----------------------------------------------------------------------------
 target_include_directories(${PROJECT_NAME} 
-    PUBLIC
-        ${MAYA_INCLUDE_DIRS}
+    SYSTEM PUBLIC
         ${PXR_INCLUDE_DIRS}
+        ${MAYA_INCLUDE_DIRS}
         ${UFE_INCLUDE_DIR}
+)
+target_include_directories(${PROJECT_NAME} 
+    PUBLIC
         ${CMAKE_BINARY_DIR}/include
-
-    PRIVATE
-        # TEMP (UsdUfe) - this one is temporary during the transition to UsdUfe.
-        # See lib\usdUfe\ufe\private\CMakeLists.txt
-        ${CMAKE_BINARY_DIR}/include/usdUfe/mayaUsd
 )
 
 # -----------------------------------------------------------------------------
@@ -253,8 +255,8 @@ target_link_libraries(${PROJECT_NAME}
         vt
         ${UFE_LIBRARY}
         ${MAYA_LIBRARIES}
-        mayaUsdUtils
         usdUfe
+        $<$<BOOL:$<VERSION_GREATER_EQUAL:${USD_VERSION},0.24.11>>:Boost::headers>
     PRIVATE
         ghc_filesystem
         $<$<BOOL:${CMAKE_WANT_MATERIALX_BUILD}>:hdMtlx>

@@ -3,18 +3,22 @@
 # -----------------------------------------------------------------------------
 target_sources(${PROJECT_NAME} 
     PRIVATE
+        autoUndoCommands.cpp
         blockSceneModificationContext.cpp
         colorSpace.cpp
         converter.cpp
+        copyLayerPrims.cpp
         customLayerData.cpp
         diagnosticDelegate.cpp
         dynamicAttribute.cpp
-        editability.cpp
         json.cpp
+        layerLocking.cpp
         layerMuting.cpp
         layers.cpp
         loadRulesAttribute.cpp
         mayaEditRouter.cpp
+        mayaNodeObserver.cpp
+        mayaNodeTypeObserver.cpp
         query.cpp
         plugRegistryHelper.cpp
         primActivation.cpp
@@ -29,22 +33,28 @@ target_sources(${PROJECT_NAME}
         utilFileSystem.cpp
         utilSerialization.cpp
         variants.cpp
+        variantFallbacks.cpp
 )
 
 set(HEADERS
+    autoUndoCommands.h
     blockSceneModificationContext.h
     colorSpace.h
     customLayerData.h
     converter.h
+    copyLayerPrims.h
     diagnosticDelegate.h
     dynamicAttribute.h
-    editability.h
     hash.h
     json.h
+    jsonConverter.h
+    layerLocking.h
     layerMuting.h
     layers.h
     loadRules.h
     mayaEditRouter.h
+    mayaNodeObserver.h
+    mayaNodeTypeObserver.h
     query.h
     plugRegistryHelper.h
     primActivation.h
@@ -60,6 +70,7 @@ set(HEADERS
     utilFileSystem.h
     utilSerialization.h
     variants.h
+    variantFallbacks.h
 )
 
 set(PLUGINFO

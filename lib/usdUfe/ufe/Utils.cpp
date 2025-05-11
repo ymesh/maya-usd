@@ -15,31 +15,58 @@
 //
 #include "Utils.h"
 
+#include <usdUfe/base/tokens.h>
 #include <usdUfe/ufe/Global.h>
+#include <usdUfe/ufe/UsdAttribute.h>
+#include <usdUfe/ufe/UsdAttributes.h>
+#include <usdUfe/ufe/UsdSceneItem.h>
+#include <usdUfe/ufe/trf/XformOpUtils.h>
+#include <usdUfe/undo/UsdUndoBlock.h>
+#include <usdUfe/utils/editability.h>
 #include <usdUfe/utils/layers.h>
 #include <usdUfe/utils/loadRules.h>
 #include <usdUfe/utils/usdUtils.h>
 
+#include <pxr/base/tf/token.h>
 #include <pxr/usd/pcp/layerStack.h>
 #include <pxr/usd/pcp/site.h>
 #include <pxr/usd/sdf/layer.h>
+#include <pxr/usd/sdf/schema.h>
+#include <pxr/usd/sdf/types.h>
+#include <pxr/usd/sdr/registry.h>
+#include <pxr/usd/sdr/shaderProperty.h>
+#include <pxr/usd/usd/editContext.h>
+#include <pxr/usd/usd/prim.h>
 #include <pxr/usd/usd/primCompositionQuery.h>
 #include <pxr/usd/usd/resolver.h>
 #include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usdShade/shader.h>
 
 #include <ufe/pathSegment.h>
+#include <ufe/pathString.h>
 #include <ufe/selection.h>
 
 #include <cctype>
 #include <regex>
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+#include <ufe/attributeInfo.h>
+#endif // UFE_V4_FEATURES_AVAILABLE
+
+#ifdef UFE_V5_FEATURES_AVAILABLE
+#include <ufe/value.h>
+#endif
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace {
 
 constexpr auto kIllegalUFEPath = "Illegal UFE run-time path %s.";
+#ifdef UFE_SCENEITEM_HAS_METADATA
+constexpr auto kErrorMsgInvalidValueType = "Unexpected Ufe::Value type";
+#endif
 
-// typedef std::unordered_map<TfToken, SdfValueTypeName, TfToken::HashFunctor> TokenToSdfTypeMap;
+typedef std::unordered_map<TfToken, SdfValueTypeName, TfToken::HashFunctor> TokenToSdfTypeMap;
 
 bool stringBeginsWithDigit(const std::string& inputString)
 {
@@ -84,14 +111,24 @@ uint32_t findLayerIndex(const UsdPrim& prim, const SdfLayerHandle& layer)
     return position;
 }
 
-UsdUfe::StageAccessorFn      gStageAccessorFn = nullptr;
-UsdUfe::StagePathAccessorFn  gStagePathAccessorFn = nullptr;
-UsdUfe::UfePathToPrimFn      gUfePathToPrimFn = nullptr;
-UsdUfe::TimeAccessorFn       gTimeAccessorFn = nullptr;
-UsdUfe::IsAttributeLockedFn  gIsAttributeLockedFn = nullptr;
-UsdUfe::SaveStageLoadRulesFn gSaveStageLoadRulesFn = nullptr;
-UsdUfe::IsRootChildFn        gIsRootChildFn = nullptr;
-UsdUfe::UniqueChildNameFn    gUniqueChildNameFn = nullptr;
+int gWaitCursorCount = 0;
+
+UsdUfe::StageAccessorFn            gStageAccessorFn = nullptr;
+UsdUfe::StagePathAccessorFn        gStagePathAccessorFn = nullptr;
+UsdUfe::UfePathToPrimFn            gUfePathToPrimFn = nullptr;
+UsdUfe::TimeAccessorFn             gTimeAccessorFn = nullptr;
+UsdUfe::IsAttributeLockedFn        gIsAttributeLockedFn = nullptr;
+UsdUfe::SaveStageLoadRulesFn       gSaveStageLoadRulesFn = nullptr;
+UsdUfe::IsRootChildFn              gIsRootChildFn = nullptr;
+UsdUfe::UniqueChildNameFn          gUniqueChildNameFn = nullptr;
+UsdUfe::WaitCursorFn               gStartWaitCursorFn = nullptr;
+UsdUfe::WaitCursorFn               gStopWaitCursorFn = nullptr;
+UsdUfe::DefaultMaterialScopeNameFn gGetDefaultMaterialScopeNameFn = nullptr;
+UsdUfe::ExtractTRSFn               gExtractTRSFn = nullptr;
+UsdUfe::Transform3dMatrixOpNameFn  gTransform3dMatrixOpNameFn = nullptr;
+
+UsdUfe::DisplayMessageFn gDisplayMessageFn[static_cast<int>(UsdUfe::MessageType::nbTypes)]
+    = { nullptr };
 
 } // anonymous namespace
 
@@ -217,7 +254,11 @@ void setIsAttributeLockedFn(IsAttributeLockedFn fn)
 
 bool isAttributedLocked(const PXR_NS::UsdAttribute& attr, std::string* errMsg /*= nullptr*/)
 {
-    return gIsAttributeLockedFn ? gIsAttributeLockedFn(attr, errMsg) : false;
+    // If we have (optional) attribute is locked function, use it.
+    // Otherwise use the default one supplied by UsdUfe.
+    if (gIsAttributeLockedFn)
+        return gIsAttributeLockedFn(attr, errMsg);
+    return Editability::isAttributeLocked(attr, errMsg);
 }
 
 void setSaveStageLoadRulesFn(SaveStageLoadRulesFn fn)
@@ -361,6 +402,355 @@ std::string uniqueChildNameDefault(const UsdPrim& usdParent, const std::string& 
     return childName;
 }
 
+SdfPath uniqueChildPath(const UsdStage& stage, const SdfPath& path)
+{
+    const UsdPrim     parentPrim = stage.GetPrimAtPath(path.GetParentPath());
+    const std::string originalName = path.GetName();
+    const std::string uniqueName = uniqueChildName(parentPrim, originalName);
+    if (uniqueName == originalName)
+        return path;
+
+    return path.ReplaceName(TfToken(uniqueName));
+}
+
+std::string relativelyUniqueName(const UsdPrim& usdParent, const std::string& baseName)
+{
+    std::string name = uniqueChildName(usdParent, baseName);
+
+    // For new prim, apply extra checks so that other prims that are "around" it
+    // have different names, too.
+
+    TfToken::HashSet relativesNames;
+    for (auto child : usdParent.GetFilteredChildren(
+             UsdTraverseInstanceProxies(UsdPrimIsDefined && !UsdPrimIsAbstract))) {
+        relativesNames.insert(child.GetName());
+    }
+
+    // Add all direct ancestors to the names t be avoided
+    for (UsdPrim ancestor = usdParent; ancestor; ancestor = ancestor.GetParent()) {
+        relativesNames.insert(ancestor.GetName());
+    }
+
+    // Add the closest 1000 descendants to the names to be avoided.
+    static const int maxDescendantCount = 1000;
+    int              descendantCount = 0;
+    for (auto child : usdParent.GetFilteredDescendants(
+             UsdTraverseInstanceProxies(UsdPrimIsDefined && !UsdPrimIsAbstract))) {
+        relativesNames.insert(child.GetName());
+        if (++descendantCount >= maxDescendantCount)
+            break;
+    }
+
+    // Add the closest 1000 descendants of the root to the names to be avoided.
+    UsdPrim rootPrim = usdParent.GetPrimAtPath(SdfPath::AbsoluteRootPath());
+    if (rootPrim != usdParent) {
+        descendantCount = 0;
+        for (auto child : rootPrim.GetFilteredDescendants(
+                 UsdTraverseInstanceProxies(UsdPrimIsDefined && !UsdPrimIsAbstract))) {
+            relativesNames.insert(child.GetName());
+            if (++descendantCount >= maxDescendantCount)
+                break;
+        }
+    }
+
+    std::string childName { name };
+    if (relativesNames.find(TfToken(childName)) != relativesNames.end()) {
+        childName = uniqueName(relativesNames, childName);
+    }
+    return childName;
+}
+
+bool isMaterialsScope(const Ufe::SceneItem::Ptr& item)
+{
+    if (!item) {
+        return false;
+    }
+
+    // Must be a scope.
+    if (item->nodeType() != "Scope") {
+        return false;
+    }
+
+    // With the magic name.
+    if (item->nodeName() == defaultMaterialScopeName()) {
+        return true;
+    }
+
+    // Or with only materials inside
+    auto scopeHierarchy = Ufe::Hierarchy::hierarchy(item);
+    if (scopeHierarchy) {
+        for (auto&& child : scopeHierarchy->children()) {
+            if (child->nodeType() != "Material") {
+                // At least one non material
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+Ufe::Path appendToUsdPath(const Ufe::Path& path, const std::string& name)
+{
+    // Assumption is that either
+    // - the input path is comprised of multiple segments with the last segment being USD.
+    // - single segment path, in which case we append a USD segment.
+    if (1 == path.getSegments().size()) {
+        return (path + Ufe::PathSegment(Ufe::PathComponent(name), UsdUfe::getUsdRunTimeId(), '/'));
+    } else if (path.runTimeId() == UsdUfe::getUsdRunTimeId()) {
+        return (path + name);
+    }
+
+    // Input path wasn't of expected type, just return it without appending.
+    return path;
+}
+
+void setDisplayMessageFn(const DisplayMessageFn fns[static_cast<int>(MessageType::nbTypes)])
+{
+    // Each of the display message functions is allowed to be null in which case
+    // a default function will be used for each.
+    for (int i = 0; i < static_cast<int>(MessageType::nbTypes); ++i) {
+        gDisplayMessageFn[i] = fns[i];
+    }
+}
+
+void displayMessage(MessageType type, const std::string& msg)
+{
+    // If we have an (optional) display message for the input type, use it.
+    // Otherwise use the default TF_ ones provided by USD.
+    auto messageFn = gDisplayMessageFn[static_cast<int>(MessageType::kInfo)];
+    if (messageFn) {
+        messageFn(msg);
+    } else {
+        switch (type) {
+        case MessageType::kInfo: TF_STATUS(msg); break;
+        case MessageType::kWarning: TF_WARN(msg); break;
+        case MessageType::kError: TF_RUNTIME_ERROR(msg); break;
+        default: break;
+        }
+    }
+}
+
+namespace {
+// Do not expose that function. The input parameter does not provide enough information to
+// distinguish between kEnum and kEnumString.
+Ufe::Attribute::Type _UsdTypeToUfe(const SdfValueTypeName& usdType)
+{
+    // Map the USD type into UFE type.
+    static const std::unordered_map<size_t, Ufe::Attribute::Type> sUsdTypeToUfe {
+        { SdfValueTypeNames->Bool.GetHash(), Ufe::Attribute::kBool },           // bool
+        { SdfValueTypeNames->Int.GetHash(), Ufe::Attribute::kInt },             // int32_t
+        { SdfValueTypeNames->Float.GetHash(), Ufe::Attribute::kFloat },         // float
+        { SdfValueTypeNames->Double.GetHash(), Ufe::Attribute::kDouble },       // double
+        { SdfValueTypeNames->String.GetHash(), Ufe::Attribute::kString },       // std::string
+        { SdfValueTypeNames->Token.GetHash(), Ufe::Attribute::kString },        // TfToken
+        { SdfValueTypeNames->Int3.GetHash(), Ufe::Attribute::kInt3 },           // GfVec3i
+        { SdfValueTypeNames->Float3.GetHash(), Ufe::Attribute::kFloat3 },       // GfVec3f
+        { SdfValueTypeNames->Double3.GetHash(), Ufe::Attribute::kDouble3 },     // GfVec3d
+        { SdfValueTypeNames->Color3f.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3f
+        { SdfValueTypeNames->Color3d.GetHash(), Ufe::Attribute::kColorFloat3 }, // GfVec3d
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        { SdfValueTypeNames->Asset.GetHash(), Ufe::Attribute::kFilename },      // SdfAssetPath
+        { SdfValueTypeNames->Float2.GetHash(), Ufe::Attribute::kFloat2 },       // GfVec2f
+        { SdfValueTypeNames->Float4.GetHash(), Ufe::Attribute::kFloat4 },       // GfVec4f
+        { SdfValueTypeNames->Color4f.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4f
+        { SdfValueTypeNames->Color4d.GetHash(), Ufe::Attribute::kColorFloat4 }, // GfVec4d
+        { SdfValueTypeNames->Matrix3d.GetHash(), Ufe::Attribute::kMatrix3d },   // GfMatrix3d
+        { SdfValueTypeNames->Matrix4d.GetHash(), Ufe::Attribute::kMatrix4d },   // GfMatrix4d
+#endif
+    };
+    const auto iter = sUsdTypeToUfe.find(usdType.GetHash());
+    if (iter != sUsdTypeToUfe.end()) {
+        return iter->second;
+    } else {
+        static const std::unordered_map<std::string, Ufe::Attribute::Type> sCPPTypeToUfe {
+            // There are custom Normal3f, Point3f types in USD. They can all be recognized by the
+            // underlying CPP type and if there is a Ufe type that matches, use it.
+            { "GfVec3i", Ufe::Attribute::kInt3 },   { "GfVec3d", Ufe::Attribute::kDouble3 },
+            { "GfVec3f", Ufe::Attribute::kFloat3 },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+            { "GfVec2f", Ufe::Attribute::kFloat2 }, { "GfVec4f", Ufe::Attribute::kFloat4 },
+#endif
+        };
+
+        const auto iter = sCPPTypeToUfe.find(usdType.GetCPPTypeName());
+        if (iter != sCPPTypeToUfe.end()) {
+            return iter->second;
+        } else {
+            return Ufe::Attribute::kGeneric;
+        }
+    }
+}
+} // namespace
+
+Ufe::Attribute::Type usdTypeToUfe(const SdrShaderPropertyConstPtr& shaderProperty)
+{
+    Ufe::Attribute::Type retVal = Ufe::Attribute::kInvalid;
+
+#if PXR_VERSION <= 2408
+    const SdfValueTypeName typeName = shaderProperty->GetTypeAsSdfType().first;
+#else
+    const SdfValueTypeName typeName = shaderProperty->GetTypeAsSdfType().GetSdfType();
+#endif
+    if (typeName.GetHash() == SdfValueTypeNames->Token.GetHash()) {
+        static const TokenToSdfTypeMap tokenTypeToSdfType
+            = { { SdrPropertyTypes->Int, SdfValueTypeNames->Int },
+                { SdrPropertyTypes->String, SdfValueTypeNames->String },
+                { SdrPropertyTypes->Float, SdfValueTypeNames->Float },
+                { SdrPropertyTypes->Color, SdfValueTypeNames->Color3f },
+#if defined(USD_HAS_COLOR4_SDR_SUPPORT)
+                { SdrPropertyTypes->Color4, SdfValueTypeNames->Color4f },
+#endif
+                { SdrPropertyTypes->Point, SdfValueTypeNames->Point3f },
+                { SdrPropertyTypes->Normal, SdfValueTypeNames->Normal3f },
+                { SdrPropertyTypes->Vector, SdfValueTypeNames->Vector3f },
+                { SdrPropertyTypes->Matrix, SdfValueTypeNames->Matrix4d } };
+        TokenToSdfTypeMap::const_iterator it
+#if PXR_VERSION <= 2408
+            = tokenTypeToSdfType.find(shaderProperty->GetTypeAsSdfType().second);
+#else
+            = tokenTypeToSdfType.find(shaderProperty->GetTypeAsSdfType().GetNdrType());
+#endif
+        if (it != tokenTypeToSdfType.end()) {
+            retVal = _UsdTypeToUfe(it->second);
+        } else {
+#if PXR_VERSION < 2205
+            // Pre-22.05 boolean inputs are special:
+            if (shaderProperty->GetType() == SdfValueTypeNames->Bool.GetAsToken()) {
+                retVal = _UsdTypeToUfe(SdfValueTypeNames->Bool);
+            } else
+#endif
+                // There is no Matrix3d type in Sdr, so we need to infer it from Sdf until a fix
+                // similar to what was done to booleans is submitted to USD. This also means that
+                // there will be no default value for that type.
+                if (shaderProperty->GetType() == SdfValueTypeNames->Matrix3d.GetAsToken()) {
+                retVal = _UsdTypeToUfe(SdfValueTypeNames->Matrix3d);
+            } else {
+                retVal = Ufe::Attribute::kGeneric;
+            }
+        }
+    } else {
+        retVal = _UsdTypeToUfe(typeName);
+    }
+
+    if (retVal == Ufe::Attribute::kString) {
+        if (!shaderProperty->GetOptions().empty()) {
+            retVal = Ufe::Attribute::kEnumString;
+        }
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        else if (shaderProperty->IsAssetIdentifier()) {
+            retVal = Ufe::Attribute::kFilename;
+        }
+#endif
+    }
+
+    return retVal;
+}
+
+Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::UsdAttribute& usdAttr)
+{
+    if (usdAttr.IsValid()) {
+        const SdfValueTypeName typeName = usdAttr.GetTypeName();
+        Ufe::Attribute::Type   type = _UsdTypeToUfe(typeName);
+        if (type == Ufe::Attribute::kString) {
+            // Both std::string and TfToken resolve to kString, but if there is a list of allowed
+            // tokens, then we use kEnumString instead.
+            if (usdAttr.GetPrim().GetPrimDefinition().GetPropertyMetadata<VtTokenArray>(
+                    usdAttr.GetName(), SdfFieldKeys->AllowedTokens, nullptr)) {
+                type = Ufe::Attribute::kEnumString;
+            }
+            UsdShadeNodeGraph asNodeGraph(usdAttr.GetPrim());
+            if (asNodeGraph) {
+                // NodeGraph inputs can have enum metadata on them when they export an inner enum.
+                const auto portType = UsdShadeUtils::GetBaseNameAndType(usdAttr.GetName()).second;
+                if (portType == UsdShadeAttributeType::Input) {
+                    const auto input = UsdShadeInput(usdAttr);
+                    if (!input.GetSdrMetadataByKey(UsdUfe::MetadataTokens->UIEnumLabels).empty()) {
+                        return Ufe::Attribute::kEnumString;
+                    }
+                    // Enum tokens can also be found at the Sdf level:
+                    if (usdAttr.HasMetadata(SdfFieldKeys->AllowedTokens)) {
+                        return Ufe::Attribute::kEnumString;
+                    }
+                }
+                // TfToken is also used in UsdShade as a Generic placeholder for connecting struct
+                // I/O.
+                if (usdAttr.GetTypeName() == SdfValueTypeNames->Token
+                    && portType != UsdShadeAttributeType::Invalid) {
+                    type = Ufe::Attribute::kGeneric;
+                }
+            }
+        }
+        return type;
+    }
+
+    TF_RUNTIME_ERROR("Invalid USDAttribute: %s", usdAttr.GetPath().GetAsString().c_str());
+    return Ufe::Attribute::kInvalid;
+}
+
+SdfValueTypeName ufeTypeToUsd(const Ufe::Attribute::Type ufeType)
+{
+    // Map the USD type into UFE type.
+    static const std::unordered_map<Ufe::Attribute::Type, SdfValueTypeName> sUfeTypeToUsd {
+        { Ufe::Attribute::kBool, SdfValueTypeNames->Bool },
+        { Ufe::Attribute::kInt, SdfValueTypeNames->Int },
+        { Ufe::Attribute::kFloat, SdfValueTypeNames->Float },
+        { Ufe::Attribute::kDouble, SdfValueTypeNames->Double },
+        { Ufe::Attribute::kString, SdfValueTypeNames->String },
+        // Not enough info at this point to differentiate between TfToken and std:string.
+        { Ufe::Attribute::kEnumString, SdfValueTypeNames->Token },
+        { Ufe::Attribute::kInt3, SdfValueTypeNames->Int3 },
+        { Ufe::Attribute::kFloat3, SdfValueTypeNames->Float3 },
+        { Ufe::Attribute::kDouble3, SdfValueTypeNames->Double3 },
+        { Ufe::Attribute::kColorFloat3, SdfValueTypeNames->Color3f },
+        { Ufe::Attribute::kGeneric, SdfValueTypeNames->Token },
+#ifdef UFE_V4_FEATURES_AVAILABLE
+        { Ufe::Attribute::kFilename, SdfValueTypeNames->Asset },
+        { Ufe::Attribute::kFloat2, SdfValueTypeNames->Float2 },
+        { Ufe::Attribute::kFloat4, SdfValueTypeNames->Float4 },
+        { Ufe::Attribute::kColorFloat4, SdfValueTypeNames->Color4f },
+        { Ufe::Attribute::kMatrix3d, SdfValueTypeNames->Matrix3d },
+        { Ufe::Attribute::kMatrix4d, SdfValueTypeNames->Matrix4d },
+#endif
+    };
+
+    const auto iter = sUfeTypeToUsd.find(ufeType);
+    if (iter != sUfeTypeToUsd.end()) {
+        return iter->second;
+    } else {
+        return SdfValueTypeName();
+    }
+}
+
+UsdAttribute* usdAttrFromUfeAttr(const Ufe::Attribute::Ptr& attr)
+{
+    if (!attr) {
+        TF_RUNTIME_ERROR("Invalid attribute.");
+        return nullptr;
+    }
+
+    if (attr->sceneItem()->runTimeId() != getUsdRunTimeId()) {
+        TF_RUNTIME_ERROR(
+            "Invalid runtime identifier for the attribute '" + attr->name() + "' in the node '"
+            + Ufe::PathString::string(attr->sceneItem()->path()) + "'.");
+        return nullptr;
+    }
+
+    return dynamic_cast<UsdAttribute*>(attr.get());
+}
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+Ufe::Attribute::Ptr attrFromUfeAttrInfo(const Ufe::AttributeInfo& attrInfo)
+{
+    auto item = downcast(Ufe::Hierarchy::createItem(attrInfo.path()));
+    if (!item) {
+        TF_RUNTIME_ERROR("Invalid scene item.");
+        return nullptr;
+    }
+    return UsdAttributes(item).attribute(attrInfo.name());
+}
+#endif // UFE_V4_FEATURES_AVAILABLE
+
 namespace {
 
 bool allowedInStrongerLayer(
@@ -382,7 +772,15 @@ bool allowedInStrongerLayer(
         ? stage->GetSessionLayer()
         : stage->GetRootLayer();
 
-    return getStrongerLayer(searchRoot, targetLayer, topLayer) == targetLayer;
+    auto strongerLayer = getStrongerLayer(searchRoot, targetLayer, topLayer);
+
+    // This happens when the edit target layer is within the reference.
+    // In this cae, we return true to allow it to be edited.
+    if (!strongerLayer) {
+        return true;
+    }
+
+    return strongerLayer == targetLayer;
 }
 
 } // namespace
@@ -525,11 +923,11 @@ void applyCommandRestriction(
             continue;
         }
 
-        // one reason for skipping the reference is to not clash
+        // one reason for skipping the references and payloads is to not clash
         // with the over that may be created in the stage's sessionLayer.
         // another reason is that one should be able to edit a referenced prim that
         // either as over/def as long as it has a primSpec in the selected edit target layer.
-        if (spec->HasReferences()) {
+        if (spec->HasReferences() || spec->HasPayloads()) {
             break;
         }
 
@@ -689,10 +1087,16 @@ bool isPropertyMetadataEditAllowed(
         = UsdUfe::getStrongerLayer(stage, targetLayer, topAuthoredLayer, true);
     bool allowed = (strongestLayer == targetLayer);
     if (!allowed && errMsg) {
+        std::string strongName;
+        if (strongestLayer)
+            strongName = strongestLayer->GetDisplayName();
+        else
+            strongName = "a layer we could not identify";
+
         *errMsg = TfStringPrintf(
             "Cannot edit [%s] attribute because there is a stronger opinion in [%s].",
             metadataName.GetText(),
-            strongestLayer ? strongestLayer->GetDisplayName().c_str() : "some layer");
+            strongName.c_str());
     }
     return allowed;
 }
@@ -798,6 +1202,27 @@ void enforceAttributeEditAllowed(const UsdPrim& prim, const TfToken& attrName)
     }
 }
 
+bool isAnyLayerModifiable(const UsdStageWeakPtr stage, std::string* errMsg /* = nullptr */)
+{
+    PXR_NS::SdfLayerHandleVector layers = stage->GetLayerStack(false);
+    for (auto layer : layers) {
+        if (!layer->IsMuted() && layer->PermissionToEdit()) {
+            return true;
+        }
+    }
+
+    if (errMsg) {
+        std::string err = TfStringPrintf(
+            "Cannot target any layers in the stage [%s] because the layers are either locked or "
+            "muted. Switching to session layer.",
+            stage->GetRootLayer()->GetIdentifier().c_str());
+
+        *errMsg = err;
+    }
+
+    return false;
+}
+
 bool isEditTargetLayerModifiable(const UsdStageWeakPtr stage, std::string* errMsg)
 {
     const auto editTarget = stage->GetEditTarget();
@@ -806,7 +1231,7 @@ bool isEditTargetLayerModifiable(const UsdStageWeakPtr stage, std::string* errMs
     if (editLayer && !editLayer->PermissionToEdit()) {
         if (errMsg) {
             std::string err = TfStringPrintf(
-                "Cannot edit [%s] because it is read-only. Set PermissionToEdit = true to proceed.",
+                "Cannot edit [%s] because it is locked. Unlock it to proceed.",
                 editLayer->GetDisplayName().c_str());
 
             *errMsg = err;
@@ -828,6 +1253,31 @@ bool isEditTargetLayerModifiable(const UsdStageWeakPtr stage, std::string* errMs
     }
 
     return true;
+}
+
+//! Copy the argument matrix into the return matrix.
+Ufe::Matrix4d toUfe(const PXR_NS::GfMatrix4d& src)
+{
+    Ufe::Matrix4d dst;
+    std::memcpy(&dst.matrix[0][0], src.GetArray(), sizeof(double) * 16);
+    return dst;
+}
+
+//! Copy the argument matrix into the return matrix.
+PXR_NS::GfMatrix4d toUsd(const Ufe::Matrix4d& src)
+{
+    PXR_NS::GfMatrix4d dst;
+    std::memcpy(dst.GetArray(), &src.matrix[0][0], sizeof(double) * 16);
+    return dst;
+}
+
+//! Copy the argument vector into the return vector.
+Ufe::Vector3d toUfe(const PXR_NS::GfVec3d& src) { return Ufe::Vector3d(src[0], src[1], src[2]); }
+
+//! Copy the argument vector into the return vector.
+PXR_NS::GfVec3d toUsd(const Ufe::Vector3d& src)
+{
+    return PXR_NS::GfVec3d(src.x(), src.y(), src.z());
 }
 
 Ufe::Selection removeDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath)
@@ -860,6 +1310,297 @@ Ufe::Selection recreateDescendants(const Ufe::Selection& src, const Ufe::Path& f
         }
     }
     return dst;
+}
+
+#ifdef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+template <class USD_TYPE, class UFE_TYPE>
+PXR_NS::VtValue convertUfeVectorToUsd(const Ufe::Value& ufeValue)
+{
+    auto     ufeVec = ufeValue.get<UFE_TYPE>();
+    USD_TYPE usdVec;
+    for (std::size_t i = 0; i < ufeVec.vector.size(); ++i) {
+        usdVec[i] = ufeVec.vector[i];
+    }
+    return PXR_NS::VtValue(usdVec);
+}
+#endif
+
+#ifdef UFE_SCENEITEM_HAS_METADATA
+PXR_NS::VtValue ufeValueToVtValue(const Ufe::Value& ufeValue)
+{
+    PXR_NS::VtValue usdValue;
+    if (ufeValue.isType<bool>())
+        usdValue = ufeValue.get<bool>();
+    else if (ufeValue.isType<int>())
+        usdValue = ufeValue.get<int>();
+    else if (ufeValue.isType<float>())
+        usdValue = ufeValue.get<float>();
+    else if (ufeValue.isType<double>())
+        usdValue = ufeValue.get<double>();
+    else if (ufeValue.isType<std::string>())
+        usdValue = ufeValue.get<std::string>();
+#ifdef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+    else if (ufeValue.isType<Ufe::Vector2i>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec2i, Ufe::Vector2i>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector2f>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec2f, Ufe::Vector2f>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector2d>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec2d, Ufe::Vector2d>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector3i>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec3i, Ufe::Vector3i>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector3f>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec3f, Ufe::Vector3f>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector3d>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec3d, Ufe::Vector3d>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector4i>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec4i, Ufe::Vector4i>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector4f>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec4f, Ufe::Vector4f>(ufeValue);
+    else if (ufeValue.isType<Ufe::Vector4d>())
+        return convertUfeVectorToUsd<PXR_NS::GfVec4d, Ufe::Vector4d>(ufeValue);
+#endif
+    else {
+        TF_CODING_ERROR(kErrorMsgInvalidValueType);
+    }
+
+    return usdValue;
+}
+
+#ifdef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+template <class UFE_TYPE, class USD_TYPE>
+Ufe::Value convertUsdVectorToUfe(const PXR_NS::VtValue& vtValue)
+{
+    auto     usdVec = vtValue.Get<USD_TYPE>();
+    UFE_TYPE ufeVec;
+    for (std::size_t i = 0; i < USD_TYPE::dimension; ++i) {
+        ufeVec.vector[i] = usdVec[i];
+    }
+    return Ufe::Value(ufeVec);
+}
+#endif
+
+Ufe::Value vtValueToUfeValue(const PXR_NS::VtValue& vtValue)
+{
+    if (vtValue.IsHolding<bool>())
+        return Ufe::Value(vtValue.Get<bool>());
+    else if (vtValue.IsHolding<int>())
+        return Ufe::Value(vtValue.Get<int>());
+    else if (vtValue.IsHolding<float>())
+        return Ufe::Value(vtValue.Get<float>());
+    else if (vtValue.IsHolding<double>())
+        return Ufe::Value(vtValue.Get<double>());
+    else if (vtValue.IsHolding<std::string>())
+        return Ufe::Value(vtValue.Get<std::string>());
+    else if (vtValue.IsHolding<PXR_NS::TfToken>())
+        return Ufe::Value(vtValue.Get<PXR_NS::TfToken>().GetString());
+#ifdef UFE_VALUE_SUPPORTS_VECTOR_AND_COLOR
+    else if (vtValue.IsHolding<PXR_NS::GfVec2i>())
+        return convertUsdVectorToUfe<Ufe::Vector2i, PXR_NS::GfVec2i>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec2f>())
+        return convertUsdVectorToUfe<Ufe::Vector2f, PXR_NS::GfVec2f>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec2d>())
+        return convertUsdVectorToUfe<Ufe::Vector2d, PXR_NS::GfVec2d>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec3i>())
+        return convertUsdVectorToUfe<Ufe::Vector3i, PXR_NS::GfVec3i>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec3f>())
+        return convertUsdVectorToUfe<Ufe::Vector3f, PXR_NS::GfVec3f>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec3d>())
+        return convertUsdVectorToUfe<Ufe::Vector3d, PXR_NS::GfVec3d>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec4i>())
+        return convertUsdVectorToUfe<Ufe::Vector4i, PXR_NS::GfVec4i>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec4f>())
+        return convertUsdVectorToUfe<Ufe::Vector4f, PXR_NS::GfVec4f>(vtValue);
+    else if (vtValue.IsHolding<PXR_NS::GfVec4d>())
+        return convertUsdVectorToUfe<Ufe::Vector4d, PXR_NS::GfVec4d>(vtValue);
+#endif
+    else {
+        std::stringstream ss;
+        ss << vtValue;
+        return Ufe::Value(ss.str());
+    }
+}
+#endif
+
+PXR_NS::SdrShaderNodeConstPtr usdShaderNodeFromSceneItem(const Ufe::SceneItem::Ptr& item)
+{
+    auto usdItem = downcast(item);
+    PXR_NAMESPACE_USING_DIRECTIVE
+    if (!TF_VERIFY(usdItem)) {
+        return nullptr;
+    }
+    PXR_NS::UsdPrim        prim = usdItem->prim();
+    PXR_NS::UsdShadeShader shader(prim);
+    if (!shader) {
+        return nullptr;
+    }
+    PXR_NS::TfToken mxNodeType;
+    shader.GetIdAttr().Get(&mxNodeType);
+
+    // Careful around name and identifier. They are not the same concept.
+    //
+    // Here is one example from MaterialX to illustrate:
+    //
+    //  ND_standard_surface_surfaceshader exists in 2 versions with identifiers:
+    //     ND_standard_surface_surfaceshader     (latest version)
+    //     ND_standard_surface_surfaceshader_100 (version 1.0.0)
+    // Same name, 2 different identifiers.
+    PXR_NS::SdrRegistry& registry = PXR_NS::SdrRegistry::GetInstance();
+    return registry.GetShaderNodeByIdentifier(mxNodeType);
+}
+
+void setWaitCursorFns(WaitCursorFn startFn, WaitCursorFn stopFn)
+{
+    gStartWaitCursorFn = startFn;
+    gStopWaitCursorFn = stopFn;
+}
+
+void startWaitCursor()
+{
+    if (!gStartWaitCursorFn)
+        return;
+
+    if (gWaitCursorCount == 0)
+        gStartWaitCursorFn();
+
+    ++gWaitCursorCount;
+}
+
+void stopWaitCursor()
+{
+    if (!gStopWaitCursorFn)
+        return;
+
+    --gWaitCursorCount;
+
+    if (gWaitCursorCount == 0)
+        gStopWaitCursorFn();
+}
+
+void setDefaultMaterialScopeNameFn(DefaultMaterialScopeNameFn fn)
+{
+    // This function is allowed to be null in which case a default
+    // material scope name of "mtl" will be used.
+    gGetDefaultMaterialScopeNameFn = fn;
+}
+
+std::string defaultMaterialScopeName()
+{
+    // Default material scope name as defined by USD Assets working group.
+    // See https://wiki.aswf.io/display/WGUSD/Guidelines+for+Structuring+USD+Assets
+    static constexpr auto kDefaultMaterialScopeName = "mtl";
+    return gGetDefaultMaterialScopeNameFn ? gGetDefaultMaterialScopeNameFn()
+                                          : kDefaultMaterialScopeName;
+}
+
+void setTransform3dMatrixOpNameFn(Transform3dMatrixOpNameFn fn)
+{
+    // This function is allowed to be null in which case there is
+    // no special transform3d matrix op name.
+    gTransform3dMatrixOpNameFn = fn;
+}
+
+const char* getTransform3dMatrixOpName()
+{
+    return gTransform3dMatrixOpNameFn ? gTransform3dMatrixOpNameFn() : nullptr;
+}
+
+UsdSceneItem::Ptr getParentMaterial(const UsdSceneItem::Ptr& item)
+{
+    if (!item) {
+        return {};
+    }
+
+    const TfToken kMaterial = TfToken("Material");
+
+    auto prim = item->prim();
+    auto path = item->path();
+
+    while (prim.GetTypeName() != kMaterial && prim.GetParent().IsValid()) {
+        path = path.pop();
+        prim = prim.GetParent();
+    }
+
+    return prim.GetTypeName() == kMaterial ? UsdSceneItem::create(path, prim) : nullptr;
+}
+
+void setExtractTRSFn(ExtractTRSFn fn)
+{
+    // This function is allowed to be null in which case, a default
+    // implementation will be used.
+    gExtractTRSFn = fn;
+}
+
+void extractTRS(const Ufe::Matrix4d& m, Ufe::Vector3d* t, Ufe::Vector3d* r, Ufe::Vector3d* s)
+{
+    if (gExtractTRSFn) {
+        gExtractTRSFn(m, t, r, s);
+    } else {
+        UsdUfe::internal::getTRS(m, t, r, s);
+    }
+}
+
+bool isSessionLayerGroupMetadata(const std::string& groupName, std::string* adjustedGroupName)
+{
+    static std::string sessionLayerPrefix("SessionLayer-");
+    if (groupName.rfind(sessionLayerPrefix, 0) != 0)
+        return false;
+
+    if (adjustedGroupName)
+        *adjustedGroupName = groupName.substr(sessionLayerPrefix.size());
+
+    return true;
+}
+
+void removeSessionLeftOvers(
+    const PXR_NS::UsdStageRefPtr& stage,
+    const PXR_NS::SdfPath&        primPath,
+    UsdUndoableItem*              undoableItem,
+    bool                          extraEdits)
+{
+    // Delete any information left in the session layer, adding any action taken
+    // to the undoable items. Note that if an undo/redo cycle already happened,
+    // the removal of the session data will already been done by the previous
+    // undo since this first undo captured removing the session data. In that
+    // case, the code below will do nothing and we won't capture double-removal
+    // of session data.
+    if (!stage)
+        return;
+
+    UsdEditContext editContext(stage, stage->GetSessionLayer());
+    UsdUndoBlock   undoBlock(undoableItem, extraEdits);
+    stage->RemovePrim(primPath);
+}
+
+Usd_PrimFlagsPredicate getUsdPredicate(const Ufe::Hierarchy::ChildFilter& childFilter)
+{
+    // Note: for now the only child filter flags we support are "Inactive Prims"
+    //       and "Class Prims".
+    //       See UsdHierarchyHandler::childFilter()
+
+    bool showInactive = false;
+    bool showClass = false;
+
+    for (const Ufe::ChildFilterFlag& filter : childFilter) {
+        if (filter.name == "InactivePrims") {
+            showInactive = filter.value;
+        } else if (filter.name == "ClassPrims") {
+            showClass = filter.value;
+        }
+    }
+
+    // Note: unfortunately, the way the USD predicate are implemented,
+    //       we cannot use && on a Usd_PrimFlagsPredicate, only on a
+    //       Usd_Term or a Usd_PrimFlagsConjunction.
+
+    auto predicate = Usd_PrimFlagsConjunction(Usd_Term(UsdPrimIsDefined));
+
+    if (!showInactive)
+        predicate &= UsdPrimIsActive;
+
+    if (!showClass)
+        predicate &= !UsdPrimIsAbstract;
+
+    return predicate;
 }
 
 } // namespace USDUFE_NS_DEF

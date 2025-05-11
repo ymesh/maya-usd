@@ -20,13 +20,27 @@
 #include <pxr/usd/usd/primTypeInfo.h>
 #include <pxr/usd/usd/schemaRegistry.h>
 
+#ifdef UFE_SCENEITEM_HAS_METADATA
+#include <usdUfe/ufe/UsdUndoClearSceneItemMetadataCommand.h>
+#include <usdUfe/ufe/UsdUndoSetSceneItemMetadataCommand.h>
+#include <usdUfe/ufe/Utils.h>
+
+#include <pxr/base/tf/diagnostic.h>
+#include <pxr/base/tf/token.h>
+#include <pxr/base/vt/dictionary.h>
+#include <pxr/base/vt/value.h>
+
+#endif // UFE_SCENEITEM_HAS_METADATA
+
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace USDUFE_NS_DEF {
 
+USDUFE_VERIFY_CLASS_SETUP(Ufe::SceneItem, UsdSceneItem);
+
 UsdSceneItem::UsdSceneItem(const Ufe::Path& path, const UsdPrim& prim, int instanceIndex)
     : Ufe::SceneItem(path)
-    , fPrim(prim)
+    , _prim(prim)
     , _instanceIndex(instanceIndex)
 {
 }
@@ -42,17 +56,17 @@ UsdSceneItem::create(const Ufe::Path& path, const UsdPrim& prim, int instanceInd
 // Ufe::SceneItem overrides
 //------------------------------------------------------------------------------
 
-std::string UsdSceneItem::nodeType() const { return fPrim ? fPrim.GetTypeName() : std::string(); }
+std::string UsdSceneItem::nodeType() const { return _prim ? _prim.GetTypeName() : std::string(); }
 
 std::vector<std::string> UsdSceneItem::ancestorNodeTypes() const
 {
     std::vector<std::string> strAncestorTypes;
 
-    if (!fPrim)
+    if (!_prim)
         return strAncestorTypes;
 
     // Get the actual schema type from the prim definition.
-    const TfType& schemaType = fPrim.GetPrimTypeInfo().GetSchemaType();
+    const TfType& schemaType = _prim.GetPrimTypeInfo().GetSchemaType();
     if (!schemaType) {
         // No schema type, return empty ancestor types.
         return strAncestorTypes;
@@ -77,5 +91,62 @@ std::vector<std::string> UsdSceneItem::ancestorNodeTypes() const
     ancestorTypesCache[schemaType] = strAncestorTypes;
     return strAncestorTypes;
 }
+
+#ifdef UFE_SCENEITEM_HAS_METADATA
+
+Ufe::Value UsdSceneItem::getMetadata(const std::string& key) const
+{
+    PXR_NS::VtValue data = prim().GetCustomDataByKey(PXR_NS::TfToken(key));
+    if (data.IsEmpty()) {
+        return Ufe::Value();
+    }
+
+    return vtValueToUfeValue(data);
+}
+
+Ufe::UndoableCommandPtr
+UsdSceneItem::setMetadataCmd(const std::string& key, const Ufe::Value& value)
+{
+    return std::make_shared<SetSceneItemMetadataCommand>(prim(), key, value);
+}
+
+Ufe::UndoableCommandPtr UsdSceneItem::clearMetadataCmd(const std::string& key)
+{
+    return std::make_shared<ClearSceneItemMetadataCommand>(prim(), "", key);
+}
+
+Ufe::Value UsdSceneItem::getGroupMetadata(const std::string& group, const std::string& key) const
+{
+    if (group.empty()) {
+        return vtValueToUfeValue(prim().GetCustomDataByKey(TfToken(key)));
+    } else {
+        // When the group name starts with "SessionLayer-", remove that prefix.
+        // That is done to mirror what is done when writing.
+        std::string prefixlessGroupName;
+        if (isSessionLayerGroupMetadata(group, &prefixlessGroupName)) {
+            PXR_NS::TfToken fullKey(prefixlessGroupName + std::string(":") + key);
+            return vtValueToUfeValue(prim().GetCustomDataByKey(fullKey));
+        } else {
+            PXR_NS::TfToken fullKey(group + std::string(":") + key);
+            return vtValueToUfeValue(prim().GetCustomDataByKey(fullKey));
+        }
+    }
+}
+
+Ufe::UndoableCommandPtr UsdSceneItem::setGroupMetadataCmd(
+    const std::string& group,
+    const std::string& key,
+    const Ufe::Value&  value)
+{
+    return std::make_shared<SetSceneItemMetadataCommand>(prim(), group, key, value);
+}
+
+Ufe::UndoableCommandPtr
+UsdSceneItem::clearGroupMetadataCmd(const std::string& group, const std::string& key)
+{
+    return std::make_shared<ClearSceneItemMetadataCommand>(prim(), group, key);
+}
+
+#endif // UFE_SCENEITEM_HAS_METADATA
 
 } // namespace USDUFE_NS_DEF

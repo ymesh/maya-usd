@@ -148,6 +148,20 @@ double UsdMayaUtil::ConvertMDistanceUnitToUsdGeomLinearUnit(const MDistance::Uni
     }
 }
 
+MString UsdMayaUtil::ConvertMDistanceUnitToText(const MDistance::Unit mdistanceUnit)
+{
+    static std::map<MDistance::Unit, const char*> unitsConversionMap
+        = { { MDistance::kMillimeters, "mm" }, { MDistance::kCentimeters, "cm" },
+            { MDistance::kMeters, "m" },       { MDistance::kKilometers, "km" },
+            { MDistance::kInches, "inch" },    { MDistance::kFeet, "foot" },
+            { MDistance::kYards, "yard" },     { MDistance::kMiles, "mile" } };
+
+    const auto iter = unitsConversionMap.find(mdistanceUnit);
+    if (iter == unitsConversionMap.end())
+        return "cm";
+    return iter->second;
+}
+
 MDistance::Unit UsdMayaUtil::ConvertUsdGeomLinearUnitToMDistanceUnit(const double linearUnit)
 {
     if (UsdGeomLinearUnitsAre(linearUnit, UsdGeomLinearUnits::millimeters)) {
@@ -175,8 +189,7 @@ MDistance::Unit UsdMayaUtil::ConvertUsdGeomLinearUnitToMDistanceUnit(const doubl
         return MDistance::kMiles;
     }
 
-    TF_CODING_ERROR("Invalid UsdGeomLinearUnit %f. Assuming centimeters", linearUnit);
-    return MDistance::kCentimeters;
+    return MDistance::kInvalid;
 }
 
 double UsdMayaUtil::GetExportDistanceConversionScalar(const double metersPerUnit)
@@ -686,9 +699,9 @@ std::string UsdMayaUtil::stripNamespaces(const std::string& nodeName, const int 
     std::stringstream ss;
 
     const std::vector<std::string> nodeNameParts
-        = TfStringSplit(nodeName, UsdMayaUtil::MayaDagDelimiter);
+        = TfStringSplit(nodeName, UsdMayaUtil::kMayaDagDelimiter);
 
-    const bool isAbsolute = TfStringStartsWith(nodeName, UsdMayaUtil::MayaDagDelimiter);
+    const bool isAbsolute = TfStringStartsWith(nodeName, UsdMayaUtil::kMayaDagDelimiter);
 
     for (size_t i = 0u; i < nodeNameParts.size(); ++i) {
         if (i == 0u && isAbsolute) {
@@ -699,11 +712,11 @@ std::string UsdMayaUtil::stripNamespaces(const std::string& nodeName, const int 
         }
 
         if (i != 0u) {
-            ss << UsdMayaUtil::MayaDagDelimiter;
+            ss << UsdMayaUtil::kMayaDagDelimiter;
         }
 
         const std::vector<std::string> nsNameParts
-            = TfStringSplit(nodeNameParts[i], UsdMayaUtil::MayaNamespaceDelimiter);
+            = TfStringSplit(nodeNameParts[i], UsdMayaUtil::kMayaNamespaceDelimiter);
 
         const size_t nodeNameIndex = nsNameParts.size() - 1u;
 
@@ -720,7 +733,7 @@ std::string UsdMayaUtil::stripNamespaces(const std::string& nodeName, const int 
         }
 
         ss << TfStringJoin(
-            startIter, nsNameParts.end(), UsdMayaUtil::MayaNamespaceDelimiter.c_str());
+            startIter, nsNameParts.end(), UsdMayaUtil::kMayaNamespaceDelimiter.c_str());
     }
 
     return ss.str();
@@ -1317,7 +1330,7 @@ MPlug UsdMayaUtil::FindChildPlugByName(const MPlug& plug, const MString& name)
 
 // XXX: see logic in UsdMayaTransformWriter.  It's unfortunate that this
 // logic is in 2 places.  we should merge.
-static bool _IsShape(const MDagPath& dagPath)
+bool UsdMayaUtil::isShape(const MDagPath& dagPath)
 {
     if (dagPath.hasFn(MFn::kTransform)) {
         return false;
@@ -1335,6 +1348,15 @@ static bool _IsShape(const MDagPath& dagPath)
     return (numberOfShapesDirectlyBelow == 1);
 }
 
+std::string
+UsdMayaUtil::MayaNodeNameToPrimName(const std::string& nodeName, const bool stripNamespaces)
+{
+    // Note: When not found, rfind returns std::string::npos.
+    //       npos == -1, so npos+1 is zero, so it always works.
+    const std::string::size_type pos = nodeName.rfind('|');
+    return MayaNodeNameToSdfPath(nodeName.substr(pos + 1), stripNamespaces).GetString();
+}
+
 SdfPath UsdMayaUtil::MayaNodeNameToSdfPath(const std::string& nodeName, const bool stripNamespaces)
 {
     std::string pathString = nodeName;
@@ -1347,9 +1369,10 @@ SdfPath UsdMayaUtil::MayaNodeNameToSdfPath(const std::string& nodeName, const bo
     std::replace(
         pathString.begin(),
         pathString.end(),
-        UsdMayaUtil::MayaDagDelimiter[0],
+        UsdMayaUtil::kMayaDagDelimiter[0],
         SdfPathTokens->childDelimiter.GetString()[0]);
-    std::replace(pathString.begin(), pathString.end(), UsdMayaUtil::MayaNamespaceDelimiter[0], '_');
+    std::replace(
+        pathString.begin(), pathString.end(), UsdMayaUtil::kMayaNamespaceDelimiter[0], '_');
 
     return SdfPath(pathString);
 }
@@ -1362,7 +1385,7 @@ SdfPath UsdMayaUtil::MDagPathToUsdPath(
     SdfPath usdPath
         = UsdMayaUtil::MayaNodeNameToSdfPath(dagPath.fullPathName().asChar(), stripNamespaces);
 
-    if (mergeTransformAndShape && _IsShape(dagPath)) {
+    if (mergeTransformAndShape && isShape(dagPath)) {
         usdPath = usdPath.GetParentPath();
     }
 
@@ -1918,6 +1941,8 @@ VtValue _ParseArgumentValue(const std::string& value, const VtValue& guideValue)
     // The export UI only has boolean and string parameters.
     if (guideValue.IsHolding<bool>()) {
         return VtValue(TfUnstringify<bool>(value));
+    } else if (guideValue.IsHolding<float>()) {
+        return VtValue(TfUnstringify<float>(value));
     } else if (guideValue.IsHolding<double>()) {
         return VtValue(TfUnstringify<double>(value));
     } else if (guideValue.IsHolding<int>()) {
@@ -1968,7 +1993,8 @@ VtValue _ParseArgumentValue(const std::string& value, const VtValue& guideValue)
 VtValue UsdMayaUtil::ParseArgumentValue(
     const std::string&  key,
     const std::string&  value,
-    const VtDictionary& guideDict)
+    const VtDictionary& guideDict,
+    bool                reportErrors)
 {
     // We handle two types of arguments:
     // 1 - bools: Should be encoded by translator UI as a "1" or "0" string.
@@ -1980,7 +2006,7 @@ VtValue UsdMayaUtil::ParseArgumentValue(
     if (iter != guideDict.end()) {
         const VtValue& guideValue = iter->second;
         return _ParseArgumentValue(value, guideValue);
-    } else {
+    } else if (reportErrors) {
         TF_CODING_ERROR("Unknown flag '%s'", key.c_str());
     }
 
@@ -1995,6 +2021,8 @@ std::pair<bool, std::string> UsdMayaUtil::ValueToArgument(const VtValue& value)
         return std::make_pair(true, std::to_string(value.Get<int>()));
     } else if (value.IsHolding<float>()) {
         return std::make_pair(true, std::to_string(value.Get<float>()));
+    } else if (value.IsHolding<double>()) {
+        return std::make_pair(true, std::to_string(value.Get<double>()));
     } else if (value.IsHolding<std::string>()) {
         return std::make_pair(true, value.Get<std::string>());
     } else if (value.IsHolding<std::vector<VtValue>>()) {
@@ -2536,10 +2564,12 @@ void UsdMayaUtil::AddMayaExtents(GfBBox3d& bbox, const UsdPrim& root, const UsdT
 SdrShaderNodePtrVec UsdMayaUtil::GetSurfaceShaderNodeDefs()
 {
     // TODO: Replace hard-coded materials with dynamically generated list.
-    static const std::set<TfToken> vettedSurfaces = { TfToken("ND_standard_surface_surfaceshader"),
-                                                      TfToken("ND_gltf_pbr_surfaceshader"),
-                                                      TfToken("ND_UsdPreviewSurface_surfaceshader"),
-                                                      TfToken("UsdPreviewSurface") };
+    static const std::set<TfToken> vettedSurfaces
+        = { TfToken("ND_standard_surface_surfaceshader"),
+            TfToken("ND_gltf_pbr_surfaceshader"),
+            TfToken("ND_UsdPreviewSurface_surfaceshader"),
+            TfToken("UsdPreviewSurface"),
+            TfToken("ND_open_pbr_surface_surfaceshader") };
 
     SdrShaderNodePtrVec surfaceShaderNodeDefs;
 
@@ -2562,4 +2592,11 @@ SdrShaderNodePtrVec UsdMayaUtil::GetSurfaceShaderNodeDefs()
     }
 
     return surfaceShaderNodeDefs;
+}
+
+bool UsdMayaUtil::isNodeInReference(const MObject& node, const MString& referenceFileName)
+{
+    MSelectionList nodes;
+    MFileIO::getReferenceNodes(referenceFileName, nodes);
+    return nodes.hasItem(node);
 }

@@ -20,11 +20,13 @@
 #include "stringResources.h"
 
 #include <mayaUsd/nodes/layerManager.h>
+#include <mayaUsd/nodes/proxyShapeBase.h>
 #include <mayaUsd/nodes/usdPrimProvider.h>
 #include <mayaUsd/utils/util.h>
 
 #include <maya/MDGMessage.h>
 #include <maya/MDagPath.h>
+#include <maya/MFileIO.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MGlobal.h>
 #include <maya/MNodeMessage.h>
@@ -137,13 +139,9 @@ void MayaSessionState::registerNotifications()
 {
     MCallbackId id;
 
-    id = MDGMessage::addNodeAddedCallback(
-        MayaSessionState::proxyShapeAddedCB, PROXY_NODE_TYPE, this);
-    _callbackIds.push_back(id);
-
-    id = MDGMessage::addNodeRemovedCallback(
-        MayaSessionState::proxyShapeRemovedCB, PROXY_NODE_TYPE, this);
-    _callbackIds.push_back(id);
+    MayaUsd::MayaNodeTypeObserver& proxyObserver
+        = PXR_NS::MayaUsdProxyShapeBase::getProxyShapesObserver();
+    proxyObserver.addTypeListener(*this);
 
     id = MNodeMessage::addNameChangedCallback(
         MObject::kNullObj, MayaSessionState::nodeRenamedCB, this);
@@ -176,6 +174,10 @@ void MayaSessionState::registerNotifications()
 
 void MayaSessionState::unregisterNotifications()
 {
+    MayaUsd::MayaNodeTypeObserver& proxyObserver
+        = PXR_NS::MayaUsdProxyShapeBase::getProxyShapesObserver();
+    proxyObserver.removeTypeListener(*this);
+
     for (auto id : _callbackIds) {
         MMessage::removeCallback(id);
     }
@@ -214,22 +216,25 @@ void MayaSessionState::mayaUsdStageResetCBOnIdle(StageEntry const& entry)
     Q_EMIT stageResetSignal(entry);
 }
 
-/* static */
-void MayaSessionState::proxyShapeAddedCB(MObject& node, void* clientData)
+void MayaSessionState::processNodeAdded(MObject& node)
 {
-    auto THIS = static_cast<MayaSessionState*>(clientData);
-
     // doing it on idle give time to the Load Stage to set a file name
-    QTimer::singleShot(0, [THIS, node]() { THIS->proxyShapeAddedCBOnIdle(node); });
+    QTimer::singleShot(0, [self = this, node]() { self->proxyShapeAddedCBOnIdle(node); });
 }
 
-/* static */
 void MayaSessionState::proxyShapeAddedCBOnIdle(const MObject& obj)
 {
+    if (MFileIO::isNewingFile())
+        return;
+
     // doing it on idle give time to the Load Stage to set a file name
     // but we don't do a second idle because we could get a delete right after a Add
-    MDagPath dagPath;
-    MFnDagNode(obj).getPath(dagPath);
+    MDagPath   dagPath;
+    MFnDagNode dagNode;
+    if (!dagNode.setObject(obj))
+        return;
+
+    dagNode.getPath(dagPath);
     auto       shapePath = dagPath.fullPathName();
     StageEntry entry;
     if (getStageEntry(&entry, shapePath)) {
@@ -237,11 +242,9 @@ void MayaSessionState::proxyShapeAddedCBOnIdle(const MObject& obj)
     }
 }
 
-/* static */
-void MayaSessionState::proxyShapeRemovedCB(MObject& node, void* clientData)
+void MayaSessionState::processNodeRemoved(MObject& /*node*/)
 {
-    auto THIS = static_cast<MayaSessionState*>(clientData);
-    QTimer::singleShot(0, [THIS]() { THIS->stageListChangedSignal(); });
+    QTimer::singleShot(0, [self = this]() { self->stageListChangedSignal(); });
 }
 
 /* static */
@@ -313,7 +316,7 @@ void MayaSessionState::sceneLoadedCB(void* clientData)
 
 void MayaSessionState::loadSelectedStage()
 {
-    const std::string shapePath = MayaUsd::LayerManager::getSelectedStage();
+    const std::string shapePath = MayaUsd::LayerManager::getSelectedStage(nullptr);
     StageEntry        entry;
     if (!shapePath.empty() && getStageEntry(&entry, shapePath.c_str())) {
         setStageEntry(entry);
@@ -411,7 +414,8 @@ void MayaSessionState::rootLayerPathChanged(std::string const& in_path)
     if (!_currentStageEntry._proxyShapePath.empty()) {
         MString proxyShape(_currentStageEntry._proxyShapePath.c_str());
         MString newValue(in_path.c_str());
-        MayaUsd::utils::setNewProxyPath(proxyShape, newValue, nullptr, false);
+        MayaUsd::utils::setNewProxyPath(
+            proxyShape, newValue, MayaUsd::utils::kProxyPathFollowProxyShape, nullptr, false);
     }
 }
 

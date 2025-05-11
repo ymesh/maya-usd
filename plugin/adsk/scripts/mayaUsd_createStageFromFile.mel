@@ -23,8 +23,20 @@ proc setOptionVars(int $forceFactorySettings)
         optionVar -stringValue stageFromFile_excludePrimPath "";
     }
 
-    if ($forceFactorySettings || !`optionVar -exists stageFromFile_loadPayloads`) {
-        optionVar -intValue stageFromFile_loadPayloads 1;
+    if ($forceFactorySettings || !`optionVar -exists stageFromFile_loadAllPayloads`) {
+        optionVar -intValue stageFromFile_loadAllPayloads 1;
+    }
+
+    if ($forceFactorySettings || !`optionVar -exists stageFromFile_convertUpAxis`) {
+        optionVar -intValue stageFromFile_convertUpAxis 1;
+    }
+
+    if ($forceFactorySettings || !`optionVar -exists stageFromFile_convertUnit`) {
+        optionVar -intValue stageFromFile_convertUnit 1;
+    }
+
+    if ($forceFactorySettings || !`optionVar -exists stageFromFile_conversionMethod`) {
+        optionVar -intValue stageFromFile_conversionMethod 1;
     }
 }
 
@@ -62,6 +74,14 @@ global proc string getLatestLoadStageFolder()
     return $sceneFolder;
 }
 
+// Call when the up-axis or unit checkbox are modified bythe user.
+global proc stageFromFile_upAxisUnitCB()
+{
+    int $upAxisEnabled = `checkBoxGrp -q -value1 upAxisCheckBox`;
+    int $unitEnabled = `checkBoxGrp -q -value1 unitCheckBox`;
+    optionMenuGrp -e -en ($unitEnabled + $upAxisEnabled) axisAndUnitMethodMenu;
+}
+
 // stageFromFile_UISetup
 // creates the options of the stageFromFile dialog
 global proc string stageFromFile_UISetup(string $parent)
@@ -76,14 +96,14 @@ global proc string stageFromFile_UISetup(string $parent)
 
     // Then add the stage from file specific section.
     setParent $layout;
-    $title = `getMayaUsdString("kUsdStage")`;
+    $title = `getMayaUsdString("kLabelStage")`;
     $frame = `frameLayout -label $title -collapsable false`;
     checkBoxGrp -l `getMayaUsdString("kLoadPayloads")` 
         -ann `getMayaUsdString("kLoadPayloadsAnn")`
         -sbm `getMayaUsdString("kLoadPayloadsSbm")`
-        loadPayloadsCheckBox;
+        loadAllPayloadsCheckBox;
 
-    frameLayout -label `getMayaUsdString("kLabelStageDisplay")` -parent $frame -collapsable false;
+    frameLayout -label `getMayaUsdString("kLabelStageDisplay")` -parent $frame -collapsable true -collapse false;
     textFieldGrp -l `getMayaUsdString("kPrimPath")` 
         -ann `getMayaUsdString("kPrimPathAnn")`
         -sbm `getMayaUsdString("kPrimPathSbm")`
@@ -92,6 +112,25 @@ global proc string stageFromFile_UISetup(string $parent)
         -ann `getMayaUsdString("kExcludePrimPathsAnn")`
         -sbm `getMayaUsdString("kExcludePrimPathsSbm")`
         excludePrimPathField;
+
+    frameLayout -label `getMayaUsdString("kStageAdvancedLabel")` -parent $frame -collapsable true -collapse true advancedSection;
+        columnLayout -columnOffset "left" 2 -parent advancedSection advancedSectionOffset;
+        frameLayout -label `getMayaUsdString("kStageAxisUnitConversionLabel")` -parent advancedSectionOffset -collapsable true -collapse false;
+            checkBoxGrp -l `getMayaUsdString("kStageUpAxisLabel")` 
+                -ann `getMayaUsdString("kStageUpAxisAnn")`
+                -value1 1
+                -cc ("stageFromFile_upAxisUnitCB")
+                upAxisCheckBox;
+            checkBoxGrp -l `getMayaUsdString("kStageUnitLabel")` 
+                -ann `getMayaUsdString("kStageUnitAnn")`
+                -value1 1
+                -cc ("stageFromFile_upAxisUnitCB")
+                unitCheckBox;
+            optionMenuGrp -l `getMayaUsdString("kStageAxisAndUnitMethod")` -ann `getMayaUsdString("kStageAxisAndUnitMethodAnn")` axisAndUnitMethodMenu;
+                menuItem -l `getMayaUsdString("kStageAxisAndUnitRotateScale")` -ann "rotateScale";
+                menuItem -l `getMayaUsdString("kStageAxisAndUnitOverwritePrefs")` -ann "overwritePrefs";
+                // This default-select Rotate/Scale item
+                optionMenuGrp -edit -select 1 axisAndUnitMethodMenu;
 
     return $layout;
 }
@@ -107,12 +146,29 @@ global proc stageFromFile_UIInit(string $parent, string $filterType)
 
     string $ppath = `optionVar -q stageFromFile_primPath`;
     string $exppath = `optionVar -q stageFromFile_excludePrimPath`;
-    int $loadp = `optionVar -q stageFromFile_loadPayloads`;
+    int $loadp = `optionVar -q stageFromFile_loadAllPayloads`;
 
     setParent $parent;
     textFieldGrp -e -text $ppath primPathField;
     textFieldGrp -e -text $exppath excludePrimPathField;
-    checkBoxGrp -e -value1 $loadp loadPayloadsCheckBox;
+    checkBoxGrp -e -value1 $loadp loadAllPayloadsCheckBox;
+
+    if (`optionVar -exists stageFromFile_convertUpAxis`) {
+        int $convertUpAxis = `optionVar -q stageFromFile_convertUpAxis`;
+        checkBoxGrp -e -value1 $convertUpAxis upAxisCheckBox;
+    }
+
+    if (`optionVar -exists stageFromFile_convertUnit`) {
+        int $convertUnit = `optionVar -q stageFromFile_convertUnit`;
+        checkBoxGrp -e -value1 $convertUnit unitCheckBox;
+    }
+
+    if (`optionVar -exists stageFromFile_conversionMethod`) {
+        int $conversionMethod = `optionVar -q stageFromFile_conversionMethod`;
+        optionMenuGrp -e -select $conversionMethod axisAndUnitMethodMenu;
+    }
+
+    stageFromFile_upAxisUnitCB();
 }
 
 global proc stageFromFile_UICommit(string $parent)
@@ -127,8 +183,32 @@ global proc stageFromFile_UICommit(string $parent)
         (`textFieldGrp -q -text  primPathField`);
     optionVar -stringValue stageFromFile_excludePrimPath
         (`textFieldGrp -q -text  excludePrimPathField`);
-    optionVar -intValue stageFromFile_loadPayloads
-        (`checkBoxGrp -q -value1 loadPayloadsCheckBox`);
+    optionVar -intValue stageFromFile_loadAllPayloads
+        (`checkBoxGrp -q -value1 loadAllPayloadsCheckBox`);
+
+    optionVar -intValue stageFromFile_convertUpAxis
+        (`checkBoxGrp -q -value1 upAxisCheckBox`);
+    optionVar -intValue stageFromFile_convertUnit
+        (`checkBoxGrp -q -value1 unitCheckBox`);
+    optionVar -intValue stageFromFile_conversionMethod
+        (`optionMenuGrp -q -select axisAndUnitMethodMenu`);
+}
+
+proc convertUpAxisAndUnit(string $shapeNode)
+{
+    int $convertUpAxis = `optionVar -q stageFromFile_convertUpAxis`;
+    int $convertUnit = `optionVar -q stageFromFile_convertUnit`;
+    int $conversionMethod = `optionVar -q stageFromFile_conversionMethod`;
+    string $conversionMethodStr = ($conversionMethod == 1) ? "rotateScale" : "overwritePrefs";
+
+    python(
+        "import mayaUsdStageConversion; " +
+        "mayaUsdStageConversion.convertUpAxisAndUnit(" +
+            "'''" + $shapeNode + "'''" + ", " +
+            ($convertUpAxis ? "True" : "False") + ", " +
+            ($convertUnit ? "True" : "False") + ", " +
+            "'''" + $conversionMethodStr + "'''" +
+            ")");
 }
 
 proc string doCreateStage(string $fileName)
@@ -140,7 +220,11 @@ proc string doCreateStage(string $fileName)
 
     string $ppath = `optionVar -q stageFromFile_primPath`;
     string $exppath = `optionVar -q stageFromFile_excludePrimPath`;
-    int $loadp = `optionVar -q stageFromFile_loadPayloads`;
+    int $loadp = `optionVar -q stageFromFile_loadAllPayloads`;
+    string $loadpStr = "True";
+    if ($loadp == 0) {
+        $loadpStr = "False";
+    }
 
     string $fileNameToSave = $fileName;
     int $requireRelative = (`optionVar -exists mayaUsd_MakePathRelativeToSceneFile` && `optionVar -query mayaUsd_MakePathRelativeToSceneFile`);
@@ -149,12 +233,14 @@ proc string doCreateStage(string $fileName)
     }
 
     string $shapeNode = `createNode "mayaUsdProxyShape" -skipSelect -name ($baseName+"Shape")`;
+    // Note: load rules must be the first thing set so the stage gets loaded in the correct state right away.
+    python("import mayaUsd.lib as mayaUsdLib; mayaUsdLib.setLoadRulesAttribute('" + $shapeNode + "', " + $loadpStr + ")");
     setAttr -type "string" ($shapeNode+".filePath") $fileNameToSave;
     setAttr ($shapeNode+".filePathRelative") $requireRelative;
     setAttr -type "string" ($shapeNode+".primPath") $ppath;
     setAttr -type "string" ($shapeNode+".excludePrimPaths") $exppath;
-    setAttr ($shapeNode+".loadPayloads") $loadp;
     connectAttr time1.outTime ($shapeNode+".time");
+    convertUpAxisAndUnit($shapeNode);
     select -r $shapeNode;
     string $fullPath[] = `ls -l $shapeNode`;
     return $fullPath[0];
@@ -268,5 +354,9 @@ global proc mayaUsd_createStageFromFile()
 
 global proc string mayaUsd_createStageFromFilePath(string $usdFile)
 {
+    // This proc is used by the unit tests (which run in standalone mode).
+    // In that case we need to make sure the optionVars are initialized as
+    // they are queried in doCreateStage().
+    setOptionVars(false);
     return doCreateStage($usdFile);
 }

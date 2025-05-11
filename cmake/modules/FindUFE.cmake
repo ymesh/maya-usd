@@ -12,6 +12,8 @@
 # UFE_LIGHTS_SUPPORT        Presence of UFE lights support
 # UFE_MATERIALS_SUPPORT     Presence of UFE materials support
 # UFE_SCENE_SEGMENT_SUPPORT Presence of UFE scene segment support
+# UFE_CLIPBOARD_SUPPORT     Presence of UFE clipboard support
+# UFE_DEFAULT_VALUE_SUPPORT Presence of UFE default value support
 # UFE_PREVIEW_FEATURES      List of all features introduced gradually in the UFE preview version
 #
 
@@ -64,6 +66,12 @@ if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/ufe.h")
         # Note: the UFE_PATCH_LEVEL will start at 300 and will thus encode the minor version
         #       of 3 (so we don't use UFE_MINOR_VERSION in this formula).
         math(EXPR UFE_PREVIEW_VERSION_NUM "4 * 1000 + ${UFE_PATCH_LEVEL}")
+    elseif(UFE_VERSION VERSION_EQUAL "5.0.0")
+        # Temporary. Once next Maya PR is released with UFE v5.0.0 this should
+        # be removed (along with all the UFE_PREVIEW_VERSION_NUM checks).
+        set(UFE_PREVIEW_VERSION_NUM 5017)
+    elseif(UFE_VERSION VERSION_EQUAL "5.1.0")
+        set(UFE_PREVIEW_VERSION_NUM 5100)
     endif()
     message ("============ UFE_PREVIEW_VERSION_NUM = ${UFE_PREVIEW_VERSION_NUM}")
 
@@ -128,18 +136,59 @@ set(UFE_LIGHTS_SUPPORT FALSE CACHE INTERNAL "ufeLights")
 if (UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/lightHandler.h")
     set(UFE_LIGHTS_SUPPORT TRUE CACHE INTERNAL "ufeLights")
     message(STATUS "Maya has UFE lights API")
+
+    set(UFE_VOLUME_LIGHTS_SUPPORT FALSE CACHE INTERNAL "ufeVolumeLights")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/light.h UFE_HAS_API REGEX "VolumeProps")
+    if(UFE_HAS_API)
+        set(UFE_VOLUME_LIGHTS_SUPPORT TRUE CACHE INTERNAL "ufeVolumeLights")
+        message(STATUS "Maya has UFE VolumeLights API")
+    endif()
 endif()
 
 set(UFE_MATERIALS_SUPPORT FALSE CACHE INTERNAL "ufeMaterials")
 if (UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/material.h")
     set(UFE_MATERIALS_SUPPORT TRUE CACHE INTERNAL "ufeMaterials")
     message(STATUS "Maya has UFE materials API")
+
+    set(UFE_MATERIAL_HAS_HASMATERIAL FALSE CACHE INTERNAL "ufeMaterialHashasMaterial")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/material.h UFE_HAS_API REGEX "hasMaterial")
+    if(UFE_HAS_API)
+        set(UFE_MATERIAL_HAS_HASMATERIAL TRUE CACHE INTERNAL "ufeMaterialHashasMaterial")
+        message(STATUS "Maya UFE Material interface has hasMaterial method")
+    endif()
 endif()
 
 set(UFE_SCENE_SEGMENT_SUPPORT FALSE CACHE INTERNAL "ufeSceneSegment")
 if (UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/sceneSegmentHandler.h")
     set(UFE_SCENE_SEGMENT_SUPPORT TRUE CACHE INTERNAL "ufeSceneSegment")
     message(STATUS "Maya has UFE scene segment API")
+endif()
+
+set(UFE_HAS_DISPLAY_NAME FALSE CACHE INTERNAL "ufeHasDisplayName")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/attribute.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/attribute.h UFE_HAS_API REGEX "displayName")
+    if(UFE_HAS_API)
+        set(UFE_HAS_DISPLAY_NAME TRUE CACHE INTERNAL "ufeHasDisplayName")
+        message(STATUS "Maya has UFE Attribute displayName")
+    endif()
+endif()
+
+set(UFE_DEFAULT_VALUE_SUPPORT FALSE CACHE INTERNAL "ufeHasDefaultValue")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/attribute.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/attribute.h UFE_HAS_API REGEX "isDefault")
+    if(UFE_HAS_API)
+        set(UFE_DEFAULT_VALUE_SUPPORT TRUE CACHE INTERNAL "ufeHasDefaultValue")
+        message(STATUS "Maya has UFE Attribute default value support")
+    endif()
+endif()
+
+set(UFE_HAS_NATIVE_TYPE_METADATA FALSE CACHE INTERNAL "ufeHasNativeTypeMetadata")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/attributeDef.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/attributeDef.h UFE_HAS_API REGEX "NativeType")
+    if(UFE_HAS_API)
+        set(UFE_HAS_NATIVE_TYPE_METADATA TRUE CACHE INTERNAL "ufeHasNativeTypeMetadata")
+        message(STATUS "Maya has UFE AttributeDef 'NativeType' metadata")
+    endif()
 endif()
 
 set(UFE_TRIE_NODE_HAS_CHILDREN_COMPONENTS_ACCESSOR FALSE CACHE INTERNAL "ufeTrieNodeHasChildrenComponentsAccessor")
@@ -160,6 +209,15 @@ if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/uiNodeGraphNode.h")
     endif()
 endif()
 
+set(UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR FALSE CACHE INTERNAL "ufeUINodeGraphNodeHasDisplayColor")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/uiNodeGraphNode.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/uiNodeGraphNode.h UFE_HAS_API REGEX "getDisplayColor")
+    if(UFE_HAS_API)
+        set(UFE_UINODEGRAPHNODE_HAS_DISPLAYCOLOR TRUE CACHE INTERNAL "ufeUINodeGraphNodeHasDisplayColor")
+        message(STATUS "Maya has UFE UINodeGraphNode display color interface")
+    endif()
+endif()
+
 set(UFE_ATTRIBUTES_GET_ENUMS FALSE CACHE INTERNAL "ufeAttributesGetEnums")
 if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/attributes.h")
     file(STRINGS ${UFE_INCLUDE_DIR}/ufe/attributes.h UFE_HAS_API REGEX "getEnums")
@@ -169,3 +227,53 @@ if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/attributes.h")
     endif()
 endif()
 
+set(UFE_SCENEITEM_HAS_METADATA FALSE CACHE INTERNAL "getMetadata")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/sceneItem.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/sceneItem.h UFE_HAS_API REGEX "getMetadata")
+    if(UFE_HAS_API)
+        set(UFE_SCENEITEM_HAS_METADATA TRUE CACHE INTERNAL "ufeSceneItemHasMetaData")
+        message(STATUS "Maya has UFE SceneItem's meta data interface")
+    endif()
+endif()
+
+set(UFE_CONTEXTOPS_HAS_OPTIONBOX FALSE CACHE INTERNAL "kIsOptionBox")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/contextOps.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/contextOps.h UFE_HAS_API REGEX "kIsOptionBox")
+    if(UFE_HAS_API)
+        set(UFE_CONTEXTOPS_HAS_OPTIONBOX TRUE CACHE INTERNAL "kIsOptionBox")
+        message(STATUS "Maya UFE ContextItem has OptionBox meta data")
+    endif()
+endif()
+
+set(UFE_CAMERA_HAS_RENDERABLE FALSE CACHE INTERNAL "ufeCameraHasRendereable")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/camera.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/camera.h UFE_HAS_API REGEX "renderable")
+    if(UFE_HAS_API)
+        set(UFE_CAMERA_HAS_RENDERABLE TRUE CACHE INTERNAL "ufeCameraHasRendereable")
+        message(STATUS "Maya has UFE Camera renderable interface")
+    endif()
+endif()
+
+set(UFE_CLIPBOARD_SUPPORT FALSE CACHE INTERNAL "ufeClipboard")
+if (UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/clipboardHandler.h")
+    set(UFE_CLIPBOARD_SUPPORT TRUE CACHE INTERNAL "ufeClipboard")
+    message(STATUS "Maya has UFE clipboard API")
+endif()
+
+set(UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH FALSE CACHE INTERNAL "rootSceneSegmentRootPath")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/sceneSegmentHandler.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/sceneSegmentHandler.h UFE_HAS_API REGEX "rootSceneSegmentRootPath")
+    if(UFE_HAS_API)
+        set(UFE_SCENE_SEGMENT_HANDLER_ROOT_PATH TRUE CACHE INTERNAL "rootSceneSegmentRootPath")
+        message(STATUS "Maya has UFE SceneSegmentHandler's rootSceneSegmentRootPath interface")
+    endif()
+endif()
+
+set(UFE_CAMERAHANDLER_HAS_FINDALL FALSE CACHE INTERNAL "findAll")
+if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/cameraHandler.h")
+    file(STRINGS ${UFE_INCLUDE_DIR}/ufe/cameraHandler.h UFE_HAS_API REGEX "findAll")
+    if(UFE_HAS_API)
+        set(UFE_CAMERAHANDLER_HAS_FINDALL TRUE CACHE INTERNAL "ufeCameraHandlerHasFindAll")
+        message(STATUS "Maya has UFE CameraHandler's findAll interface")
+    endif()
+endif()

@@ -13,29 +13,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#pragma once
+#ifndef USDUFE_UFE_UTILS_H
+#define USDUFE_UFE_UTILS_H
 
 #include <usdUfe/base/api.h>
 #include <usdUfe/ufe/UsdSceneItem.h>
 
 #include <pxr/usd/sdf/path.h>
+#include <pxr/usd/sdr/shaderNode.h>
+#include <pxr/usd/usd/attribute.h>
+#include <pxr/usd/usd/primFlags.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usdImaging/usdImaging/delegate.h>
 
+#include <ufe/attribute.h>
+#include <ufe/hierarchy.h>
 #include <ufe/path.h>
 #include <ufe/scene.h>
 #include <ufe/types.h>
 #include <ufe/ufe.h>
 
+#ifdef UFE_V3_FEATURES_AVAILABLE
+#include <pxr/base/vt/value.h>
+
+#include <ufe/value.h>
+#endif // UFE_V3_FEATURES_AVAILABLE
+
 #include <string>
 
 UFE_NS_DEF
 {
+    class Attribute;
+    class AttributeInfo;
     class PathSegment;
     class Selection;
 }
 
 namespace USDUFE_NS_DEF {
+
+class UsdAttribute;
+class UsdUndoableItem;
 
 // DCC specific accessor functions.
 typedef PXR_NS::UsdStageWeakPtr (*StageAccessorFn)(const Ufe::Path&);
@@ -46,6 +63,12 @@ typedef bool (*IsAttributeLockedFn)(const PXR_NS::UsdAttribute& attr, std::strin
 typedef void (*SaveStageLoadRulesFn)(const PXR_NS::UsdStageRefPtr&);
 typedef bool (*IsRootChildFn)(const Ufe::Path& path);
 typedef std::string (*UniqueChildNameFn)(const PXR_NS::UsdPrim& usdParent, const std::string& name);
+typedef void (*DisplayMessageFn)(const std::string& msg);
+typedef void (*WaitCursorFn)();
+typedef std::string (*DefaultMaterialScopeNameFn)();
+typedef void (
+    *ExtractTRSFn)(const Ufe::Matrix4d& m, Ufe::Vector3d* t, Ufe::Vector3d* r, Ufe::Vector3d* s);
+typedef const char* (*Transform3dMatrixOpNameFn)();
 
 //------------------------------------------------------------------------------
 // Helper functions
@@ -107,7 +130,7 @@ PXR_NS::UsdTimeCode getTime(const Ufe::Path& path);
 
 //! Set the DCC specific USD attribute is locked test function.
 //! Use of this function is optional, if one is not supplied then
-//! default value (false) will be returned by accessor function.
+//! a default test function will be used.
 USDUFE_PUBLIC
 void setIsAttributeLockedFn(IsAttributeLockedFn fn);
 
@@ -176,9 +199,64 @@ void setUniqueChildNameFn(UniqueChildNameFn fn);
 USDUFE_PUBLIC
 std::string uniqueChildName(const PXR_NS::UsdPrim& usdParent, const std::string& name);
 
+//! Return a relatively unique prim name.
+//! That is, make some effort so that the name is unique relative to other prims
+//! "around" it, like ancestors and some descendants.
+USDUFE_PUBLIC
+std::string relativelyUniqueName(const PXR_NS::UsdPrim& usdParent, const std::string& name);
+
 //! Default uniqueChildName() implementation. Uses all the prim's children.
 USDUFE_PUBLIC
 std::string uniqueChildNameDefault(const PXR_NS::UsdPrim& parent, const std::string& name);
+
+//! Return a unique SdfPath by looking at existing siblings under the path's parent.
+USDUFE_PUBLIC
+PXR_NS::SdfPath uniqueChildPath(const PXR_NS::UsdStage& stage, const PXR_NS::SdfPath& path);
+
+USDUFE_PUBLIC
+Ufe::Path appendToUsdPath(const Ufe::Path& path, const std::string& name);
+
+//! Returns true if \p item is a materials scope.
+USDUFE_PUBLIC
+bool isMaterialsScope(const Ufe::SceneItem::Ptr& item);
+
+//! Support message types.
+enum class MessageType
+{
+    kInfo,    // Displays an information message, default = TF_STATUS
+    kWarning, // Displays a warning message, default = TF_WARN
+    kError,   // Displays a error message, default = TF_RUNTIME_ERROR
+
+    nbTypes
+};
+
+//! Set the DCC specific "displayMessage" functions.
+//! Use of these functions is optional, if not supplied then default
+//! TF_ message functions from USD will be used.
+USDUFE_PUBLIC
+void setDisplayMessageFn(const DisplayMessageFn fns[static_cast<int>(MessageType::nbTypes)]);
+
+//! Displays a message of the given type using a DCC message function (if provided)
+//! otherwise displays using a USD default message function (for each type)..
+USDUFE_PUBLIC
+void displayMessage(MessageType type, const std::string& msg);
+
+USDUFE_PUBLIC
+Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::UsdAttribute& usdAttr);
+
+USDUFE_PUBLIC
+Ufe::Attribute::Type usdTypeToUfe(const PXR_NS::SdrShaderPropertyConstPtr& shaderProperty);
+
+USDUFE_PUBLIC
+PXR_NS::SdfValueTypeName ufeTypeToUsd(const Ufe::Attribute::Type ufeType);
+
+USDUFE_PUBLIC
+UsdAttribute* usdAttrFromUfeAttr(const Ufe::Attribute::Ptr& attr);
+
+#ifdef UFE_V4_FEATURES_AVAILABLE
+USDUFE_PUBLIC
+Ufe::Attribute::Ptr attrFromUfeAttrInfo(const Ufe::AttributeInfo& attrInfo);
+#endif // UFE_V4_FEATURES_AVAILABLE
 
 //! Send notification for data model changes
 template <class T>
@@ -194,6 +272,22 @@ inline UsdSceneItem::Ptr downcast(const Ufe::SceneItem::Ptr& item)
     return std::dynamic_pointer_cast<UsdSceneItem>(item);
 }
 
+//! Copy the argument matrix into the return matrix.
+USDUFE_PUBLIC
+Ufe::Matrix4d toUfe(const PXR_NS::GfMatrix4d& src);
+
+//! Copy the argument matrix into the return matrix.
+USDUFE_PUBLIC
+PXR_NS::GfMatrix4d toUsd(const Ufe::Matrix4d& src);
+
+//! Copy the argument vector into the return vector.
+USDUFE_PUBLIC
+Ufe::Vector3d toUfe(const PXR_NS::GfVec3d& src);
+
+//! Copy the argument vector into the return vector.
+USDUFE_PUBLIC
+PXR_NS::GfVec3d toUsd(const Ufe::Vector3d& src);
+
 //! Filter a source selection by removing descendants of filterPath.
 USDUFE_PUBLIC
 Ufe::Selection removeDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath);
@@ -203,6 +297,20 @@ Ufe::Selection removeDescendants(const Ufe::Selection& src, const Ufe::Path& fil
 //! destination using the source scene item path.
 USDUFE_PUBLIC
 Ufe::Selection recreateDescendants(const Ufe::Selection& src, const Ufe::Path& filterPath);
+
+#ifdef UFE_V3_FEATURES_AVAILABLE
+//! Converts a UFE Value to a VtValue
+USDUFE_PUBLIC PXR_NS::VtValue ufeValueToVtValue(const Ufe::Value& ufeValue);
+
+//! Converts a VtValue to a UFE Value
+USDUFE_PUBLIC Ufe::Value vtValueToUfeValue(const PXR_NS::VtValue& vtValue);
+#endif // UFE_V3_FEATURES_AVAILABLE
+
+//! Returns the Sdr shader node for the given SceneItem. If the
+//! definition associated with the scene item's type is not found, a
+//! nullptr is returned.
+USDUFE_PUBLIC
+PXR_NS::SdrShaderNodeConstPtr usdShaderNodeFromSceneItem(const Ufe::SceneItem::Ptr& item);
 
 //------------------------------------------------------------------------------
 // Verify edit restrictions.
@@ -274,6 +382,11 @@ void applyRootLayerMetadataRestriction(
     const PXR_NS::UsdStageRefPtr& stage,
     const std::string&            commandName);
 
+//! Check if any layers in the stage is allowed to be changed.
+//! \return True, if at least one layer in the stage is allowed to be changed
+USDUFE_PUBLIC
+bool isAnyLayerModifiable(const PXR_NS::UsdStageWeakPtr stage, std::string* errMsg = nullptr);
+
 //! Check if the edit target in the stage is allowed to be changed.
 //! \return True, if the edit target layer in the stage is allowed to be changed
 USDUFE_PUBLIC
@@ -285,4 +398,99 @@ bool isEditTargetLayerModifiable(
 USDUFE_PUBLIC
 Ufe::BBox3d combineUfeBBox(const Ufe::BBox3d& ufeBBox1, const Ufe::BBox3d& ufeBBox2);
 
+//! Set both the start and stop wait cursor functions.
+USDUFE_PUBLIC
+void setWaitCursorFns(WaitCursorFn startFn, WaitCursorFn stopFn);
+
+//! Start the wait cursor. Can be called recursively.
+USDUFE_PUBLIC
+void startWaitCursor();
+
+//! Stop the wait cursor. Can be called recursively.
+USDUFE_PUBLIC
+void stopWaitCursor();
+
+//! Start and stop the wait cursor in the constructor and destructor.
+struct USDUFE_PUBLIC WaitCursor
+{
+    //! Show the wait cursor if the showCursor flag is true.
+    WaitCursor(bool showCursor = true)
+        : _showCursor(showCursor)
+    {
+        if (_showCursor)
+            startWaitCursor();
+    }
+
+    //! Stop the wait cursor if the showCursor flag is true.
+    ~WaitCursor()
+    {
+        if (_showCursor)
+            stopWaitCursor();
+    }
+
+    USDUFE_DISALLOW_COPY_MOVE_AND_ASSIGNMENT(WaitCursor);
+
+    const bool _showCursor;
+};
+
+//! Set the DCC specific default material scope name function.
+//! Use of this function is optional, if one is not supplied then
+//! a default name will be used.
+
+USDUFE_PUBLIC
+void setDefaultMaterialScopeNameFn(DefaultMaterialScopeNameFn fn);
+
+//! Returns the default material scope name.
+USDUFE_PUBLIC
+std::string defaultMaterialScopeName();
+
+// Search the parent Material of the item, comparing the type name.
+// In the case item is a material, return item itself.
+USDUFE_PUBLIC
+UsdSceneItem::Ptr getParentMaterial(const UsdSceneItem::Ptr& item);
+
+//! Set the DCC specific extract TRS (Translate/Rotate/Scale)
+//! function "extractTRS".
+//! Use of this function is optional, if one is not supplied then
+//! a default one will be used (that uses USD API to extract).
+USDUFE_PUBLIC
+void setExtractTRSFn(ExtractTRSFn fn);
+
+//! Extract the TRS (Translate/Rotate/Scale) from the input matrix.
+USDUFE_PUBLIC
+void extractTRS(const Ufe::Matrix4d& m, Ufe::Vector3d* t, Ufe::Vector3d* r, Ufe::Vector3d* s);
+
+//! Set the DCC function that is used to obtain a transform3d matrix
+//! op name. Use of this function is optional. If one is not supplied
+//! then no special transform3d matrix op name will be used.
+USDUFE_PUBLIC
+void setTransform3dMatrixOpNameFn(Transform3dMatrixOpNameFn fn);
+
+//! Return the transform3d matrix op name to be used.
+//! By default nullptr is returned.
+USDUFE_PUBLIC
+const char* getTransform3dMatrixOpName();
+
+//! Verify if the metadata group name has the session prefix and provide the prefix-less group name.
+//! \note the prefix-less name is only filled when returning true.
+USDUFE_PUBLIC
+bool isSessionLayerGroupMetadata(const std::string& groupName, std::string* adjustedGroupName);
+
+//! Remove data left behind in the session layer for the given prim path in the given stage
+//! and store the undos as extra undos in the given undo items.
+USDUFE_PUBLIC
+void removeSessionLeftOvers(
+    const PXR_NS::UsdStageRefPtr& stage,
+    const PXR_NS::SdfPath&        primPath,
+    UsdUndoableItem*              undoableItem,
+    bool                          extraEdits = true);
+
+//! Return the USD prims predicate for the given UFE child filter.
+//! Note: an empty filter or unknown filter will filter out everything.
+//!       Yes, that means no-filter actually means filter everything out.
+USDUFE_PUBLIC
+PXR_NS::Usd_PrimFlagsPredicate getUsdPredicate(const Ufe::Hierarchy::ChildFilter& childFilter);
+
 } // namespace USDUFE_NS_DEF
+
+#endif // USDUFE_UFE_UTILS_H
