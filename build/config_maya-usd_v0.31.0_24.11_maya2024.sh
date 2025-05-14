@@ -1,15 +1,17 @@
 #
 # Config Maya USD master branch
 #
-MAYAUSD_VER="0.26.0"
-USD_VER="23.11"
-RMAN_VER="25.2"
+MAYAUSD_VER="0.31.0"
+USD_VER="24.11"
+RMAN_VER="26.3"
 MAYA_VER="2024"
 #MAYA_MINOR_VER="3"
 DEVKIT_VER="2024.2"
-MAYA_PYTHON_VERSION="310"
+PY_VER="3.10"
 
-source ./env_py${MAYA_PYTHON_VERSION}/bin/activate
+# source ./env_py310/bin/activate
+# source ../../venv${PY_VER}/bin/activate
+source ../../venv310/bin/activate
 
 cur_dir=`pwd`
 tmp_dir="tmp_mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}"
@@ -23,25 +25,19 @@ pushd $tmp_dir
 
 deploy_root="/home/data/tools"
 deploy_dir="${deploy_root}/USD/autodesk/mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}"
-#export OpenGL_GL_PREFERENCE=GLVND
-#export OpenGL_GL_PREFERENCE=LEGACY#
 
-#export CC=/usr/bin/clang
-#export CXX=/usr/bin/clang++
-
-# export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0"
-export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}"
+export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_py${PY_VER}"
+export OpenSubdiv_DIR=${PXR_USD_LOCATION}
 
 export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
-export MAYA_DEVKIT_LOCATION=/home/data/code/LIBS/Autodesk/SDK/Maya/Maya${DEVKIT_VER}""
+export MAYA_DEVKIT_LOCATION=/home/data/code/LIBS/Autodesk/SDK/Maya/Maya_${DEVKIT_VER}""
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
-export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.8"
-#export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
-#export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
+export MaterialX_DIR=${PXR_USD_LOCATION}
+export BOOST_ROOT=${PXR_USD_LOCATION}
 #
 # AL plugin
 #
-export BOOST_ROOT="/usr"
+# export BOOST_ROOT="/usr"
 # export BOOST_ROOT="${deploy_root}/boost/boost_1_75_0_ABI_0"
 export Boost_LIBRARY_DIR="${BOOST_ROOT}/lib"
 export BOOST_LIBRARYDIR="${BOOST_ROOT}/lib"
@@ -56,31 +52,19 @@ export BOOST_LIBRARYDIR="${BOOST_ROOT}/lib"
 # export QTDIR=${QT_LOCATION}
 # export Qt5_DIR=${QT_LOCATION}
 # export QT5_ROOT=${QT_LOCATION}
-
 #export QT_PLUGIN_PATH=/usr/lib64/qt5/plugins
 export QT_PLUGIN_PATH="${MAYA_LOCATION}/plugins"
-
 export MAYA_DEVKIT_INC="${MAYA_DEVKIT_LOCATION}/include"
-export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/include"
-export UFE_LIB_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/lib"
-# export UFE_LIB_ROOT="${MAYA_LOCATION}"
+# export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/include"
+export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}"
+export UFE_LIB_ROOT="${MAYA_DEVKIT_LOCATION}"
 
 echo "* MAYA_DEVKIT_LOCATION = ${MAYA_DEVKIT_LOCATION}"
-# export UFE_LIB_ROOT="${MAYA_DEVKIT_LOCATION}/ufe"
-# export TBB_ROOT_DIR=${MAYA_DEVKIT_LOCATION} 
-
-# export CC=/usr/bin/clang
-# export CXX=/usr/bin/clang++
-
-#export CXXFLAGS="-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=0"
-#export CXXFLAGS="-std=c++14"
 
 # for uic libicui18n.so.60
 export LD_LIBRARY_PATH=${MAYA_LOCATION}/lib:${LD_LIBRARY_PATH}
-
 # !!! Put libicui18n.so.60 to /usr/local/lib & add:
 # export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-
 echo $LD_LIBRARY_PATH
 
 cmake3 -L -G "Unix Makefiles" \
@@ -88,34 +72,28 @@ cmake3 -L -G "Unix Makefiles" \
 -DCMAKE_INSTALL_PREFIX=${deploy_dir} \
 -DBUILD_MAYAUSD_LIBRARY=ON \
 -DBUILD_ADSK_PLUGIN=ON \
--DBUILD_PXR_PLUGIN=ON \
+-DBUILD_PXR_PLUGIN=OFF \
 -DBUILD_AL_PLUGIN=OFF \
 -DBUILD_RFM_TRANSLATORS=ON \
 -DBUILD_STRICT_MODE=OFF \
 -DBUILD_TESTS=OFF \
 -DBUILD_SHARED_LIBS=ON \
 -DBUILD_WITH_PYTHON_3=ON \
--DBUILD_WITH_PYTHON_3_VERSION="3.10" \
+-DBUILD_WITH_PYTHON_3_VERSION=${PY_VER} \
 -DMAYA_DEVKIT_LOCATION=${MAYA_DEVKIT_LOCATION} \
--DUFE_INCLUDE_ROOT=${UFE_INCLUDE_ROOT} \
--DUFE_LIB_ROOT=${UFE_LIB_ROOT} \
 -DCMAKE_WANT_MATERIALX_BUILD=ON \
 -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
 -DMAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG=OFF \
--DQT_LOCATION=${QT_LOCATION} \
 -DCMAKE_CXX_STANDARD="17" \
 -DBUILD_HDMAYA=ON \
 ../..
 
 popd
 
-
-
 # -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
-
 # -DGTEST_ROOT=${GTEST_ROOT} \
 # -DGTest_DIR="${GTEST_ROOT}/lib64/cmake/GTest" \
-#-DBUILD_HDMAYA=ON \
+# -DBUILD_HDMAYA=ON \
 
 # -DCMAKE_WANT_MATERIALX_BUILD=ON \
 # -DMaterialX_DIR=${MaterialX_DIR} \
@@ -158,5 +136,5 @@ else
   echo "* "
 fi
 
-deactivate
+# deactivate
 

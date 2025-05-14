@@ -73,7 +73,6 @@ if(UFE_INCLUDE_DIR AND EXISTS "${UFE_INCLUDE_DIR}/ufe/ufe.h")
     elseif(UFE_VERSION VERSION_EQUAL "5.1.0")
         set(UFE_PREVIEW_VERSION_NUM 5100)
     endif()
-    message ("============ UFE_PREVIEW_VERSION_NUM = ${UFE_PREVIEW_VERSION_NUM}")
 
     file(STRINGS
         "${UFE_INCLUDE_DIR}/ufe/ufe.h"

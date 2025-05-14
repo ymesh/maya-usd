@@ -1,16 +1,17 @@
 #
 # Config Maya USD master branch
 #
-
-MAYAUSD_VER="0.23.0"
-USD_VER="23.05"
-RMAN_VER="25.0"
-MAYA_VER="2023"
+MAYAUSD_VER="0.31.0"
+USD_VER="25.05"
+RMAN_VER="26.3"
+MAYA_VER="2024"
 #MAYA_MINOR_VER="3"
-DEVKIT_VER="2023.3"
-MAYA_PYTHON_VERSION="3"
+DEVKIT_VER="2024.2"
+PY_VER="3.10"
 
-source ./env_python${MAYA_PYTHON_VERSION}/bin/activate
+# source ./env_py310/bin/activate
+# source ../../venv${PY_VER}/bin/activate
+source ../../venv310/bin/activate
 
 cur_dir=`pwd`
 tmp_dir="tmp_mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}"
@@ -19,11 +20,8 @@ tmp_dir="tmp_mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}"
 # git checkout dev
 # cd "${cur_dir}"
 
-# if [ ! -d $tmp_dir ]; then
-#   mkdir $tmp_dir
-# fi
 mkdir -p $tmp_dir
-cd $tmp_dir
+pushd $tmp_dir
 
 deploy_root="/home/data/tools"
 deploy_dir="${deploy_root}/USD/autodesk/mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAYA_VER}"
@@ -33,18 +31,22 @@ deploy_dir="${deploy_root}/USD/autodesk/mayausd_v${MAYAUSD_VER}_${USD_VER}_${MAY
 #export CC=/usr/bin/clang
 #export CXX=/usr/bin/clang++
 
+# ${deploy_root}/USD/pixar/USD-v25.05_rman26.3_py3.10
+# export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0"
+export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_py${PY_VER}"
+export OpenSubdiv_DIR=${PXR_USD_LOCATION}
+
 export MAYA_LOCATION="/usr/autodesk/maya${MAYA_VER}"
-# export MAYA_DEVKIT_LOCATION="/home/data/code/LIBS/Autodesk/Maya/Maya${DEVKIT_VER}"
-export MAYA_DEVKIT_LOCATION=/home/data/code/LIBS/Autodesk/SDK/Maya/Maya${DEVKIT_VER}""
+export MAYA_DEVKIT_LOCATION=/home/data/code/LIBS/Autodesk/SDK/Maya/Maya_${DEVKIT_VER}""
 export QT_LOCATION="${MAYA_DEVKIT_LOCATION}/devkit/cmake/Qt5"
-export PXR_USD_LOCATION="${deploy_root}/USD/pixar/USD-v${USD_VER}_rman${RMAN_VER}_ABI_0"
-export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.5_ABI_0"
+export MaterialX_DIR="${deploy_root}/MaterialX/MaterialX-v1.38.8"
 #export BOOST_ROOT="${MAYA_DEVKIT_LOCATION}/include/boost"
 #export BOOST_LIBRARYDIR="${MAYA_LOCATION}/lib"
 #
 # AL plugin
 #
-export BOOST_ROOT="${deploy_root}/boost/boost_1_75_0_ABI_0"
+export BOOST_ROOT="/usr"
+# export BOOST_ROOT="${deploy_root}/boost/boost_1_75_0_ABI_0"
 export Boost_LIBRARY_DIR="${BOOST_ROOT}/lib"
 export BOOST_LIBRARYDIR="${BOOST_ROOT}/lib"
 
@@ -63,8 +65,9 @@ export BOOST_LIBRARYDIR="${BOOST_ROOT}/lib"
 export QT_PLUGIN_PATH="${MAYA_LOCATION}/plugins"
 
 export MAYA_DEVKIT_INC="${MAYA_DEVKIT_LOCATION}/include"
-export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/include"
-export UFE_LIB_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/lib"
+# export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}/devkit/ufe/include"
+export UFE_INCLUDE_ROOT="${MAYA_DEVKIT_LOCATION}"
+# export UFE_LIB_ROOT="${MAYA_DEVKIT_LOCATION}/devkit"
 # export UFE_LIB_ROOT="${MAYA_LOCATION}"
 
 echo "* MAYA_DEVKIT_LOCATION = ${MAYA_DEVKIT_LOCATION}"
@@ -77,33 +80,43 @@ echo "* MAYA_DEVKIT_LOCATION = ${MAYA_DEVKIT_LOCATION}"
 #export CXXFLAGS="-std=c++14 -D_GLIBCXX_USE_CXX11_ABI=0"
 #export CXXFLAGS="-std=c++14"
 
+# for uic libicui18n.so.60
+export LD_LIBRARY_PATH=${MAYA_LOCATION}/lib:${LD_LIBRARY_PATH}
+
+# !!! Put libicui18n.so.60 to /usr/local/lib & add:
+# export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+echo $LD_LIBRARY_PATH
+
+
 cmake3 -L -G "Unix Makefiles" \
 -DCMAKE_BUILD_TYPE="Release" \
 -DCMAKE_INSTALL_PREFIX=${deploy_dir} \
 -DBUILD_MAYAUSD_LIBRARY=ON \
 -DBUILD_ADSK_PLUGIN=ON \
--DBUILD_PXR_PLUGIN=OFF \
+-DBUILD_PXR_PLUGIN=ON \
 -DBUILD_AL_PLUGIN=OFF \
 -DBUILD_RFM_TRANSLATORS=ON \
 -DBUILD_STRICT_MODE=OFF \
--DBUILD_TESTS=ON \
--DCMAKE_WANT_UFE_BUILD=ON \
+-DBUILD_TESTS=OFF \
 -DBUILD_SHARED_LIBS=ON \
 -DBUILD_WITH_PYTHON_3=ON \
--DBUILD_WITH_PYTHON_3_VERSION="3.9" \
+-DBUILD_WITH_PYTHON_3_VERSION=${PY_VER} \
 -DMAYA_DEVKIT_LOCATION=${MAYA_DEVKIT_LOCATION} \
 -DUFE_INCLUDE_ROOT=${UFE_INCLUDE_ROOT} \
 -DUFE_LIB_ROOT=${UFE_LIB_ROOT} \
 -DCMAKE_WANT_MATERIALX_BUILD=ON \
 -DCMAKE_POLICY_DEFAULT_CMP0074=NEW \
 -DMAYAUSD_DEFINE_BOOST_DEBUG_PYTHON_FLAG=OFF \
--DQT_LOCATION=${QT_LOCATION} \
--DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
--DCMAKE_CXX_STANDARD="14" \
--DBOOST_ROOT=${BOOST_ROOT} \
--DBoost_LIBRARY_DIR=${Boost_LIBRARY_DIR} \
--DBoost_NO_BOOST_CMAKE=ON \
+-DCMAKE_CXX_STANDARD="17" \
+-DBUILD_HDMAYA=ON \
 ../..
+
+popd
+
+
+
+# -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
 
 # -DGTEST_ROOT=${GTEST_ROOT} \
 # -DGTest_DIR="${GTEST_ROOT}/lib64/cmake/GTest" \
@@ -142,7 +155,7 @@ if [ $? -eq 0 ]
 then
   echo "* "
   echo "* cmake config completed." 
-  echo "* run \"make -C ${tmp_dir}\" (or \"make -C ${tmp_dir} install\") " 
+  echo "* run \"make -j15 -C ${tmp_dir}\" (or \"make -C ${tmp_dir} install\") " 
   echo "* "
 else
   echo "* "
@@ -150,13 +163,5 @@ else
   echo "* "
 fi
 
-deactivate
+# deactivate
 
-# for uic
-# export LD_LIBRARY_PATH=${MAYA_LOCATION}/lib:${LD_LIBRARY_PATH}
-
-# !!! Put libicui18n.so.50 to /usr/local/lib & add:
-# export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-# or
-# export LD_LIBRARY_PATH=/usr/autodesk/maya2022/lib:${LD_LIBRARY_PATH}
-# echo $LD_LIBRARY_PATH
